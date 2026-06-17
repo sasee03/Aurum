@@ -62,7 +62,8 @@ This is the frozen backend-to-dashboard contract for the MVP. Prakhar owns the c
       "Bronze->Silver drop 28% vs learned normal 3.81% (+/- 3 std)",
       "Gold revenue Rs 0.48 Cr below expected",
       "Finance Board Dashboard impacted"
-    ]
+    ],
+    "suggested_action": "Review the Silver transformation filter. The likely issue is that valid discounted orders are being excluded by the condition is_discounted == 0."
   }
 }
 ```

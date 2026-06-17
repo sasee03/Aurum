@@ -35,7 +35,19 @@ def decide_verdict(
     return {
         "decision": decision,
         "reasons": reasons,
+        "suggested_action": build_suggested_action(root_cause),
     }
+
+
+def build_suggested_action(root_cause: dict) -> str:
+    if root_cause.get("evidence_ref") == "missing_discounted_orders":
+        return (
+            "Review the Silver transformation filter. The likely issue is that "
+            "valid discounted orders are being excluded by the condition "
+            "is_discounted == 0."
+        )
+    cause = root_cause.get("cause", "an unexpected drop in the Silver transformation")
+    return f"Review the Silver transformation. Likely cause: {cause}."
 
 
 if __name__ == "__main__":

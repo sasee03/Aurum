@@ -78,7 +78,7 @@ def verify_contract_schema(report: dict) -> None:
         "anomaly": {"is_anomaly", "drop_today", "deviation_sigma", "severity"},
         "root_cause": {"cause", "dropped_rows", "evidence_ref"},
         "impact": {"expected_revenue_cr", "actual_revenue_cr", "impact_cr", "risk_level"},
-        "verdict": {"decision", "reasons"},
+        "verdict": {"decision", "reasons", "suggested_action"},
     }
     for block, keys in expected_keys.items():
         check(f"{block} matches frozen contract keys", set(report[block].keys()) == keys)

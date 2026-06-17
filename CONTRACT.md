@@ -76,7 +76,8 @@ a new shape.
       "Bronze->Silver drop 28% vs learned normal 3.81% (+/- 3 std)",
       "Gold revenue Rs 0.48 Cr below expected",
       "Finance Board Dashboard impacted"
-    ]
+    ],
+    "suggested_action": "Review the Silver transformation filter. The likely issue is that valid discounted orders are being excluded by the condition is_discounted == 0."
   }
 }
 ```
@@ -94,7 +95,7 @@ a new shape.
 | `root_cause` | Prakhar | `dropped_rows` derived by diffing correct vs buggy Silver. |
 | `impact` | Haasya | Revenue values read from gold summary; `impact_cr` computed. `risk_level` set by impact size, not by the verdict (avoid circular dependency). |
 | `evidence` | Haasya | Each block: `name`, `sql`, `result` (computed by running the SQL), `meaning`. |
-| `verdict` | Prakhar | Deterministic decision + business-readable reasons. |
+| `verdict` | Prakhar | Deterministic decision + business-readable reasons. Includes `suggested_action`, a derived fix hint built from `root_cause` (not a hardcoded demo number). |
 
 ---
 
