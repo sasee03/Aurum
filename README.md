@@ -25,5 +25,7 @@ It validates the contract shape, source counts, learned tolerance, root-cause tr
 
 ## Project Docs
 
-- `docs/output_contract.md` contains the frozen backend-to-dashboard contract.
+- `CONTRACT.md` is the **frozen** backend-to-dashboard contract (single source of truth).
+- `docs/output_contract.md` mirrors the same JSON (legacy path; prefer `CONTRACT.md`).
+- `docs/team_briefs.md` contains copy-ready messages for Haasya and the Integration Lead.
 - `docs/integration_reliability.md` contains the third-track ownership, checklist, daily update format, and scalability Q&A notes.
