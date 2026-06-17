@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Node / frontend if any
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+
+# Test / cache
+coverage/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Logs / system
+*.log
+.DS_Store
