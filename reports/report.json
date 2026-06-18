@@ -1,61 +1,462 @@
 {
-  "run_id": "today",
-  "profile": {
-    "bronze_count": 100000,
-    "silver_count": 72000,
-    "drop_pct": 28.0
+  "project": "Aurum",
+  "description": "Cross-layer data quality validation framework",
+  "pipeline": "Raw \u2192 Bronze \u2192 Silver \u2192 Gold",
+  "dataset": "Retail Orders",
+  "run_id": "demo_run_001",
+  "layer_status": {
+    "bronze": "PASS",
+    "silver": "FAIL",
+    "gold": "IMPACTED"
   },
-  "baseline": {
-    "normal_drop_pct": 3.81,
-    "std_dev": 0.032,
-    "lower_bound": 3.71,
-    "upper_bound": 3.91,
-    "method": "mean +/- 3 std"
-  },
-  "anomaly": {
-    "is_anomaly": true,
-    "drop_today": 28.0,
-    "deviation_sigma": 755.9,
-    "severity": "CRITICAL"
-  },
+  "final_verdict": "NOT TRUSTED",
+  "severity": "HIGH",
+  "first_failed_layer": "Bronze \u2192 Silver",
   "root_cause": {
-    "cause": "Silver transformation wrongly filtered valid discounted orders",
-    "dropped_rows": 24000,
-    "evidence_ref": "missing_discounted_orders"
-  },
-  "impact": {
-    "expected_revenue_cr": 10.18,
-    "actual_revenue_cr": 9.7,
-    "impact_cr": 0.48,
-    "risk_level": "HIGH"
-  },
-  "evidence": [
-    {
-      "name": "Bronze order count",
-      "sql": "SELECT COUNT(*) FROM bronze_orders;",
-      "result": "100,000 rows",
-      "meaning": "Total orders ingested in the raw layer."
-    },
-    {
-      "name": "Silver valid count (today)",
-      "sql": "SELECT COUNT(*) FROM silver_orders_buggy;",
-      "result": "72,000 rows",
-      "meaning": "Valid orders surviving the Silver transformation today."
-    },
-    {
-      "name": "Gold revenue delta",
-      "sql": "SELECT SUM(net_amount) FROM silver_orders_buggy;",
-      "result": "Rs 9.70 Cr",
-      "meaning": "Today's Gold revenue vs Rs 10.18 Cr expected = Rs 0.48 Cr short."
-    }
-  ],
-  "verdict": {
-    "decision": "BLOCK PUBLISH",
-    "reasons": [
-      "Bronze->Silver drop 28% vs learned normal 3.81% (+/- 3 std)",
-      "Gold revenue Rs 0.48 Cr below expected",
-      "Finance Board Dashboard impacted"
+    "summary": "Valid high-quantity orders were wrongly removed during the Silver transformation.",
+    "failed_check_ids": [
+      "S1",
+      "S2",
+      "S8",
+      "S9",
+      "S10"
     ],
-    "suggested_action": "Review the Silver transformation filter. The likely issue is that valid discounted orders are being excluded by the condition is_discounted == 0."
+    "suspected_filter": "quantity > 20 records are being filtered out",
+    "evidence": [
+      {
+        "check_id": "S1",
+        "detail": "Drop is far outside the learned normal range.",
+        "evidence_query": "SELECT (1 - (SELECT COUNT(*) FROM silver_orders)::DOUBLE / (SELECT COUNT(*) FROM bronze_orders)) * 100 AS drop_pct"
+      },
+      {
+        "check_id": "S2",
+        "detail": "Actual drop 28.00% far exceeds expected 2.0%-10.0%.",
+        "evidence_query": "SELECT (1 - (SELECT COUNT(*) FROM silver_orders)::DOUBLE / (SELECT COUNT(*) FROM bronze_orders)) * 100 AS drop_pct"
+      },
+      {
+        "check_id": "S8",
+        "detail": "24,000 valid business records were wrongly removed during the Silver transformation (25.00% of valid Bronze records).",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)"
+      },
+      {
+        "check_id": "S9",
+        "detail": "Segment 'quantity > 20' lost 100.00% of valid records -- a structural loss, not random.",
+        "evidence_query": "WITH valid_bronze AS (\n        SELECT * FROM bronze_orders WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL\n    ),\n    seg AS (\n        SELECT\n            CASE WHEN quantity > 20\n                 THEN 'quantity > 20'\n                 ELSE 'quantity <= 20' END AS segment,\n            COUNT(*) AS bronze_valid\n        FROM valid_bronze GROUP BY 1\n    ),\n    sil AS (\n        SELECT\n            CASE WHEN quantity > 20\n                 THEN 'quantity > 20'\n                 ELSE 'quantity <= 20' END AS segment,\n            COUNT(*) AS silver_count\n        FROM silver_orders GROUP BY 1\n    )\n    SELECT seg.segment, seg.bronze_valid,\n           COALESCE(sil.silver_count, 0) AS silver_count,\n           ROUND((1 - COALESCE(sil.silver_count, 0)::DOUBLE / seg.bronze_valid) * 100, 2)\n               AS loss_pct\n    FROM seg LEFT JOIN sil ON seg.segment = sil.segment\n    ORDER BY loss_pct DESC"
+      },
+      {
+        "check_id": "S10",
+        "detail": "All 24,000 missing valid records have quantity >= 25; suspected bad filter: quantity > 20 records are being filtered out.",
+        "evidence_query": "SELECT MIN(quantity), MAX(quantity), COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)"
+      }
+    ]
+  },
+  "business_impact": {
+    "expected_revenue": 101800000.0,
+    "actual_revenue": 97000000.0,
+    "estimated_loss": 4800000.0,
+    "loss_percent": 4.72,
+    "detail": "Expected revenue is the revenue of all valid Bronze records; actual is current Gold revenue. The gap is the value lost to dropped valid records."
+  },
+  "suggested_action": "Fix the Silver transformation rule (quantity > 20 records are being filtered out) and rerun the ETL.",
+  "checks": {
+    "bronze": [
+      {
+        "check_id": "B1",
+        "check_name": "Source to Bronze Row Count",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 100000,
+        "expected": 100000,
+        "detail": "Source and Bronze row counts match.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders"
+      },
+      {
+        "check_id": "B2",
+        "check_name": "Low / High / Normal Count",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 100000,
+        "expected": "99775-100225 (mean +/- 3 std)",
+        "detail": "Bronze count is within the learned normal range.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders"
+      },
+      {
+        "check_id": "B3",
+        "check_name": "Empty Table Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 100000,
+        "expected": "> 0",
+        "detail": "Bronze table has rows.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders"
+      },
+      {
+        "check_id": "B4",
+        "check_name": "Required Columns Present",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": [
+          "invoice_no",
+          "stock_code",
+          "description",
+          "quantity",
+          "invoice_date",
+          "unit_price",
+          "customer_id",
+          "country"
+        ],
+        "expected": [
+          "invoice_no",
+          "stock_code",
+          "description",
+          "quantity",
+          "invoice_date",
+          "unit_price",
+          "customer_id",
+          "country"
+        ],
+        "detail": "All required columns are present.",
+        "evidence_query": "SELECT * FROM bronze_orders LIMIT 0"
+      },
+      {
+        "check_id": "B5",
+        "check_name": "Extra / Missing Columns",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": {
+          "missing_columns": [],
+          "extra_columns": []
+        },
+        "expected": {
+          "missing_columns": [],
+          "extra_columns": []
+        },
+        "detail": "missing_columns=[], extra_columns=[]",
+        "evidence_query": "SELECT * FROM bronze_orders LIMIT 0",
+        "extra": {
+          "missing_columns": [],
+          "extra_columns": []
+        }
+      },
+      {
+        "check_id": "B6",
+        "check_name": "Null Count per Mandatory Column",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": {
+          "invoice_no": 0,
+          "quantity": 0,
+          "invoice_date": 0,
+          "unit_price": 0,
+          "country": 0
+        },
+        "expected": {
+          "invoice_no": 0,
+          "quantity": 0,
+          "invoice_date": 0,
+          "unit_price": 0,
+          "country": 0
+        },
+        "detail": "No nulls in mandatory columns.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders WHERE invoice_no IS NULL"
+      },
+      {
+        "check_id": "B7",
+        "check_name": "Negative Value Profiling",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": {
+          "negative_quantity": 0,
+          "negative_unit_price": 0
+        },
+        "expected": "profiled (not blocking at Bronze)",
+        "detail": "No negative quantity or unit_price values.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders WHERE quantity < 0"
+      },
+      {
+        "check_id": "B8",
+        "check_name": "Duplicate Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No duplicate business keys in Bronze.",
+        "evidence_query": "SELECT invoice_no, stock_code, customer_id, invoice_date, COUNT(*) FROM bronze_orders GROUP BY invoice_no, stock_code, customer_id, invoice_date HAVING COUNT(*) > 1"
+      }
+    ],
+    "silver": [
+      {
+        "check_id": "S1",
+        "check_name": "Bronze to Silver Drop Percentage",
+        "layer": "Silver",
+        "status": "FAIL",
+        "observed": "28.00%",
+        "expected": "3.72%-6.80% (mean +/- 3 std)",
+        "detail": "Drop is far outside the learned normal range.",
+        "evidence_query": "SELECT (1 - (SELECT COUNT(*) FROM silver_orders)::DOUBLE / (SELECT COUNT(*) FROM bronze_orders)) * 100 AS drop_pct",
+        "extra": {
+          "bronze": 100000,
+          "silver": 72000,
+          "drop_pct": 28.0
+        }
+      },
+      {
+        "check_id": "S2",
+        "check_name": "Expected Drop Check",
+        "layer": "Silver",
+        "status": "FAIL",
+        "observed": "28.00%",
+        "expected": "2.0%-10.0%",
+        "detail": "Actual drop 28.00% far exceeds expected 2.0%-10.0%.",
+        "evidence_query": "SELECT (1 - (SELECT COUNT(*) FROM silver_orders)::DOUBLE / (SELECT COUNT(*) FROM bronze_orders)) * 100 AS drop_pct"
+      },
+      {
+        "check_id": "S3",
+        "check_name": "Deduplication Count Check",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": {
+          "bronze_duplicates": 0,
+          "silver_duplicates": 0
+        },
+        "expected": {
+          "silver_duplicates": 0
+        },
+        "detail": "Bronze had 0 duplicate keys; Silver has none.",
+        "evidence_query": "SELECT invoice_no, stock_code, customer_id, invoice_date, COUNT(*) FROM silver_orders GROUP BY invoice_no, stock_code, customer_id, invoice_date HAVING COUNT(*) > 1"
+      },
+      {
+        "check_id": "S4",
+        "check_name": "Mandatory Columns Not Null",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": {
+          "invoice_no": 0,
+          "stock_code": 0,
+          "quantity": 0,
+          "unit_price": 0,
+          "invoice_date": 0,
+          "country": 0
+        },
+        "expected": {
+          "invoice_no": 0,
+          "stock_code": 0,
+          "quantity": 0,
+          "unit_price": 0,
+          "invoice_date": 0,
+          "country": 0
+        },
+        "detail": "No nulls in Silver mandatory columns.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders WHERE invoice_no IS NULL"
+      },
+      {
+        "check_id": "S5",
+        "check_name": "Quantity > 0",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "All Silver rows have quantity > 0.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders WHERE quantity <= 0"
+      },
+      {
+        "check_id": "S6",
+        "check_name": "Unit Price > 0",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "All Silver rows have unit_price > 0.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders WHERE unit_price <= 0"
+      },
+      {
+        "check_id": "S7",
+        "check_name": "Revenue Not Negative",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "All Silver rows have non-negative net_revenue.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders WHERE net_revenue < 0"
+      },
+      {
+        "check_id": "S8",
+        "check_name": "Valid Record Wrongly Removed",
+        "layer": "Silver",
+        "status": "FAIL",
+        "observed": 24000,
+        "expected": 0,
+        "detail": "24,000 valid business records were wrongly removed during the Silver transformation (25.00% of valid Bronze records).",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)",
+        "extra": {
+          "valid_bronze": 96000,
+          "missing": 24000,
+          "loss_pct": 25.0
+        }
+      },
+      {
+        "check_id": "S9",
+        "check_name": "Record-Loss by Segment",
+        "layer": "Silver",
+        "status": "FAIL",
+        "observed": [
+          {
+            "segment": "quantity > 20",
+            "bronze_valid": 24000,
+            "silver_count": 0,
+            "loss_pct": 100.0
+          },
+          {
+            "segment": "quantity <= 20",
+            "bronze_valid": 72000,
+            "silver_count": 72000,
+            "loss_pct": 0.0
+          }
+        ],
+        "expected": "< 5% loss per segment",
+        "detail": "Segment 'quantity > 20' lost 100.00% of valid records -- a structural loss, not random.",
+        "evidence_query": "WITH valid_bronze AS (\n        SELECT * FROM bronze_orders WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL\n    ),\n    seg AS (\n        SELECT\n            CASE WHEN quantity > 20\n                 THEN 'quantity > 20'\n                 ELSE 'quantity <= 20' END AS segment,\n            COUNT(*) AS bronze_valid\n        FROM valid_bronze GROUP BY 1\n    ),\n    sil AS (\n        SELECT\n            CASE WHEN quantity > 20\n                 THEN 'quantity > 20'\n                 ELSE 'quantity <= 20' END AS segment,\n            COUNT(*) AS silver_count\n        FROM silver_orders GROUP BY 1\n    )\n    SELECT seg.segment, seg.bronze_valid,\n           COALESCE(sil.silver_count, 0) AS silver_count,\n           ROUND((1 - COALESCE(sil.silver_count, 0)::DOUBLE / seg.bronze_valid) * 100, 2)\n               AS loss_pct\n    FROM seg LEFT JOIN sil ON seg.segment = sil.segment\n    ORDER BY loss_pct DESC",
+        "extra": {
+          "segments": [
+            {
+              "segment": "quantity > 20",
+              "bronze_valid": 24000,
+              "silver_count": 0,
+              "loss_pct": 100.0
+            },
+            {
+              "segment": "quantity <= 20",
+              "bronze_valid": 72000,
+              "silver_count": 72000,
+              "loss_pct": 0.0
+            }
+          ]
+        }
+      },
+      {
+        "check_id": "S10",
+        "check_name": "Wrong Filter Detection",
+        "layer": "Silver",
+        "status": "FAIL",
+        "observed": "quantity > 20 records are being filtered out",
+        "expected": "no suspect filter",
+        "detail": "All 24,000 missing valid records have quantity >= 25; suspected bad filter: quantity > 20 records are being filtered out.",
+        "evidence_query": "SELECT MIN(quantity), MAX(quantity), COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)",
+        "extra": {
+          "suspected_filter": "quantity > 20 records are being filtered out",
+          "missing": 24000
+        }
+      }
+    ],
+    "gold": [
+      {
+        "check_id": "G1",
+        "check_name": "Revenue Reconciliation",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 97000000.0,
+        "expected": 97000000.0,
+        "detail": "Gold total_revenue reconciles with Silver.",
+        "evidence_query": "SELECT SUM(net_revenue) FROM silver_orders"
+      },
+      {
+        "check_id": "G2",
+        "check_name": "Order Count Reconciliation",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 72000,
+        "expected": 72000,
+        "detail": "Gold total_orders reconciles with Silver.",
+        "evidence_query": "SELECT COUNT(DISTINCT invoice_no) FROM silver_orders"
+      },
+      {
+        "check_id": "G3",
+        "check_name": "Customer Count Reconciliation",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 5000,
+        "expected": 5000,
+        "detail": "Gold total_customers reconciles with Silver.",
+        "evidence_query": "SELECT COUNT(DISTINCT customer_id) FROM silver_orders"
+      },
+      {
+        "check_id": "G4",
+        "check_name": "Average Order Value Check",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 1347.2222222222222,
+        "expected": 1347.22,
+        "detail": "Gold AOV reconciles (recomputed 1,347.22).",
+        "evidence_query": "SELECT total_revenue / total_orders FROM gold_metrics"
+      },
+      {
+        "check_id": "G5",
+        "check_name": "Revenue vs Expected Baseline",
+        "layer": "Gold",
+        "status": "IMPACTED",
+        "observed": 97000000.0,
+        "expected": 101800000.0,
+        "detail": "Gold math is correct, but revenue is 4,800,000 below the expected baseline -- impacted by an upstream layer failure.",
+        "evidence_query": "SELECT total_revenue FROM gold_metrics",
+        "extra": {
+          "expected_revenue": 101800000.0,
+          "actual_revenue": 97000000.0,
+          "impact": 4800000.0,
+          "gold_math_correct": true
+        }
+      },
+      {
+        "check_id": "G6",
+        "check_name": "Country-wise Revenue Reconciliation",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "Country-wise revenue reconciles with Silver.",
+        "evidence_query": "SELECT country, SUM(net_revenue) FROM silver_orders GROUP BY country"
+      }
+    ],
+    "cross_layer": [
+      {
+        "check_id": "X1",
+        "check_name": "Source to Bronze Completeness",
+        "layer": "Cross-Layer",
+        "status": "PASS",
+        "observed": "PASS",
+        "expected": "PASS",
+        "detail": "Source and Bronze row counts match.",
+        "evidence_query": ""
+      },
+      {
+        "check_id": "X2",
+        "check_name": "Bronze to Silver Transformation Quality",
+        "layer": "Cross-Layer",
+        "status": "FAIL",
+        "observed": "FAIL",
+        "expected": "PASS",
+        "detail": "Transformation quality issues in checks: ['S1', 'S8', 'S9', 'S10'].",
+        "evidence_query": ""
+      },
+      {
+        "check_id": "X3",
+        "check_name": "Silver to Gold Metric Correctness",
+        "layer": "Cross-Layer",
+        "status": "PASS",
+        "observed": "PASS",
+        "expected": "PASS",
+        "detail": "Silver-to-Gold metrics reconcile correctly.",
+        "evidence_query": ""
+      },
+      {
+        "check_id": "X4",
+        "check_name": "First Failed Layer Locator",
+        "layer": "Cross-Layer",
+        "status": "FAIL",
+        "observed": "Bronze \u2192 Silver",
+        "expected": null,
+        "detail": "First failed transition: Bronze \u2192 Silver.",
+        "evidence_query": ""
+      }
+    ]
   }
 }
