@@ -36,7 +36,7 @@
       {
         "check_id": "S8",
         "detail": "24,000 valid business records were wrongly removed during the Silver transformation (25.00% of valid Bronze records).",
-        "evidence_query": "SELECT COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)"
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no IS NOT DISTINCT FROM b.invoice_no AND s.stock_code IS NOT DISTINCT FROM b.stock_code AND s.customer_id IS NOT DISTINCT FROM b.customer_id AND s.invoice_date IS NOT DISTINCT FROM b.invoice_date)"
       },
       {
         "check_id": "S9",
@@ -46,7 +46,7 @@
       {
         "check_id": "S10",
         "detail": "All 24,000 missing valid records have quantity >= 25; suspected bad filter: quantity > 20 records are being filtered out.",
-        "evidence_query": "SELECT MIN(quantity), MAX(quantity), COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)"
+        "evidence_query": "SELECT MIN(quantity), MAX(quantity), COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no IS NOT DISTINCT FROM b.invoice_no AND s.stock_code IS NOT DISTINCT FROM b.stock_code AND s.customer_id IS NOT DISTINCT FROM b.customer_id AND s.invoice_date IS NOT DISTINCT FROM b.invoice_date)"
       }
     ]
   },
@@ -287,7 +287,7 @@
         "observed": 24000,
         "expected": 0,
         "detail": "24,000 valid business records were wrongly removed during the Silver transformation (25.00% of valid Bronze records).",
-        "evidence_query": "SELECT COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no IS NOT DISTINCT FROM b.invoice_no AND s.stock_code IS NOT DISTINCT FROM b.stock_code AND s.customer_id IS NOT DISTINCT FROM b.customer_id AND s.invoice_date IS NOT DISTINCT FROM b.invoice_date)",
         "extra": {
           "valid_bronze": 96000,
           "missing": 24000,
@@ -341,7 +341,7 @@
         "observed": "quantity > 20 records are being filtered out",
         "expected": "no suspect filter",
         "detail": "All 24,000 missing valid records have quantity >= 25; suspected bad filter: quantity > 20 records are being filtered out.",
-        "evidence_query": "SELECT MIN(quantity), MAX(quantity), COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)",
+        "evidence_query": "SELECT MIN(quantity), MAX(quantity), COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no IS NOT DISTINCT FROM b.invoice_no AND s.stock_code IS NOT DISTINCT FROM b.stock_code AND s.customer_id IS NOT DISTINCT FROM b.customer_id AND s.invoice_date IS NOT DISTINCT FROM b.invoice_date)",
         "extra": {
           "suspected_filter": "quantity > 20 records are being filtered out",
           "missing": 24000

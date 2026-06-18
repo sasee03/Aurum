@@ -8,6 +8,7 @@ from src.silver_validator import (
     s5_quantity_positive,
     s6_unit_price_positive,
     s8_valid_records_removed,
+    s10_wrong_filter_detection,
 )
 
 
@@ -39,6 +40,20 @@ def test_s8_all_present_passes():
     silver = to_silver(bronze)
     loader = loader_from(bronze_orders=to_df(bronze), silver_orders=silver)
     assert s8_valid_records_removed(loader).status == PASS
+
+
+def test_s8_uses_full_business_key_for_multiline_invoice():
+    bronze = make_rows(2)
+    bronze[1]["invoice_no"] = bronze[0]["invoice_no"]
+    bronze[1]["stock_code"] = "B2"
+    bronze[1]["quantity"] = 25
+    silver = to_silver([bronze[0]])
+    loader = loader_from(bronze_orders=to_df(bronze), silver_orders=silver)
+
+    result = s8_valid_records_removed(loader)
+    assert result.status == FAIL
+    assert result.observed == 1
+    assert s10_wrong_filter_detection(loader).status == FAIL
 
 
 def test_s5_quantity_nonpositive_fails():

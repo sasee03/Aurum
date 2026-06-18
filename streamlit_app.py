@@ -1,4 +1,4 @@
-"""Aurum Streamlit dashboard."""
+"""Streamlit dashboard for the current cross-layer Aurum report."""
 
 from __future__ import annotations
 
@@ -8,75 +8,129 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from run_demo import REPORT_PATH, build_report
+
+REPORT_PATH = Path("reports/report.json")
+REQUIRED_FIELDS = {
+    "project",
+    "pipeline",
+    "layer_status",
+    "final_verdict",
+    "first_failed_layer",
+    "root_cause",
+    "business_impact",
+    "suggested_action",
+    "checks",
+}
 
 
-def load_report() -> dict:
-    if REPORT_PATH.exists():
-        return json.loads(REPORT_PATH.read_text(encoding="utf-8"))
-    report = build_report()
-    REPORT_PATH.parent.mkdir(exist_ok=True)
-    REPORT_PATH.write_text(json.dumps(report, indent=2), encoding="utf-8")
+def load_report(path: Path = REPORT_PATH) -> dict:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing {path}. Run `python src/run_demo.py` before starting Streamlit."
+        )
+    report = json.loads(path.read_text(encoding="utf-8"))
+    missing = sorted(REQUIRED_FIELDS - set(report))
+    if missing:
+        raise ValueError(
+            "Report does not match the current src/ contract. "
+            f"Missing fields: {missing}. Run `python src/run_demo.py`."
+        )
     return report
 
 
-report = load_report()
-decision = report["verdict"]["decision"]
+def money_cr(value) -> str:
+    return f"Rs {float(value) / 10_000_000:.2f} Cr"
 
-st.set_page_config(page_title="Aurum Release Control", layout="wide")
-st.title("Aurum")
-st.caption("Business Release Control for Gold Outputs")
+
+def flattened_checks(report: dict) -> pd.DataFrame:
+    rows = []
+    for section, checks in report["checks"].items():
+        for check in checks:
+            rows.append({"section": section, **check})
+    return pd.DataFrame(rows)
+
+
+st.set_page_config(page_title="Aurum Data Quality", layout="wide")
+
+try:
+    report = load_report()
+except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
+    st.error(str(exc))
+    st.stop()
+
+verdict = report["final_verdict"]
+layer_status = report["layer_status"]
+impact = report["business_impact"]
+root_cause = report["root_cause"]
+
+st.title(report["project"])
+st.caption("Cross-layer data quality validation framework")
 
 banner_color = {
-    "ALLOW PUBLISH": "#16794c",
-    "WARN": "#a16207",
-    "BLOCK PUBLISH": "#b42318",
-}.get(decision, "#444444")
+    "TRUSTED": "#16794c",
+    "WARNING": "#a16207",
+    "NOT TRUSTED": "#b42318",
+}.get(verdict, "#444444")
 
 st.markdown(
     f"""
-    <div style="background:{banner_color};color:white;padding:22px 26px;border-radius:8px;">
-      <div style="font-size:14px;text-transform:uppercase;letter-spacing:0.08em;">Verdict</div>
-      <div style="font-size:34px;font-weight:700;">{decision}</div>
+    <div style="background:{banner_color};color:white;padding:18px 22px;border-radius:6px;">
+      <div style="font-size:13px;text-transform:uppercase;">Final verdict</div>
+      <div style="font-size:30px;font-weight:700;">{verdict}</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-profile = report["profile"]
-impact = report["impact"]
-baseline = report["baseline"]
-anomaly = report["anomaly"]
-root_cause = report["root_cause"]
+overview_tab, checks_tab, evidence_tab = st.tabs(["Overview", "Checks", "Evidence"])
 
-st.subheader("Pipeline Health")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Bronze", f"{profile['bronze_count']:,}")
-col2.metric("Silver", f"{profile['silver_count']:,}")
-col3.metric("Gold revenue", f"Rs {impact['actual_revenue_cr']:.2f} Cr")
-col4.metric("Drop", f"{profile['drop_pct']:.2f}%")
+with overview_tab:
+    st.subheader("Pipeline Status")
+    bronze_col, silver_col, gold_col, failed_col = st.columns(4)
+    bronze_col.metric("Bronze", layer_status["bronze"])
+    silver_col.metric("Silver", layer_status["silver"])
+    gold_col.metric("Gold", layer_status["gold"])
+    failed_col.metric("First failed layer", report["first_failed_layer"] or "None")
 
-st.subheader("Normal vs Today")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Normal drop", f"{baseline['normal_drop_pct']:.2f}%")
-col2.metric("Tolerance", f"{baseline['lower_bound']:.2f}% - {baseline['upper_bound']:.2f}%")
-col3.metric("Today", f"{anomaly['drop_today']:.2f}%")
-col4.metric("Severity", anomaly["severity"])
+    st.caption(report["pipeline"])
 
-st.subheader("Root Cause")
-st.write(root_cause["cause"])
-st.metric("Dropped valid rows", f"{root_cause['dropped_rows']:,}")
+    st.subheader("Business Impact")
+    if impact.get("status") == "NOT_AVAILABLE":
+        st.warning(impact["detail"])
+    else:
+        expected_col, actual_col, loss_col, loss_pct_col = st.columns(4)
+        expected_col.metric("Expected revenue", money_cr(impact["expected_revenue"]))
+        actual_col.metric("Actual revenue", money_cr(impact["actual_revenue"]))
+        loss_col.metric("Estimated loss", money_cr(impact["estimated_loss"]))
+        loss_pct_col.metric("Loss", f"{impact['loss_percent']:.2f}%")
 
-st.subheader("Business Impact")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Expected revenue", f"Rs {impact['expected_revenue_cr']:.2f} Cr")
-col2.metric("Actual revenue", f"Rs {impact['actual_revenue_cr']:.2f} Cr")
-col3.metric("Impact", f"Rs {impact['impact_cr']:.2f} Cr")
-col4.metric("Risk", impact["risk_level"])
+    st.subheader("Root Cause")
+    st.write(root_cause["summary"])
+    if root_cause.get("suspected_filter"):
+        st.code(root_cause["suspected_filter"], language=None)
 
-st.subheader("Evidence")
-st.dataframe(pd.DataFrame(report["evidence"]), use_container_width=True, hide_index=True)
+    st.subheader("Suggested Action")
+    st.write(report["suggested_action"])
 
-st.subheader("Reasons")
-for reason in report["verdict"]["reasons"]:
-    st.write(f"- {reason}")
+with checks_tab:
+    checks = flattened_checks(report)
+    status_filter = st.multiselect(
+        "Status",
+        options=["FAIL", "IMPACTED", "WARN", "PASS"],
+        default=["FAIL", "IMPACTED", "WARN", "PASS"],
+    )
+    visible = checks[checks["status"].isin(status_filter)]
+    st.dataframe(
+        visible[["check_id", "check_name", "layer", "status", "detail"]],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+with evidence_tab:
+    checks = flattened_checks(report)
+    evidence = checks[checks["evidence_query"].fillna("") != ""]
+    st.dataframe(
+        evidence[["check_id", "check_name", "status", "evidence_query", "detail"]],
+        use_container_width=True,
+        hide_index=True,
+    )

@@ -33,6 +33,14 @@ EXPECTED_MAX_DROP = 10.0
 
 # A high-quantity wholesale order is still a valid order.
 HIGH_QTY_THRESHOLD = 20
+BUSINESS_KEY = ("invoice_no", "stock_code", "customer_id", "invoice_date")
+
+
+def _business_key_match(bronze_alias: str = "b", silver_alias: str = "s") -> str:
+    return " AND ".join(
+        f"{silver_alias}.{column} IS NOT DISTINCT FROM {bronze_alias}.{column}"
+        for column in BUSINESS_KEY
+    )
 
 
 def _history(loader: DataLoader) -> Optional[pd.DataFrame]:
@@ -216,13 +224,14 @@ def s8_valid_records_removed(loader: DataLoader) -> CheckResult:
     valid_total = int(
         loader.scalar(f"SELECT COUNT(*) FROM bronze_orders WHERE {VALID_PREDICATE}")
     )
+    key_match = _business_key_match()
     missing = int(
         loader.scalar(
             f"""
             SELECT COUNT(*) FROM bronze_orders b
             WHERE {VALID_PREDICATE}
               AND NOT EXISTS (
-                SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no
+                SELECT 1 FROM silver_orders s WHERE {key_match}
               )
             """
         )
@@ -245,7 +254,7 @@ def s8_valid_records_removed(loader: DataLoader) -> CheckResult:
         evidence_query=(
             "SELECT COUNT(*) FROM bronze_orders b WHERE "
             f"{VALID_PREDICATE} AND NOT EXISTS "
-            "(SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)"
+            f"(SELECT 1 FROM silver_orders s WHERE {key_match})"
         ),
         extra={"valid_bronze": valid_total, "missing": missing,
                "loss_pct": round(loss_pct, 2)},
@@ -304,13 +313,14 @@ def s9_record_loss_by_segment(loader: DataLoader) -> CheckResult:
 
 
 def s10_wrong_filter_detection(loader: DataLoader) -> CheckResult:
+    key_match = _business_key_match()
     stats = loader.query(
         f"""
         SELECT MIN(quantity) AS min_qty, MAX(quantity) AS max_qty, COUNT(*) AS n
         FROM bronze_orders b
         WHERE {VALID_PREDICATE}
           AND NOT EXISTS (
-            SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no
+            SELECT 1 FROM silver_orders s WHERE {key_match}
           )
         """
     ).to_dict("records")[0]
@@ -338,7 +348,7 @@ def s10_wrong_filter_detection(loader: DataLoader) -> CheckResult:
         evidence_query=(
             "SELECT MIN(quantity), MAX(quantity), COUNT(*) FROM bronze_orders b WHERE "
             f"{VALID_PREDICATE} AND NOT EXISTS "
-            "(SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)"
+            f"(SELECT 1 FROM silver_orders s WHERE {key_match})"
         ),
         extra={"suspected_filter": suspected, "missing": missing_n},
     )

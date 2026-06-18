@@ -19,7 +19,7 @@ from root_cause import find_root_cause
 from verdict_engine import decide_verdict
 
 
-REPORT_PATH = Path("reports/report.json")
+REPORT_PATH = Path("reports/legacy_report.json")
 
 
 def build_report() -> dict:

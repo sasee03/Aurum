@@ -68,7 +68,7 @@ def x2_bronze_to_silver(silver_results: list[CheckResult]) -> CheckResult:
 
 
 def x3_silver_to_gold(gold_results: list[CheckResult]) -> CheckResult:
-    ids = ["G1", "G2", "G3"]
+    ids = ["G1", "G2", "G3", "G4", "G6"]
     status = _rollup(gold_results, ids)
     detail = (
         "Silver-to-Gold metrics reconcile correctly."
@@ -152,9 +152,10 @@ def build_root_cause(silver_results: list[CheckResult]) -> dict:
 
 def build_business_impact(loader: DataLoader) -> dict:
     expected = loader.scalar(
-        f"SELECT SUM(quantity * unit_price) FROM bronze_orders WHERE {VALID_BRONZE_PREDICATE}"
+        f"SELECT COALESCE(SUM(quantity * unit_price), 0) "
+        f"FROM bronze_orders WHERE {VALID_BRONZE_PREDICATE}"
     )
-    actual = loader.scalar("SELECT total_revenue FROM gold_metrics")
+    actual = loader.scalar("SELECT COALESCE(total_revenue, 0) FROM gold_metrics")
 
     if expected is None or actual is None:
         return {

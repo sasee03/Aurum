@@ -3,7 +3,7 @@
 import pandas as pd
 from builders import gold_from_silver, historical_df, loader_from, make_rows, to_silver
 
-from src.contracts import FAIL, IMPACTED, PASS
+from src.contracts import FAIL, IMPACTED, PASS, WARN
 from src.gold_validator import (
     g1_revenue_reconciliation,
     g2_order_count_reconciliation,
@@ -47,4 +47,18 @@ def test_g5_impacted_when_below_baseline():
     loader = loader_from(
         silver_orders=silver, gold_metrics=gold, historical_runs=historical
     )
-    assert g5_revenue_vs_baseline(loader).status == IMPACTED
+    assert g5_revenue_vs_baseline(loader, upstream_status=FAIL).status == IMPACTED
+
+
+def test_g5_low_revenue_without_upstream_failure_warns():
+    silver = to_silver(make_rows(10))
+    gold = gold_from_silver(silver)
+    historical = historical_df(
+        bronze_counts=[100] * 5,
+        drop_pcts=[5] * 5,
+        gold_revenues=[1000, 1010, 990, 1005, 995],
+    )
+    loader = loader_from(
+        silver_orders=silver, gold_metrics=gold, historical_runs=historical
+    )
+    assert g5_revenue_vs_baseline(loader, upstream_status=PASS).status == WARN

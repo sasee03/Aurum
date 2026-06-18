@@ -7,6 +7,7 @@ from src.bronze_validator import (
     b3_empty_table,
     b4_required_columns,
     b8_duplicates,
+    validate_bronze,
 )
 from src.contracts import FAIL, PASS, WARN
 
@@ -53,3 +54,12 @@ def test_b8_duplicates_warn():
     rows.append(dict(rows[0]))
     loader = loader_from(bronze_orders=to_df(rows))
     assert b8_duplicates(loader).status == WARN
+
+
+def test_validate_bronze_stops_after_required_schema_failure():
+    rows = to_df(make_rows(10)).drop(columns=["quantity"])
+    loader = loader_from(raw_orders=rows, bronze_orders=rows)
+
+    results = validate_bronze(loader)
+    assert [result.check_id for result in results] == ["B1", "B2", "B3", "B4"]
+    assert results[-1].status == FAIL

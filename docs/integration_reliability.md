@@ -1,5 +1,8 @@
 # Integration & Reliability Track
 
+> **CURRENT WORKFLOW:** Validate the `src/` trust framework. Root ALLOW/BLOCK
+> commands are legacy and write `reports/legacy_report.json`.
+
 The Integration Lead validates and connects the product. He does not own the anomaly engine, root-cause engine, verdict engine, baseline engine, impact engine, dashboard design, demo narration, or product positioning.
 
 ## Ownership
@@ -19,20 +22,21 @@ Prakhar builds the decision. Haasya builds the proof and experience. The Integra
 Run from the project root:
 
 ```powershell
-python verify_demo.py
-python run_demo.py
+python src/generate_data.py
+python src/run_demo.py
+python -m pytest -q
 streamlit run streamlit_app.py
 ```
 
-The verifier checks:
+The current test and demo commands check:
 
-- contract fields and block keys
+- current report contract fields and block keys
 - Bronze 100,000, correct Silver 96,000, buggy Silver 72,000
 - 28% today drop and learned normal range 3.71%-3.91%
 - expected revenue Rs 10.18 Cr, actual revenue Rs 9.70 Cr, impact Rs 0.48 Cr
 - root cause derives 24,000 dropped discounted orders
 - evidence SQLs run and reproduce their displayed results
-- dashboard reads `reports/report.json` instead of hardcoding demo values
+- dashboard reads the current `reports/report.json` instead of legacy fields
 
 ## Daily Update Format
 
@@ -57,7 +61,7 @@ Tomorrow:
 - Verdict can be explained in one breath.
 - Root cause can be shown from a real table diff.
 - Screenshots are captured before demo day.
-- Backup terminal command is ready: `python verify_demo.py`.
+- Backup terminal command is ready: `python src/run_demo.py`.
 
 ## Scalability Q&A Notes
 
@@ -66,4 +70,3 @@ Tomorrow:
 - Warehouse targets can be Snowflake, BigQuery, Databricks, or Postgres because the contract boundary is JSON.
 - Policy thresholds can move into YAML once the demo rules stabilize.
 - Kafka, Kubernetes, and API gateways are roadmap items, not MVP dependencies.
-

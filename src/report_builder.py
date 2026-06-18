@@ -42,11 +42,13 @@ def _suggested_action(final_verdict: str, layer_status: dict, root_cause: dict) 
 def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
     bronze_results = validate_bronze(loader)
     silver_results = validate_silver(loader)
-    gold_results = validate_gold(loader)
+    bronze_status = compute_layer_status(bronze_results)
+    silver_status = compute_layer_status(silver_results)
+    gold_results = validate_gold(loader, upstream_status=silver_status)
 
     layer_status = {
-        "bronze": compute_layer_status(bronze_results),
-        "silver": compute_layer_status(silver_results),
+        "bronze": bronze_status,
+        "silver": silver_status,
         "gold": compute_layer_status(gold_results),
     }
 

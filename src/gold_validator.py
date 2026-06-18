@@ -102,7 +102,9 @@ def g4_average_order_value(loader: DataLoader) -> CheckResult:
     )
 
 
-def g5_revenue_vs_baseline(loader: DataLoader) -> CheckResult:
+def g5_revenue_vs_baseline(
+    loader: DataLoader, upstream_status: Optional[str] = None
+) -> CheckResult:
     gold_rev = float(loader.scalar("SELECT total_revenue FROM gold_metrics") or 0)
     silver_rev = float(loader.scalar("SELECT SUM(net_revenue) FROM silver_orders") or 0)
     gold_math_correct = abs(silver_rev - gold_rev) <= REVENUE_TOLERANCE
@@ -126,11 +128,17 @@ def g5_revenue_vs_baseline(loader: DataLoader) -> CheckResult:
     elif not gold_math_correct:
         status = FAIL
         detail = "Gold revenue is wrong and does not reconcile with Silver."
-    elif gold_rev < band["lower"]:
+    elif gold_rev < band["lower"] and upstream_status in (FAIL, IMPACTED, WARN):
         status = IMPACTED
         detail = (
             f"Gold math is correct, but revenue is {impact:,.0f} below the expected "
             "baseline -- impacted by an upstream layer failure."
+        )
+    elif gold_rev < band["lower"]:
+        status = WARN
+        detail = (
+            f"Gold revenue is {impact:,.0f} below baseline, but no upstream failure "
+            "was established; review as a business anomaly."
         )
     else:
         status, detail = WARN, "Gold revenue is mildly above the expected baseline."
@@ -180,17 +188,24 @@ def g6_country_revenue_reconciliation(loader: DataLoader) -> CheckResult:
     )
 
 
-def validate_gold(loader: DataLoader) -> list[CheckResult]:
+def validate_gold(
+    loader: DataLoader, upstream_status: Optional[str] = None
+) -> list[CheckResult]:
     return [
         g1_revenue_reconciliation(loader),
         g2_order_count_reconciliation(loader),
         g3_customer_count_reconciliation(loader),
         g4_average_order_value(loader),
-        g5_revenue_vs_baseline(loader),
+        g5_revenue_vs_baseline(loader, upstream_status=upstream_status),
         g6_country_revenue_reconciliation(loader),
     ]
 
 
 if __name__ == "__main__":
-    for result in validate_gold(DataLoader()):
+    from .silver_validator import validate_silver
+    from .verdict_engine import compute_layer_status
+
+    loader = DataLoader()
+    silver_status = compute_layer_status(validate_silver(loader))
+    for result in validate_gold(loader, upstream_status=silver_status):
         print(result.status, result.check_id, result.detail)

@@ -209,11 +209,15 @@ def b8_duplicates(loader: DataLoader) -> CheckResult:
 
 
 def validate_bronze(loader: DataLoader) -> list[CheckResult]:
-    return [
+    results = [
         b1_source_to_bronze_count(loader),
         b2_count_band(loader),
         b3_empty_table(loader),
         b4_required_columns(loader),
+    ]
+    if results[-1].status == FAIL:
+        return results
+    return results + [
         b5_extra_missing_columns(loader),
         b6_mandatory_nulls(loader),
         b7_negative_values(loader),

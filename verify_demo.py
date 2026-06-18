@@ -195,11 +195,14 @@ def verify_evidence_queries(loader: DataLoader, report: dict) -> None:
     check("Evidence result text matches revenue SQL", evidence_by_name["Gold revenue delta"]["result"] == "Rs 9.70 Cr")
 
 
-def verify_dashboard_reads_contract() -> None:
+def verify_legacy_report_is_isolated() -> None:
+    check(
+        "Legacy runner uses an isolated report path",
+        REPORT_PATH.as_posix() == "reports/legacy_report.json",
+    )
     source = Path("streamlit_app.py").read_text(encoding="utf-8")
-    check("Dashboard imports shared report path", "REPORT_PATH" in source)
-    check("Dashboard can build the shared report", "build_report" in source)
-    check("Dashboard reads report JSON", "json.loads" in source)
+    check("Current dashboard does not import legacy runner", "from run_demo" not in source)
+    check("Current dashboard expects trust verdict", "final_verdict" in source)
     for forbidden_literal in ["100000", "96000", "72000", "28.00", "10.18", "9.70", "0.48"]:
         check(
             f"Dashboard does not hardcode {forbidden_literal}",
@@ -224,7 +227,7 @@ def main() -> None:
     verify_verdict_rules()
     verify_root_cause_trace(loader, report)
     verify_evidence_queries(loader, report)
-    verify_dashboard_reads_contract()
+    verify_legacy_report_is_isolated()
 
     print(f"\nAll checks passed. Report written to {REPORT_PATH}")
 

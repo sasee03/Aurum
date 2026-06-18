@@ -1,8 +1,12 @@
 # Aurum Output Contract
 
+> **LEGACY / SUPERSEDED:** This document describes the root ALLOW/BLOCK
+> implementation. The current framework lives under `src/` and writes the
+> cross-layer trust report to `reports/report.json`.
+
 This is the frozen backend-to-dashboard contract for the MVP. Prakhar owns the contract definition. The Integration Lead owns conformance to this contract.
 
-`run_demo.py` writes the live contract JSON to `reports/report.json`.
+The root `run_demo.py` writes this legacy contract to `reports/legacy_report.json`.
 
 ```json
 {
@@ -69,4 +73,3 @@ This is the frozen backend-to-dashboard contract for the MVP. Prakhar owns the c
 ```
 
 `deviation_sigma` is deliberately computed, not copied from a placeholder. With the current data it is `(28.00 - 3.81) / 0.032 = 755.9`.
-

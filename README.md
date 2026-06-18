@@ -116,4 +116,5 @@ any `FAIL` -> `NOT TRUSTED`; any `WARN`/`IMPACTED` -> `WARNING`; else `TRUSTED`.
 The previous release-gatekeeping iteration (`ALLOW/BLOCK` publish gate) still has
 its modules at the repo root (`anomaly.py`, `verdict_engine.py`, `streamlit_app.py`,
 `verify_demo.py`, `CONTRACT.md`, etc.). It is superseded by the `src/` framework
-above and can be removed once the new direction is confirmed.
+above. Its runner and verifier write `reports/legacy_report.json`; the current
+framework exclusively owns `reports/report.json`. See `docs/LEGACY.md`.
