@@ -8,6 +8,143 @@ Reference list of every data quality check in the cross-layer framework.
 - Every check returns the same `CheckResult` shape: `check_id`, `check_name`,
   `layer`, `status`, `observed`, `expected`, `detail`, `evidence_query`.
 
+---
+
+## MVP Priority Checks
+
+Out of the full DQ catalogue, Aurum prioritizes these **five checks** for MVP and
+demo. They were ranked by:
+
+| Criterion | Why it matters |
+|-----------|----------------|
+| **Usage in real projects** | Checks teams actually run in production pipelines |
+| **Data availability** | Runnable on our retail dataset without extra sources |
+| **Automation scope** | SQL/count logic — no manual review, no LLM |
+| **Demo value** | Directly supports the Raw → Bronze → Silver → Gold story |
+| **Business impact** | Catches issues that distort revenue, orders, and trust |
+
+### 1. Row Count / Volume Reconciliation
+
+| | |
+|---|---|
+| **Layers** | Bronze, Silver, Gold, Cross-Layer |
+| **Implemented as** | `B1`, `B2`, `S1`, `S2`, `G2`, `G3`, `X1`, `X2` |
+| **Status** | Implemented |
+| **Automation scope** | High — pure `COUNT(*)` and learned tolerance bands |
+| **Demo relevance** | **Primary demo driver.** Bronze passes, but Silver shows an abnormal 28% drop; Aurum flags the failure at Bronze → Silver. `S8`/`S9`/`S10` extend this with wrongly-removed valid records. |
+
+**Why it matters:** The most common DQ check in real projects. Detects missing,
+excessive, or wrongly dropped records across layers.
+
+**Expected explanation:** *"This check detects abnormal data loss or excess volume
+across layers. In our demo, Bronze passes but Silver has an abnormal drop, so the
+issue is detected at Bronze → Silver."*
+
+---
+
+### 2. Schema Arrival / Required Column Check
+
+| | |
+|---|---|
+| **Layers** | Bronze |
+| **Implemented as** | `B4`, `B5` |
+| **Status** | Implemented |
+| **Automation scope** | High — column list comparison against expected schema |
+| **Demo relevance** | Bronze passes — incoming raw data has the expected structure before transformation. |
+
+**Why it matters:** Ensures expected columns are present before any transformation.
+Prevents silent downstream failures when a field is missing.
+
+**Expected explanation:** *"This check verifies that incoming raw data has the
+expected structure before transformation."*
+
+---
+
+### 3. Null / Required Field Validation
+
+| | |
+|---|---|
+| **Layers** | Bronze, Silver |
+| **Implemented as** | `B6`, `S4` (+ `S5`, `S6` for value constraints on key fields) |
+| **Status** | Implemented |
+| **Automation scope** | High — `COUNT(*) WHERE col IS NULL` per mandatory column |
+| **Demo relevance** | Bronze and Silver pass null checks; the demo failure is record *loss*, not nulls. |
+
+**Important fields:** `invoice_no`, `stock_code`, `quantity`, `unit_price`,
+`invoice_date`, `customer_id`, `country`
+
+**Why it matters:** Mandatory fields must be usable before Silver transformation
+and Gold metric creation. Nulls in key columns break joins, aggregations, and
+business metrics.
+
+**Expected explanation:** *"This check verifies that key business fields are not
+missing before they are used for Silver transformation or Gold metric creation."*
+
+---
+
+### 4. Duplicate / Key Uniqueness Check
+
+| | |
+|---|---|
+| **Layers** | Bronze, Silver |
+| **Implemented as** | `B8`, `S3` |
+| **Status** | Implemented |
+| **Automation scope** | High — composite-key `GROUP BY ... HAVING COUNT(*) > 1` |
+| **Demo relevance** | Bronze and Silver pass; no duplicate inflation in the demo dataset. |
+
+**Why it matters:** Duplicates inflate revenue, order count, and customer count in
+Gold. A primary/composite key check is standard in ingestion and cleansing pipelines.
+
+**Expected explanation:** *"This check ensures that duplicate records do not inflate
+downstream Gold metrics."*
+
+---
+
+### 5. Gold Metric Reconciliation
+
+| | |
+|---|---|
+| **Layers** | Gold |
+| **Implemented as** | `G1`, `G2`, `G3`, `G4`, `G5` |
+| **Status** | Implemented |
+| **Automation scope** | High — recompute metrics from Silver and compare to Gold tables |
+| **Demo relevance** | **Key demo nuance.** `G1`–`G4` pass (Gold math is correct), but `G5` marks Gold **IMPACTED** because Silver data is already damaged. |
+
+**Examples:**
+- Silver revenue = Gold revenue (`G1`)
+- Silver distinct invoices = Gold total orders (`G2`)
+- Silver distinct customers = Gold total customers (`G3`)
+- AOV = revenue / orders (`G4`)
+- Revenue vs learned baseline (`G5` → IMPACTED when upstream failed)
+
+**Why it matters:** The most business-facing check. Validates whether final Gold
+output can be trusted — even when the math reconciles, upstream damage can still
+make the output untrustworthy.
+
+**Expected explanation:** *"This check verifies that Gold metrics are correctly
+calculated from Silver data. In our demo, Gold math reconciles, but Gold is marked
+IMPACTED because Silver data is already damaged."*
+
+---
+
+### Priority → implementation map (quick reference)
+
+| Priority | Theme | Check IDs |
+|----------|-------|-----------|
+| 1 | Row Count / Volume | `B1`, `B2`, `S1`, `S2`, `S8`, `S9`, `S10`, `G2`, `G3`, `X1`, `X2` |
+| 2 | Schema / Required Columns | `B4`, `B5` |
+| 3 | Null / Required Fields | `B6`, `S4`, `S5`, `S6` |
+| 4 | Duplicate / Key Uniqueness | `B8`, `S3` |
+| 5 | Gold Metric Reconciliation | `G1`, `G2`, `G3`, `G4`, `G5` |
+
+> `S8`–`S10` are Silver extensions of Priority 1 — they detect *which* valid
+> records were wrongly removed and infer the bad filter. They power the demo root
+> cause but are grouped under volume reconciliation for prioritization purposes.
+
+---
+
+## Full catalogue
+
 "MVP" marks the P0 checks implemented and wired into `run_demo.py` today. All
 checks below are implemented in this MVP.
 

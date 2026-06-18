@@ -38,6 +38,40 @@ Estimated Loss: Rs 0.48 Cr
 Final Verdict: NOT TRUSTED
 ```
 
+## MVP Check Prioritization
+
+The full framework supports many quality checks, but the MVP focuses on the most
+practical and high-impact checks first.
+
+**Top checks:**
+
+1. **Row Count / Volume Reconciliation** — detects missing, excessive, or wrongly
+   dropped records across layers (`B1`, `B2`, `S1`, `S2`, `G2`, `G3`)
+2. **Schema Arrival / Required Column Check** — verifies incoming raw data structure
+   (`B4`, `B5`)
+3. **Null / Required Field Validation** — ensures mandatory business fields are
+   usable (`B6`, `S4`)
+4. **Duplicate / Key Uniqueness Check** — prevents duplicate inflation of Gold
+   metrics (`B8`, `S3`)
+5. **Gold Metric Reconciliation** — validates final business metrics against Silver
+   (`G1`, `G2`, `G3`, `G4`, `G5`)
+
+These checks were selected because they are widely used in real data projects, easy
+to automate with available dataset fields, and directly support the Raw → Bronze →
+Silver → Gold validation story.
+
+See `docs/check_catalogue.md` for the full priority rationale, automation scope,
+demo relevance, and mapping to every check ID.
+
+### Demo story (what the priority checks prove)
+
+```
+Raw data lands correctly  →  Bronze passes (schema, nulls, volume OK)
+Silver transformation wrongly removes valid records  →  Silver fails (volume + S8)
+Gold metrics built from damaged Silver  →  Gold IMPACTED (math OK, data not)
+Aurum: first failed layer = Bronze → Silver, verdict = NOT TRUSTED
+```
+
 ## Tests
 
 ```powershell
