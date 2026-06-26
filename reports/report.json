@@ -19,7 +19,10 @@
       "S2",
       "S8",
       "S9",
-      "S10"
+      "S10",
+      "L2-REC-COUNT",
+      "L3-ANO-SILVER",
+      "L3-ANO-DROP_P"
     ],
     "suspected_filter": "quantity > 20 records are being filtered out",
     "evidence": [
@@ -47,6 +50,21 @@
         "check_id": "S10",
         "detail": "All 24,000 missing valid records have quantity >= 25; suspected bad filter: quantity > 20 records are being filtered out.",
         "evidence_query": "SELECT MIN(quantity), MAX(quantity), COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no IS NOT DISTINCT FROM b.invoice_no AND s.stock_code IS NOT DISTINCT FROM b.stock_code AND s.customer_id IS NOT DISTINCT FROM b.customer_id AND s.invoice_date IS NOT DISTINCT FROM b.invoice_date)"
+      },
+      {
+        "check_id": "L2-REC-COUNT",
+        "detail": "24,000 valid Bronze rows missing from Silver (4,000 invalid rows legitimately removed).",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)"
+      },
+      {
+        "check_id": "L3-ANO-SILVER",
+        "detail": "Extreme outlier: modified Z=-38.77 (> 3.5) and outside IQR [9.327e+04, 9.628e+04].",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders"
+      },
+      {
+        "check_id": "L3-ANO-DROP_P",
+        "detail": "Extreme outlier: modified Z=38.45 (> 3.5) and outside IQR [3.65, 6.85].",
+        "evidence_query": "SELECT (1 - (SELECT COUNT(*) FROM silver_orders)::DOUBLE / NULLIF((SELECT COUNT(*) FROM bronze_orders), 0)) * 100"
       }
     ]
   },
@@ -58,6 +76,701 @@
     "detail": "Expected revenue is the revenue of all valid Bronze records; actual is current Gold revenue. The gap is the value lost to dropped valid records."
   },
   "suggested_action": "Fix the Silver transformation rule (quantity > 20 records are being filtered out) and rerun the ETL.",
+  "detection_layers": {
+    "layer_1_rules": [
+      {
+        "check_id": "L1-RAW-COMP-EMPTY",
+        "check_name": "Empty Table Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 100000,
+        "expected": "> 0",
+        "detail": "Table has rows.",
+        "evidence_query": "SELECT COUNT(*) FROM raw_orders",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
+        "check_id": "L1-RAW-COMP-NULL",
+        "check_name": "Mandatory Column Null Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": {
+          "invoice_no": 0,
+          "stock_code": 0,
+          "quantity": 0,
+          "unit_price": 0,
+          "invoice_date": 0,
+          "customer_id": 0,
+          "country": 0
+        },
+        "expected": {
+          "invoice_no": 0,
+          "stock_code": 0,
+          "quantity": 0,
+          "unit_price": 0,
+          "invoice_date": 0,
+          "customer_id": 0,
+          "country": 0
+        },
+        "detail": "No nulls in mandatory columns.",
+        "evidence_query": "SELECT COUNT(*) FROM raw_orders WHERE invoice_no IS NULL",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
+        "check_id": "L1-RAW-VAL-UNIT",
+        "check_name": "Range Check: unit_price",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No invalid unit_price values.",
+        "evidence_query": "SELECT COUNT(*) FROM raw_orders WHERE unit_price <= 0",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
+        "check_id": "L1-RAW-VAL-DATE",
+        "check_name": "Date Parse Validity: invoice_date",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "All invoice_date values parse as dates.",
+        "evidence_query": "SELECT COUNT(*) FROM raw_orders WHERE TRY_CAST(invoice_date AS DATE) IS NULL",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
+        "check_id": "L1-RAW-UNIQ-PK",
+        "check_name": "Primary Key Duplicate Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No primary-key duplicates.",
+        "evidence_query": "SELECT invoice_no, COUNT(*) FROM raw_orders GROUP BY invoice_no HAVING COUNT(*) > 1",
+        "extra": {
+          "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
+        "check_id": "L1-RAW-UNIQ-FULL",
+        "check_name": "Full Row Duplicate Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No full-row duplicates.",
+        "evidence_query": "SELECT COUNT(*) - (SELECT COUNT(*) FROM (SELECT DISTINCT * FROM raw_orders)) FROM raw_orders",
+        "extra": {
+          "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
+        "check_id": "L1-RAW-TIME",
+        "check_name": "Timeliness Window: invoice_date",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": "span=0d",
+        "expected": "<= 365d",
+        "detail": "Date span 0 days within window.",
+        "evidence_query": "SELECT MIN(invoice_date), MAX(invoice_date) FROM raw_orders",
+        "extra": {
+          "dimension": "timeliness",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-COMP-EMPTY",
+        "check_name": "Empty Table Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 100000,
+        "expected": "> 0",
+        "detail": "Table has rows.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-COMP-NULL",
+        "check_name": "Mandatory Column Null Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": {
+          "invoice_no": 0,
+          "stock_code": 0,
+          "quantity": 0,
+          "unit_price": 0,
+          "invoice_date": 0,
+          "customer_id": 0,
+          "country": 0
+        },
+        "expected": {
+          "invoice_no": 0,
+          "stock_code": 0,
+          "quantity": 0,
+          "unit_price": 0,
+          "invoice_date": 0,
+          "customer_id": 0,
+          "country": 0
+        },
+        "detail": "No nulls in mandatory columns.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders WHERE invoice_no IS NULL",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-COMP-SRC",
+        "check_name": "Source to Table Row Count",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 100000,
+        "expected": 100000,
+        "detail": "Row counts match.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-VAL-UNIT",
+        "check_name": "Range Check: unit_price",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No invalid unit_price values.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders WHERE unit_price < 0",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-VAL-DATE",
+        "check_name": "Date Parse Validity: invoice_date",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "All invoice_date values parse as dates.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders WHERE TRY_CAST(invoice_date AS DATE) IS NULL",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-UNIQ-PK",
+        "check_name": "Primary Key Duplicate Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No primary-key duplicates.",
+        "evidence_query": "SELECT invoice_no, COUNT(*) FROM bronze_orders GROUP BY invoice_no HAVING COUNT(*) > 1",
+        "extra": {
+          "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-UNIQ-FULL",
+        "check_name": "Full Row Duplicate Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No full-row duplicates.",
+        "evidence_query": "SELECT COUNT(*) - (SELECT COUNT(*) FROM (SELECT DISTINCT * FROM bronze_orders)) FROM bronze_orders",
+        "extra": {
+          "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-TIME",
+        "check_name": "Timeliness Window: invoice_date",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": "span=0d",
+        "expected": "<= 365d",
+        "detail": "Date span 0 days within window.",
+        "evidence_query": "SELECT MIN(invoice_date), MAX(invoice_date) FROM bronze_orders",
+        "extra": {
+          "dimension": "timeliness",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-COMP-EMPTY",
+        "check_name": "Empty Table Check",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 72000,
+        "expected": "> 0",
+        "detail": "Table has rows.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-COMP-NULL",
+        "check_name": "Mandatory Column Null Check",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": {
+          "invoice_no": 0,
+          "stock_code": 0,
+          "quantity": 0,
+          "unit_price": 0,
+          "invoice_date": 0,
+          "customer_id": 0,
+          "country": 0
+        },
+        "expected": {
+          "invoice_no": 0,
+          "stock_code": 0,
+          "quantity": 0,
+          "unit_price": 0,
+          "invoice_date": 0,
+          "customer_id": 0,
+          "country": 0
+        },
+        "detail": "No nulls in mandatory columns.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders WHERE invoice_no IS NULL",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-VAL-QUAN",
+        "check_name": "Range Check: quantity",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No invalid quantity values.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders WHERE quantity <= 0",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-VAL-UNIT",
+        "check_name": "Range Check: unit_price",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No invalid unit_price values.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders WHERE unit_price <= 0",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-VAL-DATE",
+        "check_name": "Date Parse Validity: invoice_date",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "All invoice_date values parse as dates.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders WHERE TRY_CAST(invoice_date AS DATE) IS NULL",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-UNIQ-PK",
+        "check_name": "Primary Key Duplicate Check",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No primary-key duplicates.",
+        "evidence_query": "SELECT invoice_no, COUNT(*) FROM silver_orders GROUP BY invoice_no HAVING COUNT(*) > 1",
+        "extra": {
+          "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-UNIQ-FULL",
+        "check_name": "Full Row Duplicate Check",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No full-row duplicates.",
+        "evidence_query": "SELECT COUNT(*) - (SELECT COUNT(*) FROM (SELECT DISTINCT * FROM silver_orders)) FROM silver_orders",
+        "extra": {
+          "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-TIME",
+        "check_name": "Timeliness Window: invoice_date",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": "span=0d",
+        "expected": "<= 365d",
+        "detail": "Date span 0 days within window.",
+        "evidence_query": "SELECT MIN(invoice_date), MAX(invoice_date) FROM silver_orders",
+        "extra": {
+          "dimension": "timeliness",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-GOL-COMP-EMPTY",
+        "check_name": "Empty Table Check",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 1,
+        "expected": "> 0",
+        "detail": "Table has rows.",
+        "evidence_query": "SELECT COUNT(*) FROM gold_metrics",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "gold_metrics"
+        }
+      },
+      {
+        "check_id": "L1-GOL-COMP-NULL",
+        "check_name": "Mandatory Column Null Check",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": {
+          "total_revenue": 0,
+          "total_orders": 0,
+          "total_customers": 0,
+          "average_order_value": 0
+        },
+        "expected": {
+          "total_revenue": 0,
+          "total_orders": 0,
+          "total_customers": 0,
+          "average_order_value": 0
+        },
+        "detail": "No nulls in mandatory columns.",
+        "evidence_query": "SELECT COUNT(*) FROM gold_metrics WHERE total_revenue IS NULL",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "gold_metrics"
+        }
+      },
+      {
+        "check_id": "L1-GOL-VAL-TOTA",
+        "check_name": "Range Check: total_revenue",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No invalid total_revenue values.",
+        "evidence_query": "SELECT COUNT(*) FROM gold_metrics WHERE total_revenue < 0",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "gold_metrics"
+        }
+      },
+      {
+        "check_id": "L1-GOL-VAL-TOTA",
+        "check_name": "Range Check: total_orders",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No invalid total_orders values.",
+        "evidence_query": "SELECT COUNT(*) FROM gold_metrics WHERE total_orders < 0",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "gold_metrics"
+        }
+      },
+      {
+        "check_id": "L1-GOL-VAL-TOTA",
+        "check_name": "Range Check: total_customers",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No invalid total_customers values.",
+        "evidence_query": "SELECT COUNT(*) FROM gold_metrics WHERE total_customers < 0",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "gold_metrics"
+        }
+      },
+      {
+        "check_id": "L1-GOL-UNIQ-FULL",
+        "check_name": "Full Row Duplicate Check",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No full-row duplicates.",
+        "evidence_query": "SELECT COUNT(*) - (SELECT COUNT(*) FROM (SELECT DISTINCT * FROM gold_metrics)) FROM gold_metrics",
+        "extra": {
+          "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "gold_metrics"
+        }
+      }
+    ],
+    "layer_2_reconciliation": [
+      {
+        "check_id": "L2-REC-COUNT",
+        "check_name": "Count Reconciliation: Unexplained Valid Row Loss",
+        "layer": "Silver",
+        "status": "FAIL",
+        "observed": {
+          "bronze_total": 100000,
+          "bronze_valid": 96000,
+          "silver_count": 72000,
+          "missing_valid": 24000,
+          "explained_removals": 4000,
+          "unexplained_loss": 24000
+        },
+        "expected": {
+          "unexplained_loss": 0
+        },
+        "detail": "24,000 valid Bronze rows missing from Silver (4,000 invalid rows legitimately removed).",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_2_reconciliation"
+        }
+      },
+      {
+        "check_id": "L2-REC-KEY",
+        "check_name": "Key-Set Reconciliation: Bronze \u2287 Silver, Silver \u2287 Gold keys",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": {
+          "silver_keys_not_in_bronze": 0,
+          "silver_distinct_invoices": 72000,
+          "gold_total_orders": 72000,
+          "gold_excess_over_silver": 0
+        },
+        "expected": {
+          "violations": 0
+        },
+        "detail": "Key sets are consistent across layers.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders s WHERE NOT EXISTS (SELECT 1 FROM bronze_orders b WHERE b.invoice_no = s.invoice_no)",
+        "extra": {
+          "dimension": "consistency",
+          "detection_layer": "layer_2_reconciliation"
+        }
+      },
+      {
+        "check_id": "L2-REC-REV",
+        "check_name": "Revenue Reconciliation: Silver SUM vs Gold Total",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": {
+          "silver_revenue": 97000000.0,
+          "gold_revenue": 97000000.0,
+          "difference": 0.0
+        },
+        "expected": {
+          "difference": "<= 1.0"
+        },
+        "detail": "Silver revenue reconciles with Gold.",
+        "evidence_query": "SELECT SUM(net_revenue) FROM silver_orders",
+        "extra": {
+          "dimension": "accuracy",
+          "detection_layer": "layer_2_reconciliation",
+          "table": "gold_metrics"
+        }
+      },
+      {
+        "check_id": "L2-REC-AGG",
+        "check_name": "Aggregate Cross-Check: Recompute Gold from Silver",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": {
+          "silver": {
+            "revenue": 97000000.0,
+            "orders": 72000,
+            "customers": 5000
+          },
+          "gold": {
+            "total_revenue": 97000000.0,
+            "total_orders": 72000,
+            "total_customers": 5000
+          },
+          "mismatched_fields": []
+        },
+        "expected": {
+          "mismatched_fields": []
+        },
+        "detail": "All Gold aggregates match Silver recomputation.",
+        "evidence_query": "SELECT SUM(net_revenue), COUNT(DISTINCT invoice_no), COUNT(DISTINCT customer_id) FROM silver_orders",
+        "extra": {
+          "dimension": "accuracy",
+          "detection_layer": "layer_2_reconciliation",
+          "table": "gold_metrics"
+        }
+      }
+    ],
+    "layer_3_robust_anomaly": [
+      {
+        "check_id": "L3-ANO-BRONZE",
+        "check_name": "Robust Anomaly: Bronze Row Count",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": {
+          "value": 100000.0,
+          "median": 100000.0,
+          "iqr_lower": 99840.0,
+          "iqr_upper": 100160.0,
+          "modified_z": 0.0,
+          "history_count": 15,
+          "method": "median + IQR (Q1 - 1.5*IQR, Q3 + 1.5*IQR)",
+          "detail": "Within robust IQR band."
+        },
+        "expected": "within robust IQR band",
+        "detail": "Within robust IQR band.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_3_robust_anomaly",
+          "metric": "bronze_count",
+          "method": "median + IQR; modified Z (MAD)"
+        }
+      },
+      {
+        "check_id": "L3-ANO-SILVER",
+        "check_name": "Robust Anomaly: Silver Row Count",
+        "layer": "Silver",
+        "status": "FAIL",
+        "observed": {
+          "value": 72000.0,
+          "median": 94705.0,
+          "iqr_lower": 93267.5,
+          "iqr_upper": 96279.5,
+          "modified_z": -38.77,
+          "history_count": 15,
+          "method": "median + IQR (Q1 - 1.5*IQR, Q3 + 1.5*IQR)",
+          "detail": "Extreme outlier: modified Z=-38.77 (> 3.5) and outside IQR [9.327e+04, 9.628e+04]."
+        },
+        "expected": "within robust IQR band",
+        "detail": "Extreme outlier: modified Z=-38.77 (> 3.5) and outside IQR [9.327e+04, 9.628e+04].",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_3_robust_anomaly",
+          "metric": "silver_count",
+          "method": "median + IQR; modified Z (MAD)"
+        }
+      },
+      {
+        "check_id": "L3-ANO-DROP_P",
+        "check_name": "Robust Anomaly: Bronze-to-Silver Drop %",
+        "layer": "Silver",
+        "status": "FAIL",
+        "observed": {
+          "value": 28.000000000000004,
+          "median": 5.2,
+          "iqr_lower": 3.6499999999999986,
+          "iqr_upper": 6.850000000000001,
+          "modified_z": 38.45,
+          "history_count": 15,
+          "method": "median + IQR (Q1 - 1.5*IQR, Q3 + 1.5*IQR)",
+          "detail": "Extreme outlier: modified Z=38.45 (> 3.5) and outside IQR [3.65, 6.85]."
+        },
+        "expected": "within robust IQR band",
+        "detail": "Extreme outlier: modified Z=38.45 (> 3.5) and outside IQR [3.65, 6.85].",
+        "evidence_query": "SELECT (1 - (SELECT COUNT(*) FROM silver_orders)::DOUBLE / NULLIF((SELECT COUNT(*) FROM bronze_orders), 0)) * 100",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_3_robust_anomaly",
+          "metric": "drop_pct",
+          "method": "median + IQR; modified Z (MAD)"
+        }
+      },
+      {
+        "check_id": "L3-ANO-GOLD_R",
+        "check_name": "Robust Anomaly: Gold Revenue",
+        "layer": "Gold",
+        "status": "FAIL",
+        "observed": {
+          "value": 97000000.0,
+          "median": 101800000.0,
+          "iqr_lower": 101500000.0,
+          "iqr_upper": 102100000.0,
+          "modified_z": -32.38,
+          "history_count": 15,
+          "method": "median + IQR (Q1 - 1.5*IQR, Q3 + 1.5*IQR)",
+          "detail": "Extreme outlier: modified Z=-32.38 (> 3.5) and outside IQR [1.015e+08, 1.021e+08]."
+        },
+        "expected": "within robust IQR band",
+        "detail": "Extreme outlier: modified Z=-32.38 (> 3.5) and outside IQR [1.015e+08, 1.021e+08].",
+        "evidence_query": "SELECT total_revenue FROM gold_metrics",
+        "extra": {
+          "dimension": "accuracy",
+          "detection_layer": "layer_3_robust_anomaly",
+          "metric": "gold_revenue",
+          "method": "median + IQR; modified Z (MAD)"
+        }
+      }
+    ]
+  },
   "checks": {
     "bronze": [
       {
@@ -182,6 +895,288 @@
         "expected": 0,
         "detail": "No duplicate business keys in Bronze.",
         "evidence_query": "SELECT invoice_no, stock_code, customer_id, invoice_date, COUNT(*) FROM bronze_orders GROUP BY invoice_no, stock_code, customer_id, invoice_date HAVING COUNT(*) > 1"
+      },
+      {
+        "check_id": "L1-RAW-COMP-EMPTY",
+        "check_name": "Empty Table Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 100000,
+        "expected": "> 0",
+        "detail": "Table has rows.",
+        "evidence_query": "SELECT COUNT(*) FROM raw_orders",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
+        "check_id": "L1-RAW-COMP-NULL",
+        "check_name": "Mandatory Column Null Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": {
+          "invoice_no": 0,
+          "stock_code": 0,
+          "quantity": 0,
+          "unit_price": 0,
+          "invoice_date": 0,
+          "customer_id": 0,
+          "country": 0
+        },
+        "expected": {
+          "invoice_no": 0,
+          "stock_code": 0,
+          "quantity": 0,
+          "unit_price": 0,
+          "invoice_date": 0,
+          "customer_id": 0,
+          "country": 0
+        },
+        "detail": "No nulls in mandatory columns.",
+        "evidence_query": "SELECT COUNT(*) FROM raw_orders WHERE invoice_no IS NULL",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
+        "check_id": "L1-RAW-VAL-UNIT",
+        "check_name": "Range Check: unit_price",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No invalid unit_price values.",
+        "evidence_query": "SELECT COUNT(*) FROM raw_orders WHERE unit_price <= 0",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
+        "check_id": "L1-RAW-VAL-DATE",
+        "check_name": "Date Parse Validity: invoice_date",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "All invoice_date values parse as dates.",
+        "evidence_query": "SELECT COUNT(*) FROM raw_orders WHERE TRY_CAST(invoice_date AS DATE) IS NULL",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
+        "check_id": "L1-RAW-UNIQ-PK",
+        "check_name": "Primary Key Duplicate Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No primary-key duplicates.",
+        "evidence_query": "SELECT invoice_no, COUNT(*) FROM raw_orders GROUP BY invoice_no HAVING COUNT(*) > 1",
+        "extra": {
+          "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
+        "check_id": "L1-RAW-UNIQ-FULL",
+        "check_name": "Full Row Duplicate Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No full-row duplicates.",
+        "evidence_query": "SELECT COUNT(*) - (SELECT COUNT(*) FROM (SELECT DISTINCT * FROM raw_orders)) FROM raw_orders",
+        "extra": {
+          "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
+        "check_id": "L1-RAW-TIME",
+        "check_name": "Timeliness Window: invoice_date",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": "span=0d",
+        "expected": "<= 365d",
+        "detail": "Date span 0 days within window.",
+        "evidence_query": "SELECT MIN(invoice_date), MAX(invoice_date) FROM raw_orders",
+        "extra": {
+          "dimension": "timeliness",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-COMP-EMPTY",
+        "check_name": "Empty Table Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 100000,
+        "expected": "> 0",
+        "detail": "Table has rows.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-COMP-NULL",
+        "check_name": "Mandatory Column Null Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": {
+          "invoice_no": 0,
+          "stock_code": 0,
+          "quantity": 0,
+          "unit_price": 0,
+          "invoice_date": 0,
+          "customer_id": 0,
+          "country": 0
+        },
+        "expected": {
+          "invoice_no": 0,
+          "stock_code": 0,
+          "quantity": 0,
+          "unit_price": 0,
+          "invoice_date": 0,
+          "customer_id": 0,
+          "country": 0
+        },
+        "detail": "No nulls in mandatory columns.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders WHERE invoice_no IS NULL",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-COMP-SRC",
+        "check_name": "Source to Table Row Count",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 100000,
+        "expected": 100000,
+        "detail": "Row counts match.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-VAL-UNIT",
+        "check_name": "Range Check: unit_price",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No invalid unit_price values.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders WHERE unit_price < 0",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-VAL-DATE",
+        "check_name": "Date Parse Validity: invoice_date",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "All invoice_date values parse as dates.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders WHERE TRY_CAST(invoice_date AS DATE) IS NULL",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-UNIQ-PK",
+        "check_name": "Primary Key Duplicate Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No primary-key duplicates.",
+        "evidence_query": "SELECT invoice_no, COUNT(*) FROM bronze_orders GROUP BY invoice_no HAVING COUNT(*) > 1",
+        "extra": {
+          "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-UNIQ-FULL",
+        "check_name": "Full Row Duplicate Check",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No full-row duplicates.",
+        "evidence_query": "SELECT COUNT(*) - (SELECT COUNT(*) FROM (SELECT DISTINCT * FROM bronze_orders)) FROM bronze_orders",
+        "extra": {
+          "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-TIME",
+        "check_name": "Timeliness Window: invoice_date",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": "span=0d",
+        "expected": "<= 365d",
+        "detail": "Date span 0 days within window.",
+        "evidence_query": "SELECT MIN(invoice_date), MAX(invoice_date) FROM bronze_orders",
+        "extra": {
+          "dimension": "timeliness",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L3-ANO-BRONZE",
+        "check_name": "Robust Anomaly: Bronze Row Count",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": {
+          "value": 100000.0,
+          "median": 100000.0,
+          "iqr_lower": 99840.0,
+          "iqr_upper": 100160.0,
+          "modified_z": 0.0,
+          "history_count": 15,
+          "method": "median + IQR (Q1 - 1.5*IQR, Q3 + 1.5*IQR)",
+          "detail": "Within robust IQR band."
+        },
+        "expected": "within robust IQR band",
+        "detail": "Within robust IQR band.",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_3_robust_anomaly",
+          "metric": "bronze_count",
+          "method": "median + IQR; modified Z (MAD)"
+        }
       }
     ],
     "silver": [
@@ -346,6 +1341,236 @@
           "suspected_filter": "quantity > 20 records are being filtered out",
           "missing": 24000
         }
+      },
+      {
+        "check_id": "L1-SIL-COMP-EMPTY",
+        "check_name": "Empty Table Check",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 72000,
+        "expected": "> 0",
+        "detail": "Table has rows.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-COMP-NULL",
+        "check_name": "Mandatory Column Null Check",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": {
+          "invoice_no": 0,
+          "stock_code": 0,
+          "quantity": 0,
+          "unit_price": 0,
+          "invoice_date": 0,
+          "customer_id": 0,
+          "country": 0
+        },
+        "expected": {
+          "invoice_no": 0,
+          "stock_code": 0,
+          "quantity": 0,
+          "unit_price": 0,
+          "invoice_date": 0,
+          "customer_id": 0,
+          "country": 0
+        },
+        "detail": "No nulls in mandatory columns.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders WHERE invoice_no IS NULL",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-VAL-QUAN",
+        "check_name": "Range Check: quantity",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No invalid quantity values.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders WHERE quantity <= 0",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-VAL-UNIT",
+        "check_name": "Range Check: unit_price",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No invalid unit_price values.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders WHERE unit_price <= 0",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-VAL-DATE",
+        "check_name": "Date Parse Validity: invoice_date",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "All invoice_date values parse as dates.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders WHERE TRY_CAST(invoice_date AS DATE) IS NULL",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-UNIQ-PK",
+        "check_name": "Primary Key Duplicate Check",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No primary-key duplicates.",
+        "evidence_query": "SELECT invoice_no, COUNT(*) FROM silver_orders GROUP BY invoice_no HAVING COUNT(*) > 1",
+        "extra": {
+          "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-UNIQ-FULL",
+        "check_name": "Full Row Duplicate Check",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No full-row duplicates.",
+        "evidence_query": "SELECT COUNT(*) - (SELECT COUNT(*) FROM (SELECT DISTINCT * FROM silver_orders)) FROM silver_orders",
+        "extra": {
+          "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-TIME",
+        "check_name": "Timeliness Window: invoice_date",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": "span=0d",
+        "expected": "<= 365d",
+        "detail": "Date span 0 days within window.",
+        "evidence_query": "SELECT MIN(invoice_date), MAX(invoice_date) FROM silver_orders",
+        "extra": {
+          "dimension": "timeliness",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L2-REC-COUNT",
+        "check_name": "Count Reconciliation: Unexplained Valid Row Loss",
+        "layer": "Silver",
+        "status": "FAIL",
+        "observed": {
+          "bronze_total": 100000,
+          "bronze_valid": 96000,
+          "silver_count": 72000,
+          "missing_valid": 24000,
+          "explained_removals": 4000,
+          "unexplained_loss": 24000
+        },
+        "expected": {
+          "unexplained_loss": 0
+        },
+        "detail": "24,000 valid Bronze rows missing from Silver (4,000 invalid rows legitimately removed).",
+        "evidence_query": "SELECT COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_2_reconciliation"
+        }
+      },
+      {
+        "check_id": "L2-REC-KEY",
+        "check_name": "Key-Set Reconciliation: Bronze \u2287 Silver, Silver \u2287 Gold keys",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": {
+          "silver_keys_not_in_bronze": 0,
+          "silver_distinct_invoices": 72000,
+          "gold_total_orders": 72000,
+          "gold_excess_over_silver": 0
+        },
+        "expected": {
+          "violations": 0
+        },
+        "detail": "Key sets are consistent across layers.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders s WHERE NOT EXISTS (SELECT 1 FROM bronze_orders b WHERE b.invoice_no = s.invoice_no)",
+        "extra": {
+          "dimension": "consistency",
+          "detection_layer": "layer_2_reconciliation"
+        }
+      },
+      {
+        "check_id": "L3-ANO-SILVER",
+        "check_name": "Robust Anomaly: Silver Row Count",
+        "layer": "Silver",
+        "status": "FAIL",
+        "observed": {
+          "value": 72000.0,
+          "median": 94705.0,
+          "iqr_lower": 93267.5,
+          "iqr_upper": 96279.5,
+          "modified_z": -38.77,
+          "history_count": 15,
+          "method": "median + IQR (Q1 - 1.5*IQR, Q3 + 1.5*IQR)",
+          "detail": "Extreme outlier: modified Z=-38.77 (> 3.5) and outside IQR [9.327e+04, 9.628e+04]."
+        },
+        "expected": "within robust IQR band",
+        "detail": "Extreme outlier: modified Z=-38.77 (> 3.5) and outside IQR [9.327e+04, 9.628e+04].",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_3_robust_anomaly",
+          "metric": "silver_count",
+          "method": "median + IQR; modified Z (MAD)"
+        }
+      },
+      {
+        "check_id": "L3-ANO-DROP_P",
+        "check_name": "Robust Anomaly: Bronze-to-Silver Drop %",
+        "layer": "Silver",
+        "status": "FAIL",
+        "observed": {
+          "value": 28.000000000000004,
+          "median": 5.2,
+          "iqr_lower": 3.6499999999999986,
+          "iqr_upper": 6.850000000000001,
+          "modified_z": 38.45,
+          "history_count": 15,
+          "method": "median + IQR (Q1 - 1.5*IQR, Q3 + 1.5*IQR)",
+          "detail": "Extreme outlier: modified Z=38.45 (> 3.5) and outside IQR [3.65, 6.85]."
+        },
+        "expected": "within robust IQR band",
+        "detail": "Extreme outlier: modified Z=38.45 (> 3.5) and outside IQR [3.65, 6.85].",
+        "evidence_query": "SELECT (1 - (SELECT COUNT(*) FROM silver_orders)::DOUBLE / NULLIF((SELECT COUNT(*) FROM bronze_orders), 0)) * 100",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_3_robust_anomaly",
+          "metric": "drop_pct",
+          "method": "median + IQR; modified Z (MAD)"
+        }
       }
     ],
     "gold": [
@@ -414,6 +1639,182 @@
         "expected": 0,
         "detail": "Country-wise revenue reconciles with Silver.",
         "evidence_query": "SELECT country, SUM(net_revenue) FROM silver_orders GROUP BY country"
+      },
+      {
+        "check_id": "L1-GOL-COMP-EMPTY",
+        "check_name": "Empty Table Check",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 1,
+        "expected": "> 0",
+        "detail": "Table has rows.",
+        "evidence_query": "SELECT COUNT(*) FROM gold_metrics",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "gold_metrics"
+        }
+      },
+      {
+        "check_id": "L1-GOL-COMP-NULL",
+        "check_name": "Mandatory Column Null Check",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": {
+          "total_revenue": 0,
+          "total_orders": 0,
+          "total_customers": 0,
+          "average_order_value": 0
+        },
+        "expected": {
+          "total_revenue": 0,
+          "total_orders": 0,
+          "total_customers": 0,
+          "average_order_value": 0
+        },
+        "detail": "No nulls in mandatory columns.",
+        "evidence_query": "SELECT COUNT(*) FROM gold_metrics WHERE total_revenue IS NULL",
+        "extra": {
+          "dimension": "completeness",
+          "detection_layer": "layer_1_rules",
+          "table": "gold_metrics"
+        }
+      },
+      {
+        "check_id": "L1-GOL-VAL-TOTA",
+        "check_name": "Range Check: total_revenue",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No invalid total_revenue values.",
+        "evidence_query": "SELECT COUNT(*) FROM gold_metrics WHERE total_revenue < 0",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "gold_metrics"
+        }
+      },
+      {
+        "check_id": "L1-GOL-VAL-TOTA",
+        "check_name": "Range Check: total_orders",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No invalid total_orders values.",
+        "evidence_query": "SELECT COUNT(*) FROM gold_metrics WHERE total_orders < 0",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "gold_metrics"
+        }
+      },
+      {
+        "check_id": "L1-GOL-VAL-TOTA",
+        "check_name": "Range Check: total_customers",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No invalid total_customers values.",
+        "evidence_query": "SELECT COUNT(*) FROM gold_metrics WHERE total_customers < 0",
+        "extra": {
+          "dimension": "validity",
+          "detection_layer": "layer_1_rules",
+          "table": "gold_metrics"
+        }
+      },
+      {
+        "check_id": "L1-GOL-UNIQ-FULL",
+        "check_name": "Full Row Duplicate Check",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "No full-row duplicates.",
+        "evidence_query": "SELECT COUNT(*) - (SELECT COUNT(*) FROM (SELECT DISTINCT * FROM gold_metrics)) FROM gold_metrics",
+        "extra": {
+          "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "gold_metrics"
+        }
+      },
+      {
+        "check_id": "L2-REC-REV",
+        "check_name": "Revenue Reconciliation: Silver SUM vs Gold Total",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": {
+          "silver_revenue": 97000000.0,
+          "gold_revenue": 97000000.0,
+          "difference": 0.0
+        },
+        "expected": {
+          "difference": "<= 1.0"
+        },
+        "detail": "Silver revenue reconciles with Gold.",
+        "evidence_query": "SELECT SUM(net_revenue) FROM silver_orders",
+        "extra": {
+          "dimension": "accuracy",
+          "detection_layer": "layer_2_reconciliation",
+          "table": "gold_metrics"
+        }
+      },
+      {
+        "check_id": "L2-REC-AGG",
+        "check_name": "Aggregate Cross-Check: Recompute Gold from Silver",
+        "layer": "Gold",
+        "status": "PASS",
+        "observed": {
+          "silver": {
+            "revenue": 97000000.0,
+            "orders": 72000,
+            "customers": 5000
+          },
+          "gold": {
+            "total_revenue": 97000000.0,
+            "total_orders": 72000,
+            "total_customers": 5000
+          },
+          "mismatched_fields": []
+        },
+        "expected": {
+          "mismatched_fields": []
+        },
+        "detail": "All Gold aggregates match Silver recomputation.",
+        "evidence_query": "SELECT SUM(net_revenue), COUNT(DISTINCT invoice_no), COUNT(DISTINCT customer_id) FROM silver_orders",
+        "extra": {
+          "dimension": "accuracy",
+          "detection_layer": "layer_2_reconciliation",
+          "table": "gold_metrics"
+        }
+      },
+      {
+        "check_id": "L3-ANO-GOLD_R",
+        "check_name": "Robust Anomaly: Gold Revenue",
+        "layer": "Gold",
+        "status": "IMPACTED",
+        "observed": {
+          "value": 97000000.0,
+          "median": 101800000.0,
+          "iqr_lower": 101500000.0,
+          "iqr_upper": 102100000.0,
+          "modified_z": -32.38,
+          "history_count": 15,
+          "method": "median + IQR (Q1 - 1.5*IQR, Q3 + 1.5*IQR)",
+          "detail": "Extreme outlier: modified Z=-32.38 (> 3.5) and outside IQR [1.015e+08, 1.021e+08]."
+        },
+        "expected": "within robust IQR band",
+        "detail": "Extreme outlier: modified Z=-32.38 (> 3.5) and outside IQR [1.015e+08, 1.021e+08]. (Gold impacted by upstream Silver failure.)",
+        "evidence_query": "SELECT total_revenue FROM gold_metrics",
+        "extra": {
+          "dimension": "accuracy",
+          "detection_layer": "layer_3_robust_anomaly",
+          "metric": "gold_revenue",
+          "method": "median + IQR; modified Z (MAD)",
+          "upstream_adjusted": true
+        }
       }
     ],
     "cross_layer": [

@@ -30,6 +30,31 @@ TRUSTED = "TRUSTED"
 WARNING = "WARNING"
 NOT_TRUSTED = "NOT TRUSTED"
 
+# Data-quality dimensions (Layer 1 rule library).
+COMPLETENESS = "completeness"
+VALIDITY = "validity"
+UNIQUENESS = "uniqueness"
+CONSISTENCY = "consistency"
+ACCURACY = "accuracy"
+TIMELINESS = "timeliness"
+
+DQ_DIMENSIONS = (
+    COMPLETENESS,
+    VALIDITY,
+    UNIQUENESS,
+    CONSISTENCY,
+    ACCURACY,
+    TIMELINESS,
+)
+
+# Pain-1 detection stack layers.
+DETECTION_LAYER_1 = "layer_1_rules"
+DETECTION_LAYER_2 = "layer_2_reconciliation"
+DETECTION_LAYER_3 = "layer_3_robust_anomaly"
+
+# TODO: seasonal STL decomposition when customer data has clear seasonality.
+# TODO: PSI (Population Stability Index) for distribution-shift monitoring.
+
 
 @dataclass
 class CheckResult:
