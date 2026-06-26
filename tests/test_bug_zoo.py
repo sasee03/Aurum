@@ -71,7 +71,7 @@ def test_zoo_orphan_payments_caught_by_fk_consistency():
         result,
         detection_layer=DETECTION_LAYER_1,
         description="orphan payment FK violation",
-        check_id_prefix="L1-ORD-CONS-FK",
+        check_id_prefix="L1-ORD-CONS-FK-BRON",
     )
 
 

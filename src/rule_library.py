@@ -200,34 +200,127 @@ def _check_uniqueness_full_row(loader: DataLoader, table: str, spec: dict) -> Ch
 
 
 def _check_consistency_fk(loader: DataLoader, table: str, spec: dict) -> list[CheckResult]:
+    """Anti-join FK check — orphan keys only; does not detect valid-key swaps."""
     results = []
     for fk in spec.get("foreign_keys", []):
         col = fk["column"]
-        parent = fk["parent_table"]
-        parent_col = fk["parent_column"]
-        if not loader.table_exists(parent):
+        ref_table = fk.get("ref_table") or fk.get("parent_table")
+        ref_column = fk.get("ref_column") or fk.get("parent_column")
+        if not ref_table or not loader.table_exists(ref_table):
             continue
         orphans = int(loader.scalar(
             f"""
             SELECT COUNT(*) FROM {table} child
-            LEFT JOIN {parent} parent ON child.{col} = parent.{parent_col}
-            WHERE parent.{parent_col} IS NULL
+            LEFT JOIN {ref_table} ref ON child.{col} = ref.{ref_column}
+            WHERE child.{col} IS NOT NULL AND ref.{ref_column} IS NULL
             """
         ))
         status = PASS if orphans == 0 else FAIL
+        ref_tag = ref_table[:4].upper()
         results.append(_result(
-            f"L1-{table[:3].upper()}-CONS-FK",
-            f"Foreign Key Integrity: {col} -> {parent}.{parent_col}",
+            f"L1-{table[:3].upper()}-CONS-FK-{ref_tag}",
+            f"Foreign Key Integrity: {col} -> {ref_table}.{ref_column}",
             spec["layer"], table, CONSISTENCY, status,
             observed=orphans, expected=0,
-            detail="No orphan foreign keys." if orphans == 0
-            else f"{orphans:,} orphan rows (FK violation).",
+            detail=(
+                "No orphan foreign keys."
+                if orphans == 0
+                else (
+                    f"{orphans:,} rows reference missing {ref_table}.{ref_column} "
+                    "(orphan FK; does not detect valid-key swaps)."
+                )
+            ),
             sql=(
-                f"SELECT COUNT(*) FROM {table} child LEFT JOIN {parent} parent "
-                f"ON child.{col} = parent.{parent_col} WHERE parent.{parent_col} IS NULL"
+                f"SELECT COUNT(*) FROM {table} child LEFT JOIN {ref_table} ref "
+                f"ON child.{col} = ref.{ref_column} "
+                f"WHERE child.{col} IS NOT NULL AND ref.{ref_column} IS NULL"
             ),
         ))
     return results
+
+
+def _check_freshness(loader: DataLoader, table: str, spec: dict) -> list[CheckResult]:
+    """Future-date FAIL + staleness WARN driven by table_specs date freshness fields."""
+    date_col = spec.get("date_column")
+    if not date_col:
+        cols = spec.get("date_columns", [])
+        if not cols:
+            return []
+        date_col = cols[0]
+    if date_col not in loader.columns(table):
+        return []
+    if spec.get("expected_freshness_days") is None and spec.get("max_future_days") is None:
+        return []
+
+    max_future_days = spec.get("max_future_days", 0)
+    expected_freshness_days = spec.get("expected_freshness_days", 365)
+
+    sql = (
+        f"SELECT MAX(TRY_CAST({date_col} AS DATE)) AS max_d, CURRENT_DATE AS run_date "
+        f"FROM {table} WHERE {date_col} IS NOT NULL"
+    )
+    bounds = loader.query(
+        f"""
+        SELECT
+            MAX(TRY_CAST({date_col} AS DATE)) AS max_d,
+            CURRENT_DATE AS run_date,
+            CURRENT_DATE + INTERVAL '{max_future_days} days' AS future_limit,
+            CURRENT_DATE - INTERVAL '{expected_freshness_days} days' AS stale_limit
+        FROM {table} WHERE {date_col} IS NOT NULL
+        """
+    ).to_dict("records")[0]
+    max_d = bounds["max_d"]
+
+    if max_d is None:
+        return [
+            _result(
+                f"L1-{table[:3].upper()}-TIME-FRESH",
+                f"Date Freshness: {date_col}",
+                spec["layer"], table, TIMELINESS, WARN,
+                observed=None, expected="parseable max date",
+                detail="No parseable dates for freshness check.",
+                sql=sql,
+            )
+        ]
+
+    future_limit = bounds["future_limit"]
+    stale_limit = bounds["stale_limit"]
+
+    if max_d > future_limit:
+        status = FAIL
+        detail = (
+            f"Max {date_col} ({max_d}) is beyond allowed future window "
+            f"(run_date + {max_future_days} day buffer) — likely date corruption."
+        )
+    elif max_d < stale_limit:
+        status = WARN
+        detail = (
+            f"Max {date_col} ({max_d}) is older than freshness window "
+            f"({expected_freshness_days} days before run_date) — data may be stale."
+        )
+    else:
+        status = PASS
+        detail = (
+            f"Max {date_col} ({max_d}) is within freshness window "
+            f"(not future, not stale beyond {expected_freshness_days} days)."
+        )
+
+    return [
+        _result(
+            f"L1-{table[:3].upper()}-TIME-FRESH",
+            f"Date Freshness: {date_col}",
+            spec["layer"], table, TIMELINESS, status,
+            observed={
+                "max_date": str(max_d),
+                "run_date": str(bounds["run_date"]),
+                "max_future_days": max_future_days,
+                "expected_freshness_days": expected_freshness_days,
+            },
+            expected=f"max_date <= run_date + {max_future_days}d and not stale",
+            detail=detail,
+            sql=sql,
+        )
+    ]
 
 
 def _check_timeliness(loader: DataLoader, table: str, spec: dict) -> list[CheckResult]:
@@ -287,5 +380,6 @@ def run_rule_library(loader: DataLoader) -> list[CheckResult]:
             results.append(pk)
         results.append(_check_uniqueness_full_row(loader, table, spec))
         results.extend(_check_consistency_fk(loader, table, spec))
+        results.extend(_check_freshness(loader, table, spec))
         results.extend(_check_timeliness(loader, table, spec))
     return results

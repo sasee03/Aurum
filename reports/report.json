@@ -185,6 +185,26 @@
         }
       },
       {
+        "check_id": "L1-RAW-TIME-FRESH",
+        "check_name": "Date Freshness: invoice_date",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": {
+          "max_date": "2026-06-17 00:00:00",
+          "run_date": "2026-06-26 00:00:00",
+          "max_future_days": 0,
+          "expected_freshness_days": 365
+        },
+        "expected": "max_date <= run_date + 0d and not stale",
+        "detail": "Max invoice_date (2026-06-17 00:00:00) is within freshness window (not future, not stale beyond 365 days).",
+        "evidence_query": "SELECT MAX(TRY_CAST(invoice_date AS DATE)) AS max_d, CURRENT_DATE AS run_date FROM raw_orders WHERE invoice_date IS NOT NULL",
+        "extra": {
+          "dimension": "timeliness",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
         "check_id": "L1-RAW-TIME",
         "check_name": "Timeliness Window: invoice_date",
         "layer": "Bronze",
@@ -321,6 +341,26 @@
         }
       },
       {
+        "check_id": "L1-BRO-TIME-FRESH",
+        "check_name": "Date Freshness: invoice_date",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": {
+          "max_date": "2026-06-17 00:00:00",
+          "run_date": "2026-06-26 00:00:00",
+          "max_future_days": 0,
+          "expected_freshness_days": 365
+        },
+        "expected": "max_date <= run_date + 0d and not stale",
+        "detail": "Max invoice_date (2026-06-17 00:00:00) is within freshness window (not future, not stale beyond 365 days).",
+        "evidence_query": "SELECT MAX(TRY_CAST(invoice_date AS DATE)) AS max_d, CURRENT_DATE AS run_date FROM bronze_orders WHERE invoice_date IS NOT NULL",
+        "extra": {
+          "dimension": "timeliness",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
         "check_id": "L1-BRO-TIME",
         "check_name": "Timeliness Window: invoice_date",
         "layer": "Bronze",
@@ -452,6 +492,26 @@
         "evidence_query": "SELECT COUNT(*) - (SELECT COUNT(*) FROM (SELECT DISTINCT * FROM silver_orders)) FROM silver_orders",
         "extra": {
           "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
+        "check_id": "L1-SIL-TIME-FRESH",
+        "check_name": "Date Freshness: invoice_date",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": {
+          "max_date": "2026-06-17 00:00:00",
+          "run_date": "2026-06-26 00:00:00",
+          "max_future_days": 0,
+          "expected_freshness_days": 365
+        },
+        "expected": "max_date <= run_date + 0d and not stale",
+        "detail": "Max invoice_date (2026-06-17 00:00:00) is within freshness window (not future, not stale beyond 365 days).",
+        "evidence_query": "SELECT MAX(TRY_CAST(invoice_date AS DATE)) AS max_d, CURRENT_DATE AS run_date FROM silver_orders WHERE invoice_date IS NOT NULL",
+        "extra": {
+          "dimension": "timeliness",
           "detection_layer": "layer_1_rules",
           "table": "silver_orders"
         }
@@ -619,23 +679,25 @@
       },
       {
         "check_id": "L2-REC-REV",
-        "check_name": "Revenue Reconciliation: Silver SUM vs Gold Total",
+        "check_name": "Revenue Reconciliation: Silver SUM vs Gold (within rounding tolerance)",
         "layer": "Gold",
         "status": "PASS",
         "observed": {
           "silver_revenue": 97000000.0,
           "gold_revenue": 97000000.0,
-          "difference": 0.0
+          "difference": 0.0,
+          "revenue_rounding_tolerance": 1.0
         },
         "expected": {
-          "difference": "<= 1.0"
+          "difference": "<= 1.0 (reconciles within rounding tolerance of 1.0 currency unit(s) (float SUM drift; counts remain exact))"
         },
-        "detail": "Silver revenue reconciles with Gold.",
+        "detail": "Silver revenue reconciles with Gold (reconciles within rounding tolerance of 1.0 currency unit(s) (float SUM drift; counts remain exact)).",
         "evidence_query": "SELECT SUM(net_revenue) FROM silver_orders",
         "extra": {
           "dimension": "accuracy",
           "detection_layer": "layer_2_reconciliation",
-          "table": "gold_metrics"
+          "table": "gold_metrics",
+          "revenue_rounding_tolerance": 1.0
         }
       },
       {
@@ -659,7 +721,7 @@
         "expected": {
           "mismatched_fields": []
         },
-        "detail": "All Gold aggregates match Silver recomputation.",
+        "detail": "All Gold aggregates match Silver recomputation (revenue within rounding tolerance).",
         "evidence_query": "SELECT SUM(net_revenue), COUNT(DISTINCT invoice_no), COUNT(DISTINCT customer_id) FROM silver_orders",
         "extra": {
           "dimension": "accuracy",
@@ -1003,6 +1065,26 @@
         }
       },
       {
+        "check_id": "L1-RAW-TIME-FRESH",
+        "check_name": "Date Freshness: invoice_date",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": {
+          "max_date": "2026-06-17 00:00:00",
+          "run_date": "2026-06-26 00:00:00",
+          "max_future_days": 0,
+          "expected_freshness_days": 365
+        },
+        "expected": "max_date <= run_date + 0d and not stale",
+        "detail": "Max invoice_date (2026-06-17 00:00:00) is within freshness window (not future, not stale beyond 365 days).",
+        "evidence_query": "SELECT MAX(TRY_CAST(invoice_date AS DATE)) AS max_d, CURRENT_DATE AS run_date FROM raw_orders WHERE invoice_date IS NOT NULL",
+        "extra": {
+          "dimension": "timeliness",
+          "detection_layer": "layer_1_rules",
+          "table": "raw_orders"
+        }
+      },
+      {
         "check_id": "L1-RAW-TIME",
         "check_name": "Timeliness Window: invoice_date",
         "layer": "Bronze",
@@ -1134,6 +1216,26 @@
         "evidence_query": "SELECT COUNT(*) - (SELECT COUNT(*) FROM (SELECT DISTINCT * FROM bronze_orders)) FROM bronze_orders",
         "extra": {
           "dimension": "uniqueness",
+          "detection_layer": "layer_1_rules",
+          "table": "bronze_orders"
+        }
+      },
+      {
+        "check_id": "L1-BRO-TIME-FRESH",
+        "check_name": "Date Freshness: invoice_date",
+        "layer": "Bronze",
+        "status": "PASS",
+        "observed": {
+          "max_date": "2026-06-17 00:00:00",
+          "run_date": "2026-06-26 00:00:00",
+          "max_future_days": 0,
+          "expected_freshness_days": 365
+        },
+        "expected": "max_date <= run_date + 0d and not stale",
+        "detail": "Max invoice_date (2026-06-17 00:00:00) is within freshness window (not future, not stale beyond 365 days).",
+        "evidence_query": "SELECT MAX(TRY_CAST(invoice_date AS DATE)) AS max_d, CURRENT_DATE AS run_date FROM bronze_orders WHERE invoice_date IS NOT NULL",
+        "extra": {
+          "dimension": "timeliness",
           "detection_layer": "layer_1_rules",
           "table": "bronze_orders"
         }
@@ -1464,6 +1566,26 @@
         }
       },
       {
+        "check_id": "L1-SIL-TIME-FRESH",
+        "check_name": "Date Freshness: invoice_date",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": {
+          "max_date": "2026-06-17 00:00:00",
+          "run_date": "2026-06-26 00:00:00",
+          "max_future_days": 0,
+          "expected_freshness_days": 365
+        },
+        "expected": "max_date <= run_date + 0d and not stale",
+        "detail": "Max invoice_date (2026-06-17 00:00:00) is within freshness window (not future, not stale beyond 365 days).",
+        "evidence_query": "SELECT MAX(TRY_CAST(invoice_date AS DATE)) AS max_d, CURRENT_DATE AS run_date FROM silver_orders WHERE invoice_date IS NOT NULL",
+        "extra": {
+          "dimension": "timeliness",
+          "detection_layer": "layer_1_rules",
+          "table": "silver_orders"
+        }
+      },
+      {
         "check_id": "L1-SIL-TIME",
         "check_name": "Timeliness Window: invoice_date",
         "layer": "Silver",
@@ -1576,13 +1698,22 @@
     "gold": [
       {
         "check_id": "G1",
-        "check_name": "Revenue Reconciliation",
+        "check_name": "Revenue Reconciliation (within rounding tolerance)",
         "layer": "Gold",
         "status": "PASS",
-        "observed": 97000000.0,
-        "expected": 97000000.0,
-        "detail": "Gold total_revenue reconciles with Silver.",
-        "evidence_query": "SELECT SUM(net_revenue) FROM silver_orders"
+        "observed": {
+          "gold_revenue": 97000000.0,
+          "difference": 0.0,
+          "revenue_rounding_tolerance": 1.0
+        },
+        "expected": {
+          "silver_revenue": 97000000.0
+        },
+        "detail": "Gold total_revenue reconciles with Silver (reconciles within rounding tolerance of 1.0 currency unit(s) (float SUM drift; counts remain exact)).",
+        "evidence_query": "SELECT SUM(net_revenue) FROM silver_orders",
+        "extra": {
+          "revenue_rounding_tolerance": 1.0
+        }
       },
       {
         "check_id": "G2",
@@ -1742,23 +1873,25 @@
       },
       {
         "check_id": "L2-REC-REV",
-        "check_name": "Revenue Reconciliation: Silver SUM vs Gold Total",
+        "check_name": "Revenue Reconciliation: Silver SUM vs Gold (within rounding tolerance)",
         "layer": "Gold",
         "status": "PASS",
         "observed": {
           "silver_revenue": 97000000.0,
           "gold_revenue": 97000000.0,
-          "difference": 0.0
+          "difference": 0.0,
+          "revenue_rounding_tolerance": 1.0
         },
         "expected": {
-          "difference": "<= 1.0"
+          "difference": "<= 1.0 (reconciles within rounding tolerance of 1.0 currency unit(s) (float SUM drift; counts remain exact))"
         },
-        "detail": "Silver revenue reconciles with Gold.",
+        "detail": "Silver revenue reconciles with Gold (reconciles within rounding tolerance of 1.0 currency unit(s) (float SUM drift; counts remain exact)).",
         "evidence_query": "SELECT SUM(net_revenue) FROM silver_orders",
         "extra": {
           "dimension": "accuracy",
           "detection_layer": "layer_2_reconciliation",
-          "table": "gold_metrics"
+          "table": "gold_metrics",
+          "revenue_rounding_tolerance": 1.0
         }
       },
       {
@@ -1782,7 +1915,7 @@
         "expected": {
           "mismatched_fields": []
         },
-        "detail": "All Gold aggregates match Silver recomputation.",
+        "detail": "All Gold aggregates match Silver recomputation (revenue within rounding tolerance).",
         "evidence_query": "SELECT SUM(net_revenue), COUNT(DISTINCT invoice_no), COUNT(DISTINCT customer_id) FROM silver_orders",
         "extra": {
           "dimension": "accuracy",

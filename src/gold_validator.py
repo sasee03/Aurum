@@ -14,9 +14,8 @@ import pandas as pd
 from .baseline import column_stats, tolerance_band
 from .contracts import CheckResult, FAIL, GOLD, IMPACTED, PASS, WARN
 from .data_loader import DataLoader
+from .revenue_tolerance import REVENUE_ROUNDING_TOLERANCE, revenue_tolerance_detail
 
-# Absolute rounding tolerance for revenue reconciliation (in currency units).
-REVENUE_TOLERANCE = 1.0
 AOV_TOLERANCE = 0.01
 
 
@@ -27,19 +26,29 @@ def _history(loader: DataLoader) -> Optional[pd.DataFrame]:
 
 
 def g1_revenue_reconciliation(loader: DataLoader) -> CheckResult:
+    tolerance = REVENUE_ROUNDING_TOLERANCE
     silver_rev = float(loader.scalar("SELECT SUM(net_revenue) FROM silver_orders") or 0)
     gold_rev = float(loader.scalar("SELECT total_revenue FROM gold_metrics") or 0)
-    match = abs(silver_rev - gold_rev) <= REVENUE_TOLERANCE
+    diff = abs(silver_rev - gold_rev)
+    match = diff <= tolerance
+    tol_note = revenue_tolerance_detail(tolerance)
     status = PASS if match else FAIL
     detail = (
-        "Gold total_revenue reconciles with Silver."
+        f"Gold total_revenue reconciles with Silver ({tol_note})."
         if match
-        else f"Gold revenue {gold_rev:,.2f} != Silver revenue {silver_rev:,.2f}."
+        else (
+            f"Gold revenue {gold_rev:,.2f} != Silver revenue {silver_rev:,.2f} "
+            f"(diff {diff:.2f} > tolerance {tolerance})."
+        )
     )
     return CheckResult(
-        "G1", "Revenue Reconciliation", GOLD, status,
-        observed=gold_rev, expected=silver_rev, detail=detail,
+        "G1", "Revenue Reconciliation (within rounding tolerance)", GOLD, status,
+        observed={"gold_revenue": gold_rev, "difference": diff,
+                  "revenue_rounding_tolerance": tolerance},
+        expected={"silver_revenue": silver_rev},
+        detail=detail,
         evidence_query="SELECT SUM(net_revenue) FROM silver_orders",
+        extra={"revenue_rounding_tolerance": tolerance},
     )
 
 
@@ -107,7 +116,7 @@ def g5_revenue_vs_baseline(
 ) -> CheckResult:
     gold_rev = float(loader.scalar("SELECT total_revenue FROM gold_metrics") or 0)
     silver_rev = float(loader.scalar("SELECT SUM(net_revenue) FROM silver_orders") or 0)
-    gold_math_correct = abs(silver_rev - gold_rev) <= REVENUE_TOLERANCE
+    gold_math_correct = abs(silver_rev - gold_rev) <= REVENUE_ROUNDING_TOLERANCE
 
     stats = column_stats(_history(loader), "gold_revenue")
     if not stats or stats["std"] == 0:

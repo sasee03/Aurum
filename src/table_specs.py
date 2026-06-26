@@ -28,6 +28,9 @@ TABLE_SPECS: dict[str, dict] = {
             "unit_price": {"min": 0, "strict_min": True},
         },
         "date_columns": ["invoice_date"],
+        "date_column": "invoice_date",
+        "max_future_days": 0,
+        "expected_freshness_days": 365,
         "timeliness_days": 365,
     },
     "bronze_orders": {
@@ -43,6 +46,9 @@ TABLE_SPECS: dict[str, dict] = {
             "unit_price": {"min": 0, "strict_min": False},
         },
         "date_columns": ["invoice_date"],
+        "date_column": "invoice_date",
+        "max_future_days": 0,
+        "expected_freshness_days": 365,
         "timeliness_days": 365,
         "source_table": "raw_orders",
     },
@@ -59,10 +65,22 @@ TABLE_SPECS: dict[str, dict] = {
             "unit_price": {"min": 0, "strict_min": True},
         },
         "date_columns": ["invoice_date"],
+        "date_column": "invoice_date",
+        "max_future_days": 0,
+        "expected_freshness_days": 365,
         "timeliness_days": 365,
         "parent_table": "bronze_orders",
         "parent_key": "invoice_no",
         "child_key": "invoice_no",
+        # FK to customers dimension — check runs only when customers table exists.
+        # Catches orphan keys, NOT coherent swaps between valid keys (known limitation).
+        "foreign_keys": [
+            {
+                "column": "customer_id",
+                "ref_table": "customers",
+                "ref_column": "customer_id",
+            }
+        ],
     },
     "gold_metrics": {
         "layer": GOLD,
@@ -90,8 +108,8 @@ TABLE_SPECS: dict[str, dict] = {
         "foreign_keys": [
             {
                 "column": "invoice_no",
-                "parent_table": "bronze_orders",
-                "parent_column": "invoice_no",
+                "ref_table": "bronze_orders",
+                "ref_column": "invoice_no",
             }
         ],
     },

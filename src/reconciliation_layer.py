@@ -1,7 +1,7 @@
-"""Layer 2 — Reconciliation: exact cross-layer equalities (Pain 1 key layer).
+"""Layer 2 — Reconciliation: cross-layer equalities (Pain 1 key layer).
 
-Catches bugs we never anticipated because mathematical relationships that MUST
-hold simply fail to balance — no bug-specific check required.
+Count and key-set checks use exact integer equality. Revenue reconciliation
+allows a named rounding tolerance — see revenue_tolerance.py.
 """
 
 from __future__ import annotations
@@ -20,9 +20,8 @@ from .contracts import (
     PASS,
 )
 from .data_loader import DataLoader
+from .revenue_tolerance import REVENUE_ROUNDING_TOLERANCE, revenue_tolerance_detail
 from .table_specs import VALID_ROW_PREDICATE
-
-REVENUE_TOLERANCE = 1.0
 
 
 def _result(
@@ -112,24 +111,35 @@ def rec_count_unexplained_loss(loader: DataLoader) -> CheckResult:
 
 
 def rec_revenue(loader: DataLoader) -> CheckResult:
-    """Silver revenue must equal Gold total_revenue (exact, within rounding)."""
+    """Silver revenue vs Gold total_revenue — within documented rounding tolerance."""
+    tolerance = REVENUE_ROUNDING_TOLERANCE
     silver_rev = float(loader.scalar("SELECT SUM(net_revenue) FROM silver_orders") or 0)
     gold_rev = float(loader.scalar("SELECT total_revenue FROM gold_metrics") or 0)
     diff = abs(silver_rev - gold_rev)
-    status = PASS if diff <= REVENUE_TOLERANCE else FAIL
+    status = PASS if diff <= tolerance else FAIL
+    tol_note = revenue_tolerance_detail(tolerance)
     return _result(
         "L2-REC-REV",
-        "Revenue Reconciliation: Silver SUM vs Gold Total",
+        "Revenue Reconciliation: Silver SUM vs Gold (within rounding tolerance)",
         GOLD, ACCURACY, status,
-        observed={"silver_revenue": silver_rev, "gold_revenue": gold_rev, "difference": diff},
-        expected={"difference": f"<= {REVENUE_TOLERANCE}"},
+        observed={
+            "silver_revenue": silver_rev,
+            "gold_revenue": gold_rev,
+            "difference": diff,
+            "revenue_rounding_tolerance": tolerance,
+        },
+        expected={"difference": f"<= {tolerance} ({tol_note})"},
         detail=(
-            "Silver revenue reconciles with Gold."
+            f"Silver revenue reconciles with Gold ({tol_note})."
             if status == PASS
-            else f"Revenue mismatch: Silver={silver_rev:,.2f}, Gold={gold_rev:,.2f}, diff={diff:,.2f}."
+            else (
+                f"Revenue mismatch: Silver={silver_rev:,.2f}, Gold={gold_rev:,.2f}, "
+                f"diff={diff:,.2f} exceeds tolerance {tolerance}."
+            )
         ),
         sql="SELECT SUM(net_revenue) FROM silver_orders",
         table="gold_metrics",
+        revenue_rounding_tolerance=tolerance,
     )
 
 
@@ -194,8 +204,10 @@ def rec_aggregate_crosscheck(loader: DataLoader) -> CheckResult:
     ).to_dict("records")[0]
 
     mismatches = []
-    if abs(float(silver["revenue"]) - float(gold["total_revenue"])) > REVENUE_TOLERANCE:
-        mismatches.append("total_revenue")
+    tol = REVENUE_ROUNDING_TOLERANCE
+    rev_diff = abs(float(silver["revenue"]) - float(gold["total_revenue"]))
+    if rev_diff > tol:
+        mismatches.append(f"total_revenue (diff={rev_diff:.2f}, tolerance={tol})")
     if int(silver["orders"]) != int(gold["total_orders"]):
         mismatches.append("total_orders")
     if int(silver["customers"]) != int(gold["total_customers"]):
@@ -209,7 +221,7 @@ def rec_aggregate_crosscheck(loader: DataLoader) -> CheckResult:
         observed={"silver": silver, "gold": gold, "mismatched_fields": mismatches},
         expected={"mismatched_fields": []},
         detail=(
-            "All Gold aggregates match Silver recomputation."
+            "All Gold aggregates match Silver recomputation (revenue within rounding tolerance)."
             if status == PASS
             else f"Aggregate mismatch in: {mismatches}."
         ),
