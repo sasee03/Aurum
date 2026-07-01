@@ -20,6 +20,7 @@ deterministic rules.
 python -m pip install -r requirements.txt
 python src/generate_data.py     # writes synthetic retail data
 python src/run_demo.py          # runs all checks, writes reports/report.json
+streamlit run app/streamlit_app.py   # demo UI (reads report.json only)
 ```
 
 `run_demo.py` regenerates data automatically if it is missing.
