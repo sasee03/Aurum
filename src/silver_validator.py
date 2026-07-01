@@ -36,9 +36,21 @@ HIGH_QTY_THRESHOLD = 20
 BUSINESS_KEY = ("invoice_no", "stock_code", "customer_id", "invoice_date")
 
 
-def _business_key_match(bronze_alias: str = "b", silver_alias: str = "s") -> str:
+def _business_key_match(
+    bronze_alias: str = "b", silver_alias: str = "s", *, native: bool = False
+) -> str:
+    # Intended for EXISTS/NOT EXISTS filter predicates only; do not use this
+    # helper to produce a standalone boolean value.
+    if native:
+        return " AND ".join(
+            f"{silver_alias}.{column} IS NOT DISTINCT FROM {bronze_alias}.{column}"
+            for column in BUSINESS_KEY
+        )
     return " AND ".join(
-        f"{silver_alias}.{column} IS NOT DISTINCT FROM {bronze_alias}.{column}"
+        (
+            f"({silver_alias}.{column} = {bronze_alias}.{column} "
+            f"OR ({silver_alias}.{column} IS NULL AND {bronze_alias}.{column} IS NULL))"
+        )
         for column in BUSINESS_KEY
     )
 
@@ -225,6 +237,7 @@ def s8_valid_records_removed(loader: DataLoader) -> CheckResult:
         loader.scalar(f"SELECT COUNT(*) FROM bronze_orders WHERE {VALID_PREDICATE}")
     )
     key_match = _business_key_match()
+    evidence_key_match = _business_key_match(native=True)
     missing = int(
         loader.scalar(
             f"""
@@ -254,7 +267,7 @@ def s8_valid_records_removed(loader: DataLoader) -> CheckResult:
         evidence_query=(
             "SELECT COUNT(*) FROM bronze_orders b WHERE "
             f"{VALID_PREDICATE} AND NOT EXISTS "
-            f"(SELECT 1 FROM silver_orders s WHERE {key_match})"
+            f"(SELECT 1 FROM silver_orders s WHERE {evidence_key_match})"
         ),
         extra={"valid_bronze": valid_total, "missing": missing,
                "loss_pct": round(loss_pct, 2)},
@@ -314,6 +327,7 @@ def s9_record_loss_by_segment(loader: DataLoader) -> CheckResult:
 
 def s10_wrong_filter_detection(loader: DataLoader) -> CheckResult:
     key_match = _business_key_match()
+    evidence_key_match = _business_key_match(native=True)
     stats = loader.query(
         f"""
         SELECT MIN(quantity) AS min_qty, MAX(quantity) AS max_qty, COUNT(*) AS n
@@ -348,7 +362,7 @@ def s10_wrong_filter_detection(loader: DataLoader) -> CheckResult:
         evidence_query=(
             "SELECT MIN(quantity), MAX(quantity), COUNT(*) FROM bronze_orders b WHERE "
             f"{VALID_PREDICATE} AND NOT EXISTS "
-            f"(SELECT 1 FROM silver_orders s WHERE {key_match})"
+            f"(SELECT 1 FROM silver_orders s WHERE {evidence_key_match})"
         ),
         extra={"suspected_filter": suspected, "missing": missing_n},
     )

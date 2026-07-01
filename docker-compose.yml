@@ -1,0 +1,25 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: aurum-postgres
+    environment:
+      POSTGRES_DB: ${AURUM_POSTGRES_DB:-aurum}
+      POSTGRES_USER: ${AURUM_POSTGRES_USER:-aurum}
+      POSTGRES_PASSWORD: ${AURUM_POSTGRES_PASSWORD:-aurum}
+    ports:
+      - "${AURUM_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - aurum_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${AURUM_POSTGRES_USER:-aurum} -d ${AURUM_POSTGRES_DB:-aurum}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  aurum_postgres_data:
