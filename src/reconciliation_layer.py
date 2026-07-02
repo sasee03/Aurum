@@ -20,6 +20,7 @@ from .contracts import (
     PASS,
 )
 from .data_loader import DataLoader
+from .resilience import Check, run_checks
 from .revenue_tolerance import REVENUE_ROUNDING_TOLERANCE, revenue_tolerance_detail
 from .table_specs import VALID_ROW_PREDICATE
 
@@ -234,11 +235,11 @@ def rec_aggregate_crosscheck(loader: DataLoader) -> CheckResult:
 
 
 def run_reconciliation_layer(loader: DataLoader) -> list[CheckResult]:
-    results = []
+    checks: list[Check] = []
     if loader.table_exists("bronze_orders") and loader.table_exists("silver_orders"):
-        results.append(rec_count_unexplained_loss(loader))
-        results.append(rec_key_set(loader))
+        checks.append(Check(lambda: rec_count_unexplained_loss(loader), "L2-REC-COUNT", "Count Reconciliation: Unexplained Valid Row Loss", SILVER))
+        checks.append(Check(lambda: rec_key_set(loader), "L2-REC-KEY", "Key-Set Reconciliation", SILVER))
     if loader.table_exists("silver_orders") and loader.table_exists("gold_metrics"):
-        results.append(rec_revenue(loader))
-        results.append(rec_aggregate_crosscheck(loader))
-    return results
+        checks.append(Check(lambda: rec_revenue(loader), "L2-REC-REV", "Revenue Reconciliation", GOLD))
+        checks.append(Check(lambda: rec_aggregate_crosscheck(loader), "L2-REC-AGG", "Aggregate Cross-Check", GOLD))
+    return run_checks(checks)

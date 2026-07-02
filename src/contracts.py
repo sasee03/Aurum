@@ -16,8 +16,12 @@ PASS = "PASS"
 WARN = "WARN"
 FAIL = "FAIL"
 IMPACTED = "IMPACTED"
+# SKIPPED: the check could not be evaluated (bad/degenerate/missing input). It is
+# a first-class outcome -- never a silent pass and never a fail. When emitted, the
+# `detail` field MUST carry a specific human-readable reason.
+SKIPPED = "SKIPPED"
 
-CHECK_STATUSES = (PASS, WARN, FAIL, IMPACTED)
+CHECK_STATUSES = (PASS, WARN, FAIL, IMPACTED, SKIPPED)
 
 # Layer names.
 BRONZE = "Bronze"

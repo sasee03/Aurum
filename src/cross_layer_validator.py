@@ -20,6 +20,7 @@ from .contracts import (
     WARN,
 )
 from .data_loader import DataLoader
+from .resilience import Check, run_checks
 
 VALID_BRONZE_PREDICATE = "quantity > 0 AND unit_price > 0"
 
@@ -151,6 +152,15 @@ def build_root_cause(silver_results: list[CheckResult]) -> dict:
 
 
 def build_business_impact(loader: DataLoader) -> dict:
+    # Report assembly (not a check) reads tables directly, so guard missing
+    # tables here: without this an absent bronze/gold would crash the whole run.
+    if not (
+        loader.table_exists("bronze_orders") and loader.table_exists("gold_metrics")
+    ):
+        return {
+            "status": "NOT_AVAILABLE",
+            "detail": "Expected baseline not available (bronze_orders/gold_metrics missing).",
+        }
     expected = loader.scalar(
         f"SELECT COALESCE(SUM(quantity * unit_price), 0) "
         f"FROM bronze_orders WHERE {VALID_BRONZE_PREDICATE}"
@@ -185,9 +195,11 @@ def validate_cross_layer(
     gold_results: list[CheckResult],
     layer_status: dict,
 ) -> list[CheckResult]:
-    return [
-        x1_source_to_bronze(bronze_results),
-        x2_bronze_to_silver(silver_results),
-        x3_silver_to_gold(gold_results),
-        x4_first_failed_layer(layer_status),
-    ]
+    return run_checks(
+        [
+            Check(lambda: x1_source_to_bronze(bronze_results), "X1", "Source to Bronze Completeness", CROSS_LAYER),
+            Check(lambda: x2_bronze_to_silver(silver_results), "X2", "Bronze to Silver Transformation Quality", CROSS_LAYER),
+            Check(lambda: x3_silver_to_gold(gold_results), "X3", "Silver to Gold Metric Correctness", CROSS_LAYER),
+            Check(lambda: x4_first_failed_layer(layer_status), "X4", "First Failed Layer Locator", CROSS_LAYER),
+        ]
+    )

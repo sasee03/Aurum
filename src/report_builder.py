@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .contracts import TRUSTED
+from .contracts import TRUSTED, WARNING
 from .cross_layer_validator import (
     build_business_impact,
     build_root_cause,
@@ -27,6 +27,7 @@ from .contracts import (
     SILVER,
     CheckResult,
 )
+from .resilience import build_coverage
 from .verdict_engine import compute_final_verdict, compute_layer_status
 
 REPORT_PATH = Path("reports/report.json")
@@ -116,10 +117,27 @@ def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
     )
 
     verdict = compute_final_verdict(layer_status)
+    final_verdict = verdict["final_verdict"]
+    severity = verdict["severity"]
+
+    coverage = build_coverage(
+        bronze_results + silver_results + gold_results + cross_results
+    )
+    # Skips must never buy a clean bill of health: a TRUSTED verdict with
+    # incomplete coverage is downgraded to a caveated WARNING so no reader
+    # mistakes "we couldn't check everything" for "everything is fine".
+    if final_verdict == TRUSTED and not coverage["full_coverage"]:
+        final_verdict = WARNING
+        severity = "MEDIUM"
+        coverage["verdict_caveat"] = (
+            f"Coverage incomplete: {coverage['skipped']} check(s) skipped; "
+            "verdict downgraded from TRUSTED."
+        )
+
     root_cause = build_root_cause(silver_results)
     business_impact = build_business_impact(loader)
     suggested_action = _suggested_action(
-        verdict["final_verdict"], layer_status, root_cause
+        final_verdict, layer_status, root_cause
     )
 
     return {
@@ -129,12 +147,13 @@ def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
         "dataset": "Retail Orders",
         "run_id": run_id,
         "layer_status": layer_status,
-        "final_verdict": verdict["final_verdict"],
-        "severity": verdict["severity"],
+        "final_verdict": final_verdict,
+        "severity": severity,
         "first_failed_layer": first_failed_layer(layer_status),
         "root_cause": root_cause,
         "business_impact": business_impact,
         "suggested_action": suggested_action,
+        "coverage": coverage,
         "detection_layers": {
             "layer_1_rules": [r.to_dict() for r in detection.layer_1_rules],
             "layer_2_reconciliation": [

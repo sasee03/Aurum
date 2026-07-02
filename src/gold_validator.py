@@ -14,6 +14,7 @@ import pandas as pd
 from .baseline import column_stats, tolerance_band
 from .contracts import CheckResult, FAIL, GOLD, IMPACTED, PASS, WARN
 from .data_loader import DataLoader
+from .resilience import Check, run_checks
 from .revenue_tolerance import REVENUE_ROUNDING_TOLERANCE, revenue_tolerance_detail
 
 AOV_TOLERANCE = 0.01
@@ -200,14 +201,16 @@ def g6_country_revenue_reconciliation(loader: DataLoader) -> CheckResult:
 def validate_gold(
     loader: DataLoader, upstream_status: Optional[str] = None
 ) -> list[CheckResult]:
-    return [
-        g1_revenue_reconciliation(loader),
-        g2_order_count_reconciliation(loader),
-        g3_customer_count_reconciliation(loader),
-        g4_average_order_value(loader),
-        g5_revenue_vs_baseline(loader, upstream_status=upstream_status),
-        g6_country_revenue_reconciliation(loader),
-    ]
+    return run_checks(
+        [
+            Check(lambda: g1_revenue_reconciliation(loader), "G1", "Revenue Reconciliation (within rounding tolerance)", GOLD),
+            Check(lambda: g2_order_count_reconciliation(loader), "G2", "Order Count Reconciliation", GOLD),
+            Check(lambda: g3_customer_count_reconciliation(loader), "G3", "Customer Count Reconciliation", GOLD),
+            Check(lambda: g4_average_order_value(loader), "G4", "Average Order Value Check", GOLD),
+            Check(lambda: g5_revenue_vs_baseline(loader, upstream_status=upstream_status), "G5", "Revenue vs Expected Baseline", GOLD),
+            Check(lambda: g6_country_revenue_reconciliation(loader), "G6", "Country-wise Revenue Reconciliation", GOLD),
+        ]
+    )
 
 
 if __name__ == "__main__":

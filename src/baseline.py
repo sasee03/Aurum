@@ -12,6 +12,9 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from .contracts import FAIL, PASS, SKIPPED, WARN
+from .resilience import MIN_HISTORY_FOR_ANOMALY
+
 
 def column_stats(history: Optional[pd.DataFrame], column: str) -> Optional[dict]:
     if history is None or column not in history or len(history) == 0:
@@ -64,33 +67,73 @@ def modified_z_score(value: float, values: np.ndarray) -> float:
 def classify_robust_anomaly(
     value: float, history: np.ndarray
 ) -> tuple[str, dict]:
-    """Return (status, evidence) using IQR primary and MAD secondary."""
-    if len(history) < 3:
-        return "PASS", {"detail": "Insufficient history for robust anomaly detection."}
+    """Return (status, evidence) using IQR primary and MAD secondary.
 
-    band = robust_iqr_band(history)
-    mad_z = modified_z_score(value, history)
+    Three-outcome aware:
+      * n < MIN_HISTORY_FOR_ANOMALY -> SKIPPED (no baseline yet; first runs).
+      * IQR == 0 or MAD == 0 (constant/degenerate baseline) -> PASS if the value
+        equals the constant, else WARN (the change is real but not statistically
+        scorable). Never FAIL off a zero-variance baseline; never divide by MAD=0.
+    """
+    arr = np.asarray(history, dtype=float)
+    n = int(arr.size)
+    if n < MIN_HISTORY_FOR_ANOMALY:
+        return SKIPPED, {
+            "value": value,
+            "history_count": n,
+            "detail": (
+                f"no baseline yet (n={n}, need {MIN_HISTORY_FOR_ANOMALY}) "
+                "-- will learn from this run"
+            ),
+        }
+
+    band = robust_iqr_band(arr)
+    median = band["median"]
+    mad = float(np.median(np.abs(arr - median)))
+
+    if band["iqr"] == 0 or mad == 0:
+        evidence = {
+            "value": value,
+            "median": median,
+            "iqr": band["iqr"],
+            "mad": mad,
+            "history_count": n,
+            "method": band["method"],
+        }
+        if value == median:
+            evidence["detail"] = (
+                "Baseline has no variance (MAD/IQR = 0); value matches the constant "
+                "baseline."
+            )
+            return PASS, evidence
+        evidence["detail"] = (
+            "Value changed from a constant baseline (MAD/IQR = 0); magnitude is not "
+            "statistically scorable."
+        )
+        return WARN, evidence
+
+    mad_z = modified_z_score(value, arr)
     evidence = {
         "value": value,
-        "median": band["median"],
+        "median": median,
         "iqr_lower": band["lower"],
         "iqr_upper": band["upper"],
         "modified_z": round(mad_z, 2),
-        "history_count": int(len(history)),
+        "history_count": n,
         "method": band["method"],
     }
 
     if band["lower"] <= value <= band["upper"]:
-        status = "PASS"
+        status = PASS
         evidence["detail"] = "Within robust IQR band."
     elif abs(mad_z) > 3.5:
-        status = "FAIL"
+        status = FAIL
         evidence["detail"] = (
             f"Extreme outlier: modified Z={mad_z:.2f} (> 3.5) "
             f"and outside IQR [{band['lower']:.4g}, {band['upper']:.4g}]."
         )
     else:
-        status = "WARN"
+        status = WARN
         evidence["detail"] = (
             f"Mild outlier: outside IQR [{band['lower']:.4g}, {band['upper']:.4g}] "
             f"but modified Z={mad_z:.2f}."

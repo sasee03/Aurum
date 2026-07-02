@@ -15,6 +15,7 @@ import pandas as pd
 from .baseline import column_stats, tolerance_band
 from .contracts import CheckResult, FAIL, PASS, SILVER, WARN
 from .data_loader import DataLoader
+from .resilience import Check, run_checks
 
 MANDATORY_NOT_NULL = [
     "invoice_no", "stock_code", "quantity", "unit_price", "invoice_date", "country",
@@ -70,6 +71,16 @@ def _drop_pct(loader: DataLoader) -> tuple[int, int, float]:
 
 def s1_drop_percentage(loader: DataLoader) -> CheckResult:
     bronze, silver, drop = _drop_pct(loader)
+    if bronze == 0:
+        # bronze_orders is expected to be non-empty; an empty upstream is itself
+        # the finding, not an unscorable skip. Guard the division deliberately.
+        return CheckResult(
+            "S1", "Bronze to Silver Drop Percentage", SILVER, FAIL,
+            observed="n/a (bronze empty)", expected="non-empty bronze_orders",
+            detail="bronze_orders is empty -- expected data, cannot compute drop percentage.",
+            evidence_query="SELECT COUNT(*) FROM bronze_orders",
+            extra={"bronze": 0, "silver": silver},
+        )
     stats = column_stats(_history(loader), "drop_pct")
     if stats and stats["std"] > 0:
         band = tolerance_band(stats, k=3.0)
@@ -101,7 +112,15 @@ def s1_drop_percentage(loader: DataLoader) -> CheckResult:
 
 
 def s2_expected_drop(loader: DataLoader) -> CheckResult:
-    _, _, drop = _drop_pct(loader)
+    bronze, _, drop = _drop_pct(loader)
+    if bronze == 0:
+        return CheckResult(
+            "S2", "Expected Drop Check", SILVER, FAIL,
+            observed="n/a (bronze empty)",
+            expected=f"{EXPECTED_MIN_DROP:.1f}%-{EXPECTED_MAX_DROP:.1f}%",
+            detail="bronze_orders is empty -- expected data, cannot compute expected drop.",
+            evidence_query="SELECT COUNT(*) FROM bronze_orders",
+        )
     within = EXPECTED_MIN_DROP <= drop <= EXPECTED_MAX_DROP
     if within:
         status, detail = PASS, "Actual drop matches the expected drop window."
@@ -369,18 +388,20 @@ def s10_wrong_filter_detection(loader: DataLoader) -> CheckResult:
 
 
 def validate_silver(loader: DataLoader) -> list[CheckResult]:
-    return [
-        s1_drop_percentage(loader),
-        s2_expected_drop(loader),
-        s3_dedup_count(loader),
-        s4_mandatory_nulls(loader),
-        s5_quantity_positive(loader),
-        s6_unit_price_positive(loader),
-        s7_revenue_not_negative(loader),
-        s8_valid_records_removed(loader),
-        s9_record_loss_by_segment(loader),
-        s10_wrong_filter_detection(loader),
-    ]
+    return run_checks(
+        [
+            Check(lambda: s1_drop_percentage(loader), "S1", "Bronze to Silver Drop Percentage", SILVER),
+            Check(lambda: s2_expected_drop(loader), "S2", "Expected Drop Check", SILVER),
+            Check(lambda: s3_dedup_count(loader), "S3", "Deduplication Count Check", SILVER),
+            Check(lambda: s4_mandatory_nulls(loader), "S4", "Mandatory Columns Not Null", SILVER),
+            Check(lambda: s5_quantity_positive(loader), "S5", "Quantity > 0", SILVER),
+            Check(lambda: s6_unit_price_positive(loader), "S6", "Unit Price > 0", SILVER),
+            Check(lambda: s7_revenue_not_negative(loader), "S7", "Revenue Not Negative", SILVER),
+            Check(lambda: s8_valid_records_removed(loader), "S8", "Valid Record Wrongly Removed", SILVER),
+            Check(lambda: s9_record_loss_by_segment(loader), "S9", "Record-Loss by Segment", SILVER),
+            Check(lambda: s10_wrong_filter_detection(loader), "S10", "Wrong Filter Detection", SILVER),
+        ]
+    )
 
 
 if __name__ == "__main__":

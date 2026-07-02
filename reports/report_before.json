@@ -76,21 +76,6 @@
     "detail": "Expected revenue is the revenue of all valid Bronze records; actual is current Gold revenue. The gap is the value lost to dropped valid records."
   },
   "suggested_action": "Fix the Silver transformation rule (quantity > 20 records are being filtered out) and rerun the ETL.",
-  "coverage": {
-    "total_checks": 69,
-    "passed": 56,
-    "warned": 0,
-    "failed": 10,
-    "impacted": 2,
-    "skipped": 1,
-    "skipped_details": [
-      {
-        "check_id": "L1-SIL-CONS-FK-CUST",
-        "reason": "table 'customers' not present -- FK check not applicable."
-      }
-    ],
-    "full_coverage": false
-  },
   "detection_layers": {
     "layer_1_rules": [
       {
@@ -510,16 +495,6 @@
           "detection_layer": "layer_1_rules",
           "table": "silver_orders"
         }
-      },
-      {
-        "check_id": "L1-SIL-CONS-FK-CUST",
-        "check_name": "Foreign Key Integrity: customer_id -> customers.customer_id",
-        "layer": "Silver",
-        "status": "SKIPPED",
-        "observed": null,
-        "expected": "check could not be evaluated",
-        "detail": "table 'customers' not present -- FK check not applicable.",
-        "evidence_query": ""
       },
       {
         "check_id": "L1-SIL-TIME-FRESH",
@@ -1589,16 +1564,6 @@
           "detection_layer": "layer_1_rules",
           "table": "silver_orders"
         }
-      },
-      {
-        "check_id": "L1-SIL-CONS-FK-CUST",
-        "check_name": "Foreign Key Integrity: customer_id -> customers.customer_id",
-        "layer": "Silver",
-        "status": "SKIPPED",
-        "observed": null,
-        "expected": "check could not be evaluated",
-        "detail": "table 'customers' not present -- FK check not applicable.",
-        "evidence_query": ""
       },
       {
         "check_id": "L1-SIL-TIME-FRESH",

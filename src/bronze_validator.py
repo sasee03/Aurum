@@ -14,6 +14,7 @@ import pandas as pd
 from .baseline import column_stats, tolerance_band
 from .contracts import BRONZE, CheckResult, FAIL, PASS, WARN
 from .data_loader import DataLoader
+from .resilience import Check, run_checks
 
 REQUIRED_COLUMNS = [
     "invoice_no",
@@ -209,20 +210,26 @@ def b8_duplicates(loader: DataLoader) -> CheckResult:
 
 
 def validate_bronze(loader: DataLoader) -> list[CheckResult]:
-    results = [
-        b1_source_to_bronze_count(loader),
-        b2_count_band(loader),
-        b3_empty_table(loader),
-        b4_required_columns(loader),
-    ]
-    if results[-1].status == FAIL:
-        return results
-    return results + [
-        b5_extra_missing_columns(loader),
-        b6_mandatory_nulls(loader),
-        b7_negative_values(loader),
-        b8_duplicates(loader),
-    ]
+    core = run_checks(
+        [
+            Check(lambda: b1_source_to_bronze_count(loader), "B1", "Source to Bronze Row Count", BRONZE),
+            Check(lambda: b2_count_band(loader), "B2", "Low / High / Normal Count", BRONZE),
+            Check(lambda: b3_empty_table(loader), "B3", "Empty Table Check", BRONZE),
+            Check(lambda: b4_required_columns(loader), "B4", "Required Columns Present", BRONZE),
+        ]
+    )
+    # Preserve original control flow: only a hard FAIL on required columns stops
+    # the deeper profile checks (they would be meaningless). A SKIPPED B4 does not.
+    if core and core[-1].check_id == "B4" and core[-1].status == FAIL:
+        return core
+    return core + run_checks(
+        [
+            Check(lambda: b5_extra_missing_columns(loader), "B5", "Extra / Missing Columns", BRONZE),
+            Check(lambda: b6_mandatory_nulls(loader), "B6", "Null Count per Mandatory Column", BRONZE),
+            Check(lambda: b7_negative_values(loader), "B7", "Negative Value Profiling", BRONZE),
+            Check(lambda: b8_duplicates(loader), "B8", "Duplicate Check", BRONZE),
+        ]
+    )
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ from .contracts import (
     IMPACTED,
     NOT_TRUSTED,
     PASS,
+    SKIPPED,
     TRUSTED,
     WARN,
     WARNING,
@@ -32,7 +33,10 @@ def _statuses(check_results: Iterable) -> list[str]:
 
 
 def compute_layer_status(check_results: Iterable) -> str:
-    statuses = _statuses(check_results)
+    # SKIPPED is neither pass nor fail: exclude it from the dominant-status
+    # rollup. Honest coverage (whether checks were skipped) is surfaced
+    # separately in the report's `coverage` block, not by masking it as PASS.
+    statuses = [s for s in _statuses(check_results) if s != SKIPPED]
     if not statuses:
         return PASS
     for status in _LAYER_PRECEDENCE:

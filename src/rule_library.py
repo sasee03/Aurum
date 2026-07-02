@@ -22,6 +22,7 @@ from .contracts import (
     WARN,
 )
 from .data_loader import DataLoader
+from .resilience import Check, run_checks, skipped_result
 from .table_specs import TABLE_SPECS
 
 
@@ -206,7 +207,35 @@ def _check_consistency_fk(loader: DataLoader, table: str, spec: dict) -> list[Ch
         col = fk["column"]
         ref_table = fk.get("ref_table") or fk.get("parent_table")
         ref_column = fk.get("ref_column") or fk.get("parent_column")
-        if not ref_table or not loader.table_exists(ref_table):
+        ref_tag = (ref_table or "REF")[:4].upper()
+        skip_id = f"L1-{table[:3].upper()}-CONS-FK-{ref_tag}"
+        skip_name = (
+            f"Foreign Key Integrity: {col} -> {ref_table}.{ref_column}"
+            if ref_table
+            else f"Foreign Key Integrity: {col}"
+        )
+        # Missing table / column is a first-class SKIPPED (not a silent omit and
+        # not a crash): the optional relationship simply isn't present to check.
+        if not ref_table:
+            results.append(skipped_result(
+                skip_id, skip_name, spec["layer"],
+                f"FK target not configured for column '{col}' -- FK check not applicable.",
+            ))
+            continue
+        if not loader.table_exists(ref_table):
+            results.append(skipped_result(
+                skip_id, skip_name, spec["layer"],
+                f"table '{ref_table}' not present -- FK check not applicable.",
+            ))
+            continue
+        if col not in loader.columns(table) or ref_column not in loader.columns(ref_table):
+            results.append(skipped_result(
+                skip_id, skip_name, spec["layer"],
+                (
+                    f"column '{col}' or '{ref_table}.{ref_column}' not present "
+                    "-- FK check not applicable."
+                ),
+            ))
             continue
         orphans = int(loader.scalar(
             f"""
@@ -363,23 +392,29 @@ def _check_timeliness(loader: DataLoader, table: str, spec: dict) -> list[CheckR
 
 
 def run_rule_library(loader: DataLoader) -> list[CheckResult]:
-    """Run all Layer-1 config-driven checks for tables that exist."""
-    results: list[CheckResult] = []
+    """Run all Layer-1 config-driven checks for tables that exist.
+
+    Each helper runs through the resilience seam so one bad table/column cannot
+    abort the layer; order is preserved to keep the report stable.
+    """
+    checks: list[Check] = []
     for table, spec in TABLE_SPECS.items():
         if not loader.table_exists(table):
             continue
-        results.append(_check_completeness_empty(loader, table, spec))
-        results.append(_check_completeness_nulls(loader, table, spec))
-        src = _check_completeness_source_match(loader, table, spec)
-        if src:
-            results.append(src)
-        results.extend(_check_validity_ranges(loader, table, spec))
-        results.extend(_check_validity_dates(loader, table, spec))
-        pk = _check_uniqueness_pk(loader, table, spec)
-        if pk:
-            results.append(pk)
-        results.append(_check_uniqueness_full_row(loader, table, spec))
-        results.extend(_check_consistency_fk(loader, table, spec))
-        results.extend(_check_freshness(loader, table, spec))
-        results.extend(_check_timeliness(loader, table, spec))
-    return results
+        layer = spec["layer"]
+        prefix = f"L1-{table[:3].upper()}"
+        checks.extend(
+            [
+                Check(lambda t=table, s=spec: _check_completeness_empty(loader, t, s), f"{prefix}-COMP-EMPTY", "Empty Table Check", layer),
+                Check(lambda t=table, s=spec: _check_completeness_nulls(loader, t, s), f"{prefix}-COMP-NULL", "Mandatory Column Null Check", layer),
+                Check(lambda t=table, s=spec: _check_completeness_source_match(loader, t, s), f"{prefix}-COMP-SRC", "Source to Table Row Count", layer),
+                Check(lambda t=table, s=spec: _check_validity_ranges(loader, t, s), f"{prefix}-VAL-RANGE", "Range Checks", layer),
+                Check(lambda t=table, s=spec: _check_validity_dates(loader, t, s), f"{prefix}-VAL-DATE", "Date Parse Validity", layer),
+                Check(lambda t=table, s=spec: _check_uniqueness_pk(loader, t, s), f"{prefix}-UNIQ-PK", "Primary Key Duplicate Check", layer),
+                Check(lambda t=table, s=spec: _check_uniqueness_full_row(loader, t, s), f"{prefix}-UNIQ-FULL", "Full Row Duplicate Check", layer),
+                Check(lambda t=table, s=spec: _check_consistency_fk(loader, t, s), f"{prefix}-CONS-FK", "Foreign Key Integrity", layer),
+                Check(lambda t=table, s=spec: _check_freshness(loader, t, s), f"{prefix}-TIME-FRESH", "Date Freshness", layer),
+                Check(lambda t=table, s=spec: _check_timeliness(loader, t, s), f"{prefix}-TIME", "Timeliness", layer),
+            ]
+        )
+    return run_checks(checks)
