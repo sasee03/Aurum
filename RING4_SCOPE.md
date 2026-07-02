@@ -1,5 +1,9 @@
 # Ring 4 Scope Recon
 
+> **HISTORICAL:** Written before Ring 4 shipped on `main` @ `251586c`. Ring 4
+> (`src/resilience.py`, `SKIPPED`, `coverage`, `verdict_caveat`) is **committed
+> and live**. For the current API/report contract, see `docs/API_CONTRACT.md`.
+
 Read-only scoping for the PASS/FAIL/SKIPPED resilience wrap. **Baseline:** committed `main` at `bb7d2df29da9e7292d9dc9f8f0d1aeedbc4478ae` (14-key report, no `coverage`, no `SKIPPED`). **Worktree:** uncommitted Ring 4 code is present under `src/resilience.py`, modified validators, `tests/test_resilience.py`, and `reports/report.json` with a 15th `coverage` key.
 
 ---

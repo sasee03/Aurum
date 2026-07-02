@@ -1,5 +1,9 @@
 # Aurum Frontend Inventory (Read-Only Reconnaissance)
 
+> **HISTORICAL:** Generated before Ring 4 shipped on `main` @ `251586c` and
+> before the React migration API pin. Sections mentioning "uncommitted Ring 4"
+> or needing contract confirmation are outdated. See `docs/API_CONTRACT.md`.
+
 Generated from repository state on disk. Scope: Streamlit frontend (`app/`) and the report/API contract it depends on. No migration proposals.
 
 ---

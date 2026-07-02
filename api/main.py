@@ -1,9 +1,9 @@
 """FastAPI transport layer for Aurum (Ring 3 — API only).
 
 This is a thin HTTP layer over the existing engine. It performs NO reshaping:
-every report is returned exactly as ``build_report()`` produces it (the 14
-top-level keys and the ``CheckResult`` shape), so the Streamlit UI can later
-swap file-reads for API calls with no field remapping.
+every report is returned exactly as ``build_report()`` produces it (the 15
+top-level keys and the ``CheckResult`` shape), so a React UI can call these
+endpoints with no field remapping.
 
 Run it (port 8000 avoids clashing with Streamlit's 8501):
 
@@ -17,13 +17,27 @@ from typing import Optional
 
 import psycopg
 from fastapi import FastAPI, HTTPException, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from src.db_config import postgres_conninfo
 from src.report_builder import REPORT_PATH
 from src.run_demo import run_validation
 
+REACT_DEV_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
 app = FastAPI(title="Aurum API", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=REACT_DEV_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # In-memory cache of the most recent report produced in THIS process. The
 # trigger endpoint uses the side-effect-free core (no file write), so this is

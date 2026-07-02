@@ -1,5 +1,9 @@
 # Aurum Pillar Audit
 
+> **HISTORICAL:** Audited at `bb7d2df` before Ring 4 shipped on `main` @
+> `251586c`. Sections below that describe "uncommitted Ring 4" or a 14-key
+> contract are outdated. See `docs/API_CONTRACT.md` for the current pin.
+
 Read-only architecture audit against the 11 named diagram pillars. Evidence drawn from repository files at audit time. **HEAD commit:** `bb7d2df29da9e7292d9dc9f8f0d1aeedbc4478ae` (`feat: optional DATABASE_URL for remote SSL Postgres`).
 
 > **Note:** The working tree contains uncommitted Ring 4 changes (`src/resilience.py`, `coverage` key in `src/report_builder.py`, `SKIPPED` in `src/contracts.py`). Part C2 reports the **committed** `build_report()` contract at HEAD unless stated otherwise.
