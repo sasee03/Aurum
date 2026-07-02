@@ -1,7 +1,13 @@
 """Postgres connection configuration for Aurum.
 
 Configuration is intentionally environment-driven so the validation engine can
-run locally against Docker without hardcoded credentials.
+run locally against Docker without hardcoded credentials, or remotely against a
+cloud Postgres (e.g. Neon) when ``DATABASE_URL`` is set.
+
+Precedence:
+  1. ``DATABASE_URL`` — a full connection string/URI (supports ``sslmode=require``
+     and other libpq params for remote SSL hosts).
+  2. Individual ``AURUM_POSTGRES_*`` env vars — the original local Docker path.
 """
 
 from __future__ import annotations
@@ -39,4 +45,13 @@ def load_postgres_config() -> PostgresConfig:
 
 
 def postgres_conninfo() -> str:
+    """Return the connection string passed to ``psycopg.connect()``.
+
+    When ``DATABASE_URL`` is set it is returned as-is (psycopg accepts PostgreSQL
+    URIs including ``?sslmode=require`` for remote SSL). When absent, the existing
+    local libpq keyword string is built from ``AURUM_POSTGRES_*`` — no SSL forced.
+    """
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if database_url:
+        return database_url
     return load_postgres_config().conninfo()
