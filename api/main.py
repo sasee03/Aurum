@@ -16,7 +16,7 @@ import json
 from typing import Optional
 
 import psycopg
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response, status
 from pydantic import BaseModel
 
 from src.db_config import postgres_conninfo
@@ -45,8 +45,13 @@ def _load_latest_report() -> Optional[dict]:
 
 
 @app.get("/health")
-def health() -> dict:
-    """Liveness plus a quick Postgres reachability probe. Never runs the engine."""
+def health(response: Response) -> dict:
+    """Liveness plus a quick Postgres reachability probe. Never runs the engine.
+
+    ``status`` reflects ``database``: if the DB probe fails the top-level status
+    is ``"degraded"`` (never ``"ok"``) and the HTTP code is 503, so both the body
+    and the HTTP layer tell the truth to load balancers / liveness probes.
+    """
     try:
         with psycopg.connect(postgres_conninfo(), connect_timeout=3) as conn:
             with conn.cursor() as cur:
@@ -55,7 +60,11 @@ def health() -> dict:
         database = "ok"
     except Exception:
         database = "unreachable"
-    return {"status": "ok", "database": database}
+
+    if database == "ok":
+        return {"status": "ok", "database": database}
+    response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return {"status": "degraded", "database": database}
 
 
 @app.post("/runs")

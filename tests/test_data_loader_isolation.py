@@ -1,6 +1,42 @@
 import pandas as pd
+import psycopg
+import pytest
 
 from src.data_loader import DataLoader
+from src.db_config import postgres_conninfo
+
+
+def _schema_exists(schema: str) -> bool:
+    conn = psycopg.connect(postgres_conninfo(), autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s",
+                [schema],
+            )
+            return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def test_construction_failure_leaves_no_orphaned_schema(monkeypatch):
+    captured = {}
+    original_install = DataLoader._install_helpers
+
+    def boom(self):
+        # Fail after the session schema has been created but before full init.
+        captured["schema"] = self._schema
+        raise RuntimeError("forced failure during DataLoader setup")
+
+    monkeypatch.setattr(DataLoader, "_install_helpers", boom)
+
+    with pytest.raises(RuntimeError, match="forced failure during DataLoader setup"):
+        DataLoader(data_dir=None, build=False)
+
+    assert "schema" in captured, "failure did not occur after schema creation"
+    assert not _schema_exists(captured["schema"]), "orphaned schema left behind"
+
+    monkeypatch.setattr(DataLoader, "_install_helpers", original_install)
 
 
 def test_data_loader_instances_use_isolated_schemas():

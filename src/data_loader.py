@@ -203,11 +203,22 @@ class DataLoader:
         self._schema = f"aurum_session_{uuid4().hex}"
         self._closed = False
         self._uses_temporary_tables = False
-        self._create_session_schema()
-        self._install_helpers()
-        DataLoader._active_loaders.add(self)
-        if self.data_dir is not None and build:
-            self._load_from_disk()
+        # Tie schema cleanup to schema creation: if anything after the schema is
+        # created fails during setup, drop it here and re-raise. Otherwise the
+        # partially-built loader is never returned, run_validation's finally
+        # never runs, and the session schema leaks.
+        try:
+            self._create_session_schema()
+            self._install_helpers()
+            DataLoader._active_loaders.add(self)
+            if self.data_dir is not None and build:
+                self._load_from_disk()
+        except BaseException:
+            try:
+                self.close()
+            except Exception:
+                pass
+            raise
 
     # ------------------------------------------------------------------ build
     def _create_session_schema(self) -> None:
