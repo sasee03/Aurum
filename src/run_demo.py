@@ -99,11 +99,25 @@ def print_summary(report: dict) -> None:
     _print()
 
 
-def main() -> dict:
+def run_validation(run_id: str = "demo_run_001") -> dict:
+    """Run the full pipeline against Postgres and return the report dict.
+
+    Side-effect-free core shared by the demo script and the API layer: it
+    generates data if missing, runs the engine, and returns the in-memory
+    report. It does NOT write a file or print a summary. The session schema is
+    closed on exit so repeated API calls do not leak Postgres schemas.
+    """
     if not RAW_CSV.exists():
         generate()
     loader = DataLoader()
-    report = build_report(loader)
+    try:
+        return build_report(loader, run_id=run_id)
+    finally:
+        loader.close()
+
+
+def main() -> dict:
+    report = run_validation()
     path = write_report(report)
     print_summary(report)
     print(f"Report written to {path}")

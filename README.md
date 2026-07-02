@@ -20,10 +20,12 @@ deterministic rules.
 python -m pip install -r requirements.txt
 python src/generate_data.py     # writes synthetic retail data
 python src/run_demo.py          # runs all checks, writes reports/report.json
+uvicorn api.main:app --port 8000     # HTTP API (POST /runs, GET /reports/latest)
 streamlit run app/streamlit_app.py   # demo UI (reads report.json only)
 ```
 
-`run_demo.py` regenerates data automatically if it is missing.
+`run_demo.py` regenerates data automatically if it is missing. The API on port
+8000 avoids clashing with Streamlit (8501); both run against the same Postgres.
 
 ## Demo result
 
