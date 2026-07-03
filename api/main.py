@@ -16,11 +16,18 @@ import json
 from typing import Optional
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Response, status
+from fastapi import FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from src.db_config import postgres_conninfo
+from src.metadata_discovery import (
+    AmbiguousTableError,
+    discover_demo_session_metadata,
+    discover_live_metadata,
+    discover_live_table_detail,
+    discover_live_tables_lightweight,
+)
 from src.report_builder import REPORT_PATH
 from src.run_demo import run_validation
 
@@ -126,3 +133,118 @@ def report_by_id(run_id: str) -> dict:
             ),
         )
     return report
+
+
+@app.get("/metadata/health")
+def metadata_health(response: Response) -> dict:
+    """Read-only metadata subsystem health (Postgres reachability)."""
+    try:
+        with psycopg.connect(postgres_conninfo(), connect_timeout=3) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        return {"status": "ok"}
+    except Exception:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "error", "detail": "Database unavailable"}
+
+
+@app.get("/metadata")
+def metadata_overview(
+    schema: Optional[str] = None,
+    table_name: Optional[str] = None,
+    sample_limit: int = Query(5, ge=1, le=100),
+) -> dict:
+    """Read-only live metadata discovery (no DataLoader, no schema creation)."""
+    try:
+        return discover_live_metadata(
+            schema=schema,
+            table_name=table_name,
+            sample_limit=sample_limit,
+        )
+    except psycopg.Error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Metadata discovery failed",
+        ) from None
+
+
+@app.get("/metadata/tables")
+def metadata_tables(schema: Optional[str] = None) -> dict:
+    """Lightweight live table list (no column profiling or candidate keys)."""
+    try:
+        return discover_live_tables_lightweight(schema=schema)
+    except psycopg.Error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Metadata discovery failed",
+        ) from None
+
+
+@app.get("/metadata/tables/{table_name}")
+def metadata_table_detail(
+    table_name: str,
+    schema: Optional[str] = None,
+    sample_limit: int = Query(5, ge=1, le=100),
+) -> dict:
+    """Read-only full metadata for one live table."""
+    try:
+        return discover_live_table_detail(
+            table_name=table_name,
+            schema=schema,
+            sample_limit=sample_limit,
+        )
+    except AmbiguousTableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except LookupError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Table '{table_name}' not found.",
+        ) from None
+    except psycopg.Error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Metadata discovery failed",
+        ) from None
+
+
+@app.post("/metadata/demo-session")
+def metadata_demo_session(
+    sample_limit: int = Query(5, ge=1, le=100),
+) -> dict:
+    """Side-effectful demo metadata: materializes DataLoader session, then cleans up."""
+    try:
+        return discover_demo_session_metadata(sample_limit=sample_limit)
+    except psycopg.Error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from None
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Demo data files are missing. Run python src/generate_data.py first.",
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Metadata discovery failed",
+        ) from None

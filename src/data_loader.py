@@ -220,6 +220,11 @@ class DataLoader:
                 pass
             raise
 
+    @property
+    def session_schema(self) -> str:
+        """Read-only name of the isolated Postgres schema for this loader session."""
+        return self._schema
+
     # ------------------------------------------------------------------ build
     def _create_session_schema(self) -> None:
         with self._pg_conn.cursor() as cur:
