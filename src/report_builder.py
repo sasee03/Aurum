@@ -14,55 +14,14 @@ from .cross_layer_validator import (
 )
 from .bronze_validator import validate_bronze
 from .data_loader import DataLoader
-from .detection_stack import merge_checks, run_detection_stack
+from .detection_stack import run_detection_stack
 from .gold_validator import validate_gold
 from .silver_validator import validate_silver
-from .contracts import (
-    BRONZE,
-    CROSS_LAYER,
-    DETECTION_LAYER_3,
-    FAIL,
-    GOLD,
-    IMPACTED,
-    SILVER,
-    CheckResult,
-)
 from .resilience import build_coverage
 from .verdict_engine import compute_final_verdict, compute_layer_status
 
 REPORT_PATH = Path("reports/report.json")
 PIPELINE = "Raw \u2192 Bronze \u2192 Silver \u2192 Gold"
-
-
-def _downstream_impact_adjustment(
-    checks: list, upstream_status: str
-) -> list:
-    """When Silver failed, Gold L3 FAILs become IMPACTED (not independent Gold bugs)."""
-    if upstream_status != FAIL:
-        return checks
-    adjusted = []
-    for r in checks:
-        if (
-            r.layer == GOLD
-            and r.status == FAIL
-            and r.extra.get("detection_layer") == DETECTION_LAYER_3
-        ):
-            adjusted.append(
-                CheckResult(
-                    r.check_id,
-                    r.check_name,
-                    r.layer,
-                    IMPACTED,
-                    r.observed,
-                    r.expected,
-                    f"{r.detail} (Gold impacted by upstream Silver failure.)",
-                    r.evidence_query,
-                    extra={**r.extra, "upstream_adjusted": True},
-                )
-            )
-        else:
-            adjusted.append(r)
-    return adjusted
 
 
 def _suggested_action(final_verdict: str, layer_status: dict, root_cause: dict) -> str:
@@ -85,23 +44,11 @@ def _suggested_action(final_verdict: str, layer_status: dict, root_cause: dict) 
 def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
     detection = run_detection_stack(loader)
 
-    bronze_results = merge_checks(
-        validate_bronze(loader),
-        detection.for_pipeline_layer(BRONZE),
-    )
-    silver_results = merge_checks(
-        validate_silver(loader),
-        detection.for_pipeline_layer(SILVER),
-    )
+    bronze_results = validate_bronze(loader)
+    silver_results = validate_silver(loader)
     bronze_status = compute_layer_status(bronze_results)
     silver_status = compute_layer_status(silver_results)
-    gold_results = _downstream_impact_adjustment(
-        merge_checks(
-            validate_gold(loader, upstream_status=silver_status),
-            detection.for_pipeline_layer(GOLD),
-        ),
-        silver_status,
-    )
+    gold_results = validate_gold(loader, upstream_status=silver_status)
 
     layer_status = {
         "bronze": bronze_status,
@@ -109,11 +56,8 @@ def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
         "gold": compute_layer_status(gold_results),
     }
 
-    cross_results = merge_checks(
-        validate_cross_layer(
-            bronze_results, silver_results, gold_results, layer_status
-        ),
-        detection.for_pipeline_layer(CROSS_LAYER),
+    cross_results = validate_cross_layer(
+        bronze_results, silver_results, gold_results, layer_status
     )
 
     verdict = compute_final_verdict(layer_status)
@@ -121,7 +65,11 @@ def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
     severity = verdict["severity"]
 
     coverage = build_coverage(
-        bronze_results + silver_results + gold_results + cross_results
+        bronze_results
+        + silver_results
+        + gold_results
+        + cross_results
+        + detection.all_checks
     )
     # Skips must never buy a clean bill of health: a TRUSTED verdict with
     # incomplete coverage is downgraded to a caveated WARNING so no reader

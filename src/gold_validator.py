@@ -1,4 +1,4 @@
-"""Gold layer quality checks (G1-G6).
+"""Gold layer quality checks (G1-G10).
 
 Gold holds business metrics aggregated from Silver. We reconcile each metric
 against a fresh recomputation from Silver (catches calculation bugs) and compare
@@ -18,6 +18,11 @@ from .resilience import Check, run_checks
 from .revenue_tolerance import REVENUE_ROUNDING_TOLERANCE, revenue_tolerance_detail
 
 AOV_TOLERANCE = 0.01
+RPC_TOLERANCE = 0.01
+
+GOLD_MANDATORY = [
+    "total_revenue", "total_orders", "total_customers", "average_order_value",
+]
 
 
 def _history(loader: DataLoader) -> Optional[pd.DataFrame]:
@@ -198,6 +203,117 @@ def g6_country_revenue_reconciliation(loader: DataLoader) -> CheckResult:
     )
 
 
+def g7_metrics_cardinality(loader: DataLoader) -> CheckResult:
+    n = int(loader.scalar("SELECT COUNT(*) FROM gold_metrics") or 0)
+    status = PASS if n == 1 else FAIL
+    detail = (
+        "Gold metrics table has exactly one aggregate row."
+        if n == 1
+        else f"Gold metrics table has {n:,} rows; expected exactly 1."
+    )
+    return CheckResult(
+        "G7", "Gold Metrics Row Cardinality", GOLD, status,
+        observed=n, expected=1, detail=detail,
+        evidence_query="SELECT COUNT(*) FROM gold_metrics",
+    )
+
+
+def g8_mandatory_metrics_not_null(loader: DataLoader) -> CheckResult:
+    cols = loader.columns("gold_metrics")
+    null_counts = {}
+    for col in GOLD_MANDATORY:
+        if col in cols:
+            null_counts[col] = int(
+                loader.scalar(f"SELECT COUNT(*) FROM gold_metrics WHERE {col} IS NULL")
+            )
+    total = sum(null_counts.values())
+    status = PASS if total == 0 else FAIL
+    detail = (
+        "All mandatory Gold metric columns are non-null."
+        if total == 0
+        else f"Gold metrics contain nulls: {null_counts}."
+    )
+    return CheckResult(
+        "G8", "Mandatory Gold Metrics Not Null", GOLD, status,
+        observed=null_counts, expected={c: 0 for c in null_counts}, detail=detail,
+        evidence_query="SELECT COUNT(*) FROM gold_metrics WHERE total_revenue IS NULL",
+    )
+
+
+def g9_revenue_per_customer(loader: DataLoader) -> CheckResult:
+    silver_rpc = float(
+        loader.scalar(
+            """
+            SELECT SUM(net_revenue)::DOUBLE
+                 / NULLIF(COUNT(DISTINCT customer_id), 0)
+            FROM silver_orders
+            """
+        )
+        or 0
+    )
+    gold_rpc = float(
+        loader.scalar(
+            """
+            SELECT total_revenue::DOUBLE
+                 / NULLIF(total_customers, 0)
+            FROM gold_metrics
+            """
+        )
+        or 0
+    )
+    diff = abs(silver_rpc - gold_rpc)
+    match = diff <= RPC_TOLERANCE
+    status = PASS if match else FAIL
+    detail = (
+        f"Gold revenue-per-customer reconciles with Silver (diff {diff:.4f})."
+        if match
+        else (
+            f"Gold RPC {gold_rpc:,.2f} != Silver RPC {silver_rpc:,.2f} "
+            f"(diff {diff:.4f} > tolerance {RPC_TOLERANCE})."
+        )
+    )
+    return CheckResult(
+        "G9", "Revenue per Customer Reconciliation", GOLD, status,
+        observed={"gold_rpc": round(gold_rpc, 2), "difference": round(diff, 4)},
+        expected={"silver_rpc": round(silver_rpc, 2)},
+        detail=detail,
+        evidence_query=(
+            "SELECT total_revenue / NULLIF(total_customers, 0) FROM gold_metrics"
+        ),
+    )
+
+
+def g10_country_coverage(loader: DataLoader) -> CheckResult:
+    if not loader.table_exists("gold_country_revenue"):
+        return CheckResult(
+            "G10", "Country Coverage Reconciliation", GOLD, WARN,
+            observed="n/a", expected="n/a",
+            detail="No gold_country_revenue table to reconcile country coverage.",
+            evidence_query="",
+        )
+    silver_countries = int(
+        loader.scalar("SELECT COUNT(DISTINCT country) FROM silver_orders") or 0
+    )
+    gold_countries = int(
+        loader.scalar("SELECT COUNT(*) FROM gold_country_revenue") or 0
+    )
+    match = silver_countries == gold_countries
+    status = PASS if match else FAIL
+    detail = (
+        "Gold country coverage matches Silver distinct countries."
+        if match
+        else (
+            f"Silver has {silver_countries:,} countries but "
+            f"gold_country_revenue has {gold_countries:,} rows."
+        )
+    )
+    return CheckResult(
+        "G10", "Country Coverage Reconciliation", GOLD, status,
+        observed=gold_countries, expected=silver_countries, detail=detail,
+        evidence_query="SELECT COUNT(DISTINCT country) FROM silver_orders",
+    )
+
+
 def validate_gold(
     loader: DataLoader, upstream_status: Optional[str] = None
 ) -> list[CheckResult]:
@@ -209,6 +325,10 @@ def validate_gold(
             Check(lambda: g4_average_order_value(loader), "G4", "Average Order Value Check", GOLD),
             Check(lambda: g5_revenue_vs_baseline(loader, upstream_status=upstream_status), "G5", "Revenue vs Expected Baseline", GOLD),
             Check(lambda: g6_country_revenue_reconciliation(loader), "G6", "Country-wise Revenue Reconciliation", GOLD),
+            Check(lambda: g7_metrics_cardinality(loader), "G7", "Gold Metrics Row Cardinality", GOLD),
+            Check(lambda: g8_mandatory_metrics_not_null(loader), "G8", "Mandatory Gold Metrics Not Null", GOLD),
+            Check(lambda: g9_revenue_per_customer(loader), "G9", "Revenue per Customer Reconciliation", GOLD),
+            Check(lambda: g10_country_coverage(loader), "G10", "Country Coverage Reconciliation", GOLD),
         ]
     )
 

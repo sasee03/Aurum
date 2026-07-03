@@ -1,4 +1,4 @@
-"""Bronze layer quality checks (B1-B8).
+"""Bronze layer quality checks (B1-B10).
 
 Bronze is the raw landing layer. We confirm ingestion completeness, structural
 correctness, and profile data-quality issues that Silver is expected to clean.
@@ -209,6 +209,61 @@ def b8_duplicates(loader: DataLoader) -> CheckResult:
     )
 
 
+def b9_invoice_date_parse(loader: DataLoader) -> CheckResult:
+    bad = int(
+        loader.scalar(
+            """
+            SELECT COUNT(*) FROM bronze_orders
+            WHERE invoice_date IS NOT NULL
+              AND TRY_CAST(invoice_date AS DATE) IS NULL
+            """
+        )
+    )
+    status = PASS if bad == 0 else FAIL
+    detail = (
+        "All non-null invoice_date values parse as dates."
+        if bad == 0
+        else f"{bad:,} rows have non-null invoice_date that does not parse as a date."
+    )
+    return CheckResult(
+        "B9", "Invoice Date Parse Validity", BRONZE, status,
+        observed=bad, expected=0, detail=detail,
+        evidence_query=(
+            "SELECT COUNT(*) FROM bronze_orders "
+            "WHERE invoice_date IS NOT NULL "
+            "AND TRY_CAST(invoice_date AS DATE) IS NULL"
+        ),
+    )
+
+
+def b10_future_invoice_dates(loader: DataLoader) -> CheckResult:
+    future = int(
+        loader.scalar(
+            """
+            SELECT COUNT(*) FROM bronze_orders
+            WHERE TRY_CAST(invoice_date AS DATE) > CURRENT_DATE
+            """
+        )
+    )
+    status = PASS if future == 0 else WARN
+    detail = (
+        "No invoice_date values are in the future."
+        if future == 0
+        else (
+            f"{future:,} rows have invoice_date after the run date "
+            "(profiled; expected to be filtered in Silver)."
+        )
+    )
+    return CheckResult(
+        "B10", "Future Invoice Date Profiling", BRONZE, status,
+        observed=future, expected=0, detail=detail,
+        evidence_query=(
+            "SELECT COUNT(*) FROM bronze_orders "
+            "WHERE TRY_CAST(invoice_date AS DATE) > CURRENT_DATE"
+        ),
+    )
+
+
 def validate_bronze(loader: DataLoader) -> list[CheckResult]:
     core = run_checks(
         [
@@ -228,6 +283,8 @@ def validate_bronze(loader: DataLoader) -> list[CheckResult]:
             Check(lambda: b6_mandatory_nulls(loader), "B6", "Null Count per Mandatory Column", BRONZE),
             Check(lambda: b7_negative_values(loader), "B7", "Negative Value Profiling", BRONZE),
             Check(lambda: b8_duplicates(loader), "B8", "Duplicate Check", BRONZE),
+            Check(lambda: b9_invoice_date_parse(loader), "B9", "Invoice Date Parse Validity", BRONZE),
+            Check(lambda: b10_future_invoice_dates(loader), "B10", "Future Invoice Date Profiling", BRONZE),
         ]
     )
 
