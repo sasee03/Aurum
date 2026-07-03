@@ -3,6 +3,7 @@ numpy==1.24.3
 pandas==2.0.3
 psycopg[binary]
 fastapi
+httpx
 uvicorn[standard]
 streamlit==1.36.0
 pytest==8.2.2
