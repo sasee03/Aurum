@@ -1,0 +1,42 @@
+[
+  {
+    "id": "proj-001",
+    "name": "Retail Analytics",
+    "businessDomain": "Retail",
+    "description": "Validates Bronze → Gold pipeline correctness for the retail orders & inventory warehouse.",
+    "environment": "Development",
+    "lastOpened": "2h ago",
+    "datasetCount": 4,
+    "status": "PASS"
+  },
+  {
+    "id": "proj-002",
+    "name": "Finance Pipeline",
+    "businessDomain": "Finance",
+    "description": "End-to-end validation of financial transaction datasets and reporting tables.",
+    "environment": "QA",
+    "lastOpened": "1d ago",
+    "datasetCount": 7,
+    "status": "WARNING"
+  },
+  {
+    "id": "proj-003",
+    "name": "Supply Chain",
+    "businessDomain": "Manufacturing",
+    "description": "Validates supplier data, inventory levels, and fulfillment pipeline integrity.",
+    "environment": "Production",
+    "lastOpened": "3d ago",
+    "datasetCount": 9,
+    "status": "FAILED"
+  },
+  {
+    "id": "proj-004",
+    "name": "Sales Warehouse",
+    "businessDomain": "Retail",
+    "description": "Data quality checks for the central sales data warehouse and BI reporting layer.",
+    "environment": "Production",
+    "lastOpened": "5d ago",
+    "datasetCount": 6,
+    "status": "PASS"
+  }
+]

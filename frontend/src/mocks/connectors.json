@@ -1,0 +1,16 @@
+[
+  {
+    "id": "csv",
+    "type": "csv",
+    "name": "Local CSV",
+    "icon": "Cs",
+    "description": "Upload a local CSV file as a data source."
+  },
+  {
+    "id": "postgresql",
+    "type": "postgresql",
+    "name": "PostgreSQL",
+    "icon": "Pg",
+    "description": "Connect to a PostgreSQL database."
+  }
+]
