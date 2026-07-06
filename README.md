@@ -83,8 +83,22 @@ Aurum: first failed layer = Bronze → Silver, verdict = NOT TRUSTED
 ## Tests
 
 ```powershell
-python -m pytest -q    # 101 passed (Olist demo contract)
+python -m pytest -q    # 108 passed (Olist demo contract)
 ```
+
+## Performance & stress harness
+
+Branch `perf/olist-stress-harness` (`11094f8`) adds standalone timing and API load scripts
+without changing demo logic. Measured results and findings are in
+[`docs/PERFORMANCE_STRESS_REPORT.md`](docs/PERFORMANCE_STRESS_REPORT.md).
+
+```powershell
+python scripts/benchmark_pipeline.py --runs 5 --output benchmark-results/pipeline-olist.json
+python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+python scripts/stress_api.py --base-url http://127.0.0.1:8000 --requests 20 --concurrency 5 --output stress-results/api-olist.json
+```
+
+`benchmark-results/`, `stress-results/`, and generated CSVs are gitignored — do not commit them.
 
 ## Architecture
 
@@ -103,7 +117,12 @@ src/
   report_builder.py       assembles reports/report.json
   run_demo.py             end-to-end runner + terminal summary
 
-tests/                    pytest suite (101 tests)
+scripts/
+  perf_contract.py        shared report contract checks for benchmarks/stress
+  benchmark_pipeline.py   repeated generate_data / run_demo timing + scale sweep
+  stress_api.py           concurrent HTTP load against FastAPI
+
+tests/                    pytest suite (108 tests)
 data/olist/               Olist source CSVs (downloaded, gitignored)
 reports/report.json       generated output contract
 ```
