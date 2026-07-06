@@ -110,7 +110,7 @@ def get_field(report: Optional[dict], key: str, default: Any = None) -> Any:
 
 def money_cr(value: Any) -> str:
     try:
-        return f"₹{float(value) / 10_000_000:.2f} Cr"
+        return f"BRL {float(value) / 1_000_000:.2f} M"
     except (TypeError, ValueError):
         return MISSING
 
@@ -891,7 +891,7 @@ def render_detail(report: dict) -> None:
         tol = obs.get("revenue_rounding_tolerance", MISSING)
         st.caption(
             f"Silver↔Gold revenue check: difference {obs.get('difference', MISSING)} "
-            f"(rounding tolerance {tol} currency units)"
+            f"(rounding tolerance {tol} BRL)"
         )
 
     st.markdown("### Detection method")

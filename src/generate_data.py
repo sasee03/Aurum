@@ -23,7 +23,7 @@ HISTORICAL_DIR = DATA_DIR / "historical"
 
 
 def build_historical_runs(bronze_count: int, expected_revenue: float) -> pd.DataFrame:
-    """Synthetic run history sized to the Olist bronze load (normal ~5% drop band)."""
+    """Bootstrap run history sized to the Olist bronze load (normal ~5% drop band)."""
     bronze_counts = [
         bronze_count,
         bronze_count - 100,

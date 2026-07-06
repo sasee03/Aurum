@@ -1,8 +1,9 @@
 # Aurum Frontend Inventory (Read-Only Reconnaissance)
 
-> **HISTORICAL:** Generated before Ring 4 shipped on `main` @ `251586c` and
-> before the React migration API pin. Sections mentioning "uncommitted Ring 4"
-> or needing contract confirmation are outdated. See `docs/API_CONTRACT.md`.
+> **HISTORICAL:** Generated before Ring 4 and before the Olist migration
+> (`a94a2bb`). Embedded sample JSON below is **pre-Olist synthetic retail**
+> (100k/72k rows, `quantity > 20` bug, INR/₹ currency). **Current demo pin:**
+> `reports/report.json` after Olist migration + `docs/API_CONTRACT.md`.
 
 Generated from repository state on disk. Scope: Streamlit frontend (`app/`) and the report/API contract it depends on. No migration proposals.
 
@@ -2082,7 +2083,7 @@ REPORT_PATH = ROOT / "reports" / "report.json"
 | `project` | `string` | Meta | Constant `"Aurum"` from `build_report()` |
 | `description` | `string` | Meta | Constant framework description |
 | `pipeline` | `string` | Meta | `"Raw ? Bronze ? Silver ? Gold"` |
-| `dataset` | `string` | Meta | e.g. `"Retail Orders"` |
+| `dataset` | `string` | Meta | e.g. `"Olist Brazilian E-Commerce"` |
 | `run_id` | `string` | Meta | e.g. `"demo_run_001"` |
 | `layer_status` | `object` | Cross-layer rollup | Keys: `bronze`, `silver`, `gold` ? status strings |
 | `layer_status.bronze` | `string` | Bronze | Layer rollup |

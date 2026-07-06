@@ -1,9 +1,22 @@
 # Aurum API Contract
 
-**Baseline commit:** `251586c` (`main`)
+**Baseline commit:** `a94a2bb` (`Migrate platform dataset to Olist`)
 
 This document is the frontend pin for the React app. The engine decides; the API
 returns the report dict verbatim with no reshaping.
+
+## Demo dataset (Olist)
+
+| Field | Value |
+|-------|-------|
+| `dataset` | `"Olist Brazilian E-Commerce"` |
+| Bronze rows | 112,650 line items |
+| Source orders | ~98,666 distinct `order_id` values |
+| Planted bug | Silver ETL drops `unit_price > 20` BRL |
+| `layer_status` | bronze=PASS, silver=FAIL, gold=IMPACTED |
+| `final_verdict` | `NOT TRUSTED` |
+| `first_failed_layer` | `Bronze → Silver` |
+| `business_impact.estimated_loss` | ~13,447,000.57 BRL |
 
 ## Endpoints
 

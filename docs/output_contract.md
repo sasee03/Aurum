@@ -1,8 +1,9 @@
 # Aurum Output Contract
 
-> **LEGACY / SUPERSEDED:** This document describes the root ALLOW/BLOCK
-> implementation. The current framework lives under `src/` and writes the
-> cross-layer trust report to `reports/report.json`.
+> **LEGACY / SUPERSEDED (pre-Olist synthetic retail):** This document describes the
+> root ALLOW/BLOCK implementation. The current framework lives under `src/` and
+> writes the cross-layer trust report to `reports/report.json` using the Olist
+> dataset (see `docs/API_CONTRACT.md`, commit `a94a2bb`).
 
 This is the frozen backend-to-dashboard contract for the MVP. Prakhar owns the contract definition. The Integration Lead owns conformance to this contract.
 

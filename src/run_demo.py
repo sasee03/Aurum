@@ -2,7 +2,7 @@
 
     python src/run_demo.py
 
-Loads (or generates) the retail dataset, runs Bronze/Silver/Gold/cross-layer
+Loads (or generates) the Olist Brazilian e-commerce dataset, runs Bronze/Silver/Gold/cross-layer
 checks, computes the deterministic verdict, writes reports/report.json, and
 prints a business-readable summary.
 """
@@ -40,7 +40,7 @@ else:
 
 def _money(value) -> str:
     try:
-        return f"Rs {float(value) / 10_000_000:.2f} Cr"
+        return f"BRL {float(value) / 1_000_000:.2f} M"
     except (TypeError, ValueError):
         return str(value)
 

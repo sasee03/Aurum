@@ -30,12 +30,12 @@ streamlit run streamlit_app.py
 
 The current test and demo commands check:
 
-- current report contract fields and block keys
-- Bronze 100,000, correct Silver 96,000, buggy Silver 72,000
-- 28% today drop and learned normal range 3.71%-3.91%
-- expected revenue Rs 10.18 Cr, actual revenue Rs 9.70 Cr, impact Rs 0.48 Cr
-- root cause derives 24,000 dropped discounted orders
-- evidence SQLs run and reproduce their displayed results
+- current report contract fields (15 top-level keys per `docs/API_CONTRACT.md`)
+- Olist demo: 112,650 bronze line items, silver FAIL, gold IMPACTED, NOT TRUSTED
+- planted bug: Silver filters `unit_price > 20` BRL
+- business impact: expected revenue ~BRL 13.59 M, estimated loss ~BRL 13.45 M
+- root cause: valid high-value line items wrongly removed in Silver transformation
+- evidence SQLs in `CheckResult` blocks are reproducible from Postgres
 - dashboard reads the current `reports/report.json` instead of legacy fields
 
 ## Daily Update Format

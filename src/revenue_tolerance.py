@@ -6,7 +6,7 @@ across many rows is normal. We reconcile within a named, documented tolerance
 (currency units) and surface it in check output — never claim exact revenue match.
 """
 
-# Fixed tolerance in currency units (e.g. INR/Rs). Chosen to absorb float drift on
+# Fixed tolerance in BRL. Chosen to absorb float drift on
 # large aggregates while remaining strict enough to catch real mismatches.
 REVENUE_ROUNDING_TOLERANCE = 1.0
 

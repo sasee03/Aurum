@@ -1,4 +1,9 @@
-"""One-command demo correctness checks for Aurum."""
+"""LEGACY verifier for the pre-Olist ALLOW/BLOCK framework.
+
+Superseded by `python -m src.run_demo` and `tests/test_report_builder.py`.
+Validates `reports/legacy_report.json` only — not the Olist demo in
+`reports/report.json`. See `docs/LEGACY.md`.
+"""
 
 from __future__ import annotations
 

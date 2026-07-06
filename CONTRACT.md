@@ -1,9 +1,10 @@
 # Aurum — Frozen Output Contract
 
-> **LEGACY / SUPERSEDED:** This contract belongs to the old release-gatekeeping
-> implementation at the repository root. The current `src/` framework and
-> `reports/report.json` use the TRUSTED / WARNING / NOT TRUSTED contract.
-> Legacy commands write `reports/legacy_report.json`.
+> **LEGACY / SUPERSEDED (pre-Olist synthetic retail):** This contract belongs to
+> the old release-gatekeeping implementation at the repository root. The current
+> `src/` framework and `reports/report.json` use the TRUSTED / WARNING / NOT TRUSTED
+> contract with the **Olist Brazilian E-Commerce** dataset (see `docs/API_CONTRACT.md`,
+> commit `a94a2bb`). Legacy commands write `reports/legacy_report.json`.
 
 **Status: FROZEN.** This is the single source of truth for the backend output.
 Every module emits into this shape; the dashboard reads only from this shape;

@@ -1,7 +1,9 @@
 # Team Briefs — point at the real repo
 
-> **LEGACY / SUPERSEDED:** These messages describe the old ALLOW/BLOCK iteration.
-> Use `README.md` and `src/` for the current cross-layer framework.
+> **LEGACY / SUPERSEDED (pre-Olist synthetic retail):** These messages describe the
+> old ALLOW/BLOCK iteration with synthetic 100k/72k counts and INR/₹ currency.
+> Use `README.md`, `docs/API_CONTRACT.md`, and `src/` for the current Olist-based
+> cross-layer framework (commit `a94a2bb`).
 
 Repo: https://github.com/sasee03/Aurum  ·  Contract: `CONTRACT.md` (frozen)
 Modules at repo root · Dashboard: `streamlit_app.py` · Output: `reports/report.json`
