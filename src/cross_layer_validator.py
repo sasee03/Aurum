@@ -112,9 +112,9 @@ def build_root_cause(silver_results: list[CheckResult]) -> dict:
         worst_segment = None
         if s9 and s9.extra.get("segments"):
             worst_segment = s9.extra["segments"][0].get("segment")
-        if worst_segment and "quantity >" in str(worst_segment):
+        if worst_segment and "unit_price >" in str(worst_segment):
             summary = (
-                "Valid high-quantity orders were wrongly removed during the Silver "
+                "Valid high-value line items were wrongly removed during the Silver "
                 "transformation."
             )
         else:

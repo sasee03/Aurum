@@ -102,7 +102,7 @@ def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
         "project": "Aurum",
         "description": "Cross-layer data quality validation framework",
         "pipeline": PIPELINE,
-        "dataset": "Retail Orders",
+        "dataset": "Olist Brazilian E-Commerce",
         "run_id": run_id,
         "layer_status": layer_status,
         "final_verdict": final_verdict,

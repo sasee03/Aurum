@@ -32,8 +32,8 @@ MANDATORY_NOT_NULL = ["invoice_no", "quantity", "invoice_date", "unit_price", "c
 DUP_KEY = ["invoice_no", "stock_code", "customer_id", "invoice_date"]
 
 # Fallback thresholds used only when no historical baseline is available.
-CONFIG_MIN_ROWS = 50_000
-CONFIG_MAX_ROWS = 150_000
+CONFIG_MIN_ROWS = 90_000
+CONFIG_MAX_ROWS = 130_000
 
 
 def _history(loader: DataLoader) -> Optional[pd.DataFrame]:

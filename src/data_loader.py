@@ -8,8 +8,8 @@
       -> gold_* tables   (business aggregates over silver)
 
 The planted bug lives in `SILVER_ETL_SQL`: alongside the legitimate cleaning
-(`quantity > 0 AND unit_price > 0`) it also drops `quantity > 20`, which removes
-valid high-quantity wholesale orders. The validators detect this from data.
+(`quantity > 0 AND unit_price > 0`) it also drops `unit_price > 20`, which
+removes valid high-value Olist line items. The validators detect this from data.
 """
 
 from __future__ import annotations
@@ -35,9 +35,14 @@ DATA_DIR = Path("data")
 RAW_CSV = DATA_DIR / "raw" / "raw_orders.csv"
 HISTORICAL_CSV = DATA_DIR / "historical" / "historical_runs.csv"
 
+# Olist line grain: invoice_no = "{order_id}_{order_item_id}". Use this expression
+# wherever Gold/reconciliation needs distinct *orders* not line items.
+ORDER_ID_FROM_LINE = "REGEXP_REPLACE(invoice_no, '_[0-9]+$', '')"
+
 # The legitimate cleaning rule keeps positive quantity/price rows.
-# The BUG is the extra `quantity <= 20` clause, which silently removes valid
-# high-quantity orders. This is the single planted defect Aurum must catch.
+# The BUG is the extra `unit_price <= 20` clause, which silently removes valid
+# high-value Olist line items (price > 20 BRL). Olist order_items have no
+# quantity column — each row is one unit, so the bug targets price not quantity.
 SILVER_ETL_SQL = """
 CREATE OR REPLACE TABLE silver_orders AS
 SELECT
@@ -53,7 +58,7 @@ SELECT
 FROM bronze_orders
 WHERE quantity > 0
   AND unit_price > 0
-  AND quantity <= 20;            -- planted bug: drops valid high-quantity orders
+  AND unit_price <= 20;            -- planted bug: drops valid high-price items
 """
 
 
@@ -289,13 +294,13 @@ class DataLoader:
             CREATE OR REPLACE TABLE gold_metrics AS
             SELECT
                 SUM(net_revenue) AS total_revenue,
-                COUNT(DISTINCT invoice_no) AS total_orders,
+                COUNT(DISTINCT {order_expr}) AS total_orders,
                 COUNT(DISTINCT customer_id) AS total_customers,
-                CASE WHEN COUNT(DISTINCT invoice_no) = 0 THEN 0
-                     ELSE SUM(net_revenue) / COUNT(DISTINCT invoice_no) END
+                CASE WHEN COUNT(DISTINCT {order_expr}) = 0 THEN 0
+                     ELSE SUM(net_revenue) / COUNT(DISTINCT {order_expr}) END
                      AS average_order_value
             FROM silver_orders;
-            """
+            """.format(order_expr=ORDER_ID_FROM_LINE)
         )
         self.conn.execute(
             """

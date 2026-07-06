@@ -13,7 +13,7 @@ import pandas as pd
 
 from .baseline import column_stats, tolerance_band
 from .contracts import CheckResult, FAIL, GOLD, IMPACTED, PASS, WARN
-from .data_loader import DataLoader
+from .data_loader import ORDER_ID_FROM_LINE, DataLoader
 from .resilience import Check, run_checks
 from .revenue_tolerance import REVENUE_ROUNDING_TOLERANCE, revenue_tolerance_detail
 
@@ -60,7 +60,10 @@ def g1_revenue_reconciliation(loader: DataLoader) -> CheckResult:
 
 def g2_order_count_reconciliation(loader: DataLoader) -> CheckResult:
     silver_orders = int(
-        loader.scalar("SELECT COUNT(DISTINCT invoice_no) FROM silver_orders") or 0
+        loader.scalar(
+            f"SELECT COUNT(DISTINCT {ORDER_ID_FROM_LINE}) FROM silver_orders"
+        )
+        or 0
     )
     gold_orders = int(loader.scalar("SELECT total_orders FROM gold_metrics") or 0)
     match = silver_orders == gold_orders
@@ -73,7 +76,7 @@ def g2_order_count_reconciliation(loader: DataLoader) -> CheckResult:
     return CheckResult(
         "G2", "Order Count Reconciliation", GOLD, status,
         observed=gold_orders, expected=silver_orders, detail=detail,
-        evidence_query="SELECT COUNT(DISTINCT invoice_no) FROM silver_orders",
+        evidence_query=f"SELECT COUNT(DISTINCT {ORDER_ID_FROM_LINE}) FROM silver_orders",
     )
 
 

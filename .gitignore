@@ -23,3 +23,8 @@ coverage/
 # Logs / system
 *.log
 .DS_Store
+
+# Olist source CSVs (downloaded by src/olist_ingest.py) and generated inputs
+data/olist/
+data/raw/raw_orders.csv
+data/historical/historical_runs.csv

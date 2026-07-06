@@ -32,8 +32,8 @@ VALID_PREDICATE = (
 EXPECTED_MIN_DROP = 2.0
 EXPECTED_MAX_DROP = 10.0
 
-# A high-quantity wholesale order is still a valid order.
-HIGH_QTY_THRESHOLD = 20
+# Olist line items use quantity=1; the planted Silver bug filters on unit_price.
+HIGH_PRICE_THRESHOLD = 20.0
 BUSINESS_KEY = ("invoice_no", "stock_code", "customer_id", "invoice_date")
 
 
@@ -300,17 +300,17 @@ def s9_record_loss_by_segment(loader: DataLoader) -> CheckResult:
     ),
     seg AS (
         SELECT
-            CASE WHEN quantity > {HIGH_QTY_THRESHOLD}
-                 THEN 'quantity > {HIGH_QTY_THRESHOLD}'
-                 ELSE 'quantity <= {HIGH_QTY_THRESHOLD}' END AS segment,
+            CASE WHEN unit_price > {HIGH_PRICE_THRESHOLD}
+                 THEN 'unit_price > {HIGH_PRICE_THRESHOLD}'
+                 ELSE 'unit_price <= {HIGH_PRICE_THRESHOLD}' END AS segment,
             COUNT(*) AS bronze_valid
         FROM valid_bronze GROUP BY 1
     ),
     sil AS (
         SELECT
-            CASE WHEN quantity > {HIGH_QTY_THRESHOLD}
-                 THEN 'quantity > {HIGH_QTY_THRESHOLD}'
-                 ELSE 'quantity <= {HIGH_QTY_THRESHOLD}' END AS segment,
+            CASE WHEN unit_price > {HIGH_PRICE_THRESHOLD}
+                 THEN 'unit_price > {HIGH_PRICE_THRESHOLD}'
+                 ELSE 'unit_price <= {HIGH_PRICE_THRESHOLD}' END AS segment,
             COUNT(*) AS silver_count
         FROM silver_orders GROUP BY 1
     )
@@ -349,7 +349,7 @@ def s10_wrong_filter_detection(loader: DataLoader) -> CheckResult:
     evidence_key_match = _business_key_match(native=True)
     stats = loader.query(
         f"""
-        SELECT MIN(quantity) AS min_qty, MAX(quantity) AS max_qty, COUNT(*) AS n
+        SELECT MIN(unit_price) AS min_price, MAX(unit_price) AS max_price, COUNT(*) AS n
         FROM bronze_orders b
         WHERE {VALID_PREDICATE}
           AND NOT EXISTS (
@@ -365,21 +365,21 @@ def s10_wrong_filter_detection(loader: DataLoader) -> CheckResult:
             detail="No wrongly-removed records, so no bad filter inferred.",
             evidence_query="",
         )
-    min_qty = float(stats["min_qty"])
-    if min_qty > HIGH_QTY_THRESHOLD:
-        suspected = f"quantity > {HIGH_QTY_THRESHOLD} records are being filtered out"
+    min_price = float(stats["min_price"])
+    if min_price > HIGH_PRICE_THRESHOLD:
+        suspected = f"unit_price > {HIGH_PRICE_THRESHOLD} records are being filtered out"
         detail = (
-            f"All {missing_n:,} missing valid records have quantity >= {min_qty:.0f}; "
+            f"All {missing_n:,} missing valid records have unit_price >= {min_price:.2f}; "
             f"suspected bad filter: {suspected}."
         )
     else:
-        suspected = "unclear filter (missing records span multiple quantity ranges)"
+        suspected = "unclear filter (missing records span multiple price ranges)"
         detail = f"{missing_n:,} valid records missing; {suspected}."
     return CheckResult(
         "S10", "Wrong Filter Detection", SILVER, FAIL,
         observed=suspected, expected="no suspect filter", detail=detail,
         evidence_query=(
-            "SELECT MIN(quantity), MAX(quantity), COUNT(*) FROM bronze_orders b WHERE "
+            "SELECT MIN(unit_price), MAX(unit_price), COUNT(*) FROM bronze_orders b WHERE "
             f"{VALID_PREDICATE} AND NOT EXISTS "
             f"(SELECT 1 FROM silver_orders s WHERE {evidence_key_match})"
         ),

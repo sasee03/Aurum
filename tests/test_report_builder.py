@@ -22,7 +22,7 @@ def test_demo_report_contract_and_story():
     }
     assert report["final_verdict"] == "NOT TRUSTED"
     assert report["first_failed_layer"] == "Bronze \u2192 Silver"
-    assert report["business_impact"]["estimated_loss"] == 4_800_000.0
+    assert report["business_impact"]["estimated_loss"] == 13_447_000.57
 
 
 def test_bronze_returns_exactly_10_checks():

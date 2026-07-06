@@ -19,7 +19,7 @@ from .contracts import (
     FAIL,
     PASS,
 )
-from .data_loader import DataLoader
+from .data_loader import ORDER_ID_FROM_LINE, DataLoader
 from .resilience import Check, run_checks
 from .revenue_tolerance import REVENUE_ROUNDING_TOLERANCE, revenue_tolerance_detail
 from .table_specs import VALID_ROW_PREDICATE
@@ -157,7 +157,9 @@ def rec_key_set(loader: DataLoader) -> CheckResult:
         )
     )
     silver_distinct = int(
-        loader.scalar("SELECT COUNT(DISTINCT invoice_no) FROM silver_orders")
+        loader.scalar(
+            f"SELECT COUNT(DISTINCT {ORDER_ID_FROM_LINE}) FROM silver_orders"
+        )
     )
     gold_orders = int(loader.scalar("SELECT total_orders FROM gold_metrics") or 0)
     gold_excess = gold_orders - silver_distinct
@@ -192,10 +194,10 @@ def rec_key_set(loader: DataLoader) -> CheckResult:
 def rec_aggregate_crosscheck(loader: DataLoader) -> CheckResult:
     """Recompute all Gold aggregates from Silver and compare."""
     silver = loader.query(
-        """
+        f"""
         SELECT
             SUM(net_revenue) AS revenue,
-            COUNT(DISTINCT invoice_no) AS orders,
+            COUNT(DISTINCT {ORDER_ID_FROM_LINE}) AS orders,
             COUNT(DISTINCT customer_id) AS customers
         FROM silver_orders
         """
@@ -227,7 +229,7 @@ def rec_aggregate_crosscheck(loader: DataLoader) -> CheckResult:
             else f"Aggregate mismatch in: {mismatches}."
         ),
         sql=(
-            "SELECT SUM(net_revenue), COUNT(DISTINCT invoice_no), "
+            f"SELECT SUM(net_revenue), COUNT(DISTINCT {ORDER_ID_FROM_LINE}), "
             "COUNT(DISTINCT customer_id) FROM silver_orders"
         ),
         table="gold_metrics",

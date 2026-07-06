@@ -47,6 +47,7 @@ def test_s8_uses_full_business_key_for_multiline_invoice():
     bronze[1]["invoice_no"] = bronze[0]["invoice_no"]
     bronze[1]["stock_code"] = "B2"
     bronze[1]["quantity"] = 25
+    bronze[1]["unit_price"] = 25.0
     silver = to_silver([bronze[0]])
     loader = loader_from(bronze_orders=to_df(bronze), silver_orders=silver)
 
