@@ -4,6 +4,8 @@ Provides a unified interface for data quality rules, schemas, and configurations
 It serves as the deterministic source of truth for the rule library.
 """
 
+from __future__ import annotations
+
 from typing import Dict, Any, Optional
 from ..table_specs import TABLE_SPECS
 

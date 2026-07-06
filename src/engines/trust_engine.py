@@ -3,6 +3,8 @@
 Upgrades the simple verdict logic to a numerical trust score with LLM-generated narrative.
 """
 
+from __future__ import annotations
+
 from typing import Iterable, Dict, Any
 from ..contracts import (
     CheckResult, FAIL, IMPACTED, WARN, PASS, SKIPPED, NOT_TRUSTED, WARNING, TRUSTED

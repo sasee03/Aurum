@@ -4,6 +4,8 @@ Replaces the hardcoded first_failed_layer check with dynamic SQL lineage parsing
 and provides an LLM integration for tracing root causes down to specific transformations.
 """
 
+from __future__ import annotations
+
 from typing import Optional, Dict, Any, List
 from ..contracts import FAIL, IMPACTED, PASS
 
