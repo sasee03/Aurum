@@ -25,6 +25,8 @@ EXPECTED_REPORT_KEYS = frozenset(
         "root_cause",
         "business_impact",
         "suggested_action",
+        "trust_score",
+        "trust_narrative",
         "coverage",
         "detection_layers",
         "checks",

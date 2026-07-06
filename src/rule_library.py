@@ -23,7 +23,9 @@ from .contracts import (
 )
 from .data_loader import DataLoader
 from .resilience import Check, run_checks, skipped_result
-from .table_specs import TABLE_SPECS
+from .engines.metadata_engine import UniversalMetadataEngine
+
+metadata_engine = UniversalMetadataEngine()
 
 
 def _result(
@@ -398,7 +400,8 @@ def run_rule_library(loader: DataLoader) -> list[CheckResult]:
     abort the layer; order is preserved to keep the report stable.
     """
     checks: list[Check] = []
-    for table, spec in TABLE_SPECS.items():
+    for table in metadata_engine.get_all_tables():
+        spec = metadata_engine.get_table_spec(table)
         if not loader.table_exists(table):
             continue
         layer = spec["layer"]

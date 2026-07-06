@@ -19,6 +19,9 @@ from .gold_validator import validate_gold
 from .silver_validator import validate_silver
 from .resilience import build_coverage
 from .verdict_engine import compute_final_verdict, compute_layer_status
+from .engines.trust_engine import TrustScoringEngine
+
+trust_engine = TrustScoringEngine()
 
 REPORT_PATH = Path("reports/report.json")
 PIPELINE = "Raw \u2192 Bronze \u2192 Silver \u2192 Gold"
@@ -88,6 +91,13 @@ def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
         final_verdict, layer_status, root_cause
     )
 
+    trust_score = verdict.get("trust_score", 0)
+    trust_narrative = trust_engine.generate_trust_narrative(
+        score=trust_score,
+        business_impact=business_impact,
+        root_cause=root_cause
+    )
+
     return {
         "project": "Aurum",
         "description": "Cross-layer data quality validation framework",
@@ -101,6 +111,8 @@ def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
         "root_cause": root_cause,
         "business_impact": business_impact,
         "suggested_action": suggested_action,
+        "trust_score": trust_score,
+        "trust_narrative": trust_narrative,
         "coverage": coverage,
         "detection_layers": {
             "layer_1_rules": [r.to_dict() for r in detection.layer_1_rules],

@@ -20,6 +20,9 @@ from .contracts import (
     WARN,
     WARNING,
 )
+from .engines.trust_engine import TrustScoringEngine
+
+trust_engine = TrustScoringEngine()
 
 # Precedence: a single FAIL dominates, then IMPACTED, then WARN, else PASS.
 _LAYER_PRECEDENCE = [FAIL, IMPACTED, WARN, PASS]
@@ -47,13 +50,16 @@ def compute_layer_status(check_results: Iterable) -> str:
 
 def compute_final_verdict(layer_status: dict) -> dict:
     values = list(layer_status.values())
-    if FAIL in values:
-        verdict, severity = NOT_TRUSTED, "HIGH"
-    elif IMPACTED in values or WARN in values:
-        verdict, severity = WARNING, "MEDIUM"
-    else:
-        verdict, severity = TRUSTED, "LOW"
-    return {"final_verdict": verdict, "severity": severity}
+    
+    # Calculate numeric trust score
+    score = trust_engine.compute_score(values)
+    verdict, severity = trust_engine.compute_verdict_from_score(score)
+    
+    return {
+        "final_verdict": verdict, 
+        "severity": severity,
+        "trust_score": score
+    }
 
 
 if __name__ == "__main__":

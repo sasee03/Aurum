@@ -9,8 +9,8 @@
     "silver": "FAIL",
     "gold": "IMPACTED"
   },
-  "final_verdict": "NOT TRUSTED",
-  "severity": "HIGH",
+  "final_verdict": "WARNING",
+  "severity": "MEDIUM",
   "first_failed_layer": "Bronze \u2192 Silver",
   "root_cause": {
     "summary": "Valid high-quantity orders were wrongly removed during the Silver transformation.",
@@ -206,7 +206,7 @@
         "status": "PASS",
         "observed": {
           "max_date": "2026-06-17 00:00:00",
-          "run_date": "2026-07-02 00:00:00",
+          "run_date": "2026-07-03 00:00:00",
           "max_future_days": 0,
           "expected_freshness_days": 365
         },
@@ -362,7 +362,7 @@
         "status": "PASS",
         "observed": {
           "max_date": "2026-06-17 00:00:00",
-          "run_date": "2026-07-02 00:00:00",
+          "run_date": "2026-07-03 00:00:00",
           "max_future_days": 0,
           "expected_freshness_days": 365
         },
@@ -528,7 +528,7 @@
         "status": "PASS",
         "observed": {
           "max_date": "2026-06-17 00:00:00",
-          "run_date": "2026-07-02 00:00:00",
+          "run_date": "2026-07-03 00:00:00",
           "max_future_days": 0,
           "expected_freshness_days": 365
         },
@@ -1096,7 +1096,7 @@
         "status": "PASS",
         "observed": {
           "max_date": "2026-06-17 00:00:00",
-          "run_date": "2026-07-02 00:00:00",
+          "run_date": "2026-07-03 00:00:00",
           "max_future_days": 0,
           "expected_freshness_days": 365
         },
@@ -1252,7 +1252,7 @@
         "status": "PASS",
         "observed": {
           "max_date": "2026-06-17 00:00:00",
-          "run_date": "2026-07-02 00:00:00",
+          "run_date": "2026-07-03 00:00:00",
           "max_future_days": 0,
           "expected_freshness_days": 365
         },
@@ -1607,7 +1607,7 @@
         "status": "PASS",
         "observed": {
           "max_date": "2026-06-17 00:00:00",
-          "run_date": "2026-07-02 00:00:00",
+          "run_date": "2026-07-03 00:00:00",
           "max_future_days": 0,
           "expected_freshness_days": 365
         },

@@ -21,6 +21,9 @@ from .contracts import (
 )
 from .data_loader import DataLoader
 from .resilience import Check, run_checks
+from .engines.lineage_engine import LineageIntelligenceEngine
+
+lineage_engine = LineageIntelligenceEngine()
 
 VALID_BRONZE_PREDICATE = "quantity > 0 AND unit_price > 0"
 
@@ -83,20 +86,10 @@ def x3_silver_to_gold(gold_results: list[CheckResult]) -> CheckResult:
 
 
 def first_failed_layer(layer_status: dict) -> Optional[str]:
-    if layer_status.get("bronze") == FAIL:
-        return "Source \u2192 Bronze"
-    if layer_status.get("silver") == FAIL:
-        return "Bronze \u2192 Silver"
-    if layer_status.get("gold") == FAIL:
-        return "Silver \u2192 Gold"
-    # Gold only impacted because an upstream layer degraded it.
-    if layer_status.get("gold") == IMPACTED and layer_status.get("silver") != PASS:
-        return "Bronze \u2192 Silver"
-    return None
-
+    return lineage_engine.first_failed_layer(layer_status)
 
 def x4_first_failed_layer(layer_status: dict) -> CheckResult:
-    layer = first_failed_layer(layer_status)
+    layer = lineage_engine.first_failed_layer(layer_status)
     status = PASS if layer is None else FAIL
     detail = (
         "No failed layer detected." if layer is None

@@ -93,6 +93,13 @@ def print_summary(report: dict) -> None:
         _print()
 
     _print(f"Final Verdict: {report['final_verdict']} (severity: {report['severity']})")
+    
+    if "trust_score" in report:
+        _print(f"Trust Score:   {report['trust_score']}/100")
+        _print()
+        _print("Trust Narrative (Ollama LLaMA3):")
+        _print(f"  {report.get('trust_narrative', 'N/A')}")
+
     _print()
     _print("Suggested Action:")
     _print(f"  {report['suggested_action']}")
@@ -121,6 +128,35 @@ def main() -> dict:
     path = write_report(report)
     print_summary(report)
     print(f"Report written to {path}")
+    
+    _print("\n--------------------------------------------------")
+    _print("HYBRID METADATA DISCOVERY (silver_orders)")
+    _print("--------------------------------------------------")
+    try:
+        if __package__ in (None, ""):
+            from src.metadata_discovery import discover_demo_session_metadata
+            from src.engines.metadata_engine import UniversalMetadataEngine
+        else:
+            from .metadata_discovery import discover_demo_session_metadata
+            from .engines.metadata_engine import UniversalMetadataEngine
+            
+        _print("1. Running Deterministic Profiling (Postgres)...")
+        session_meta = discover_demo_session_metadata(sample_limit=3)
+        silver_table = next((t for t in session_meta["tables"] if t["table"] == "silver_orders"), None)
+        
+        if silver_table:
+            _print("2. Generating Semantic Explanation via LLM (Ollama)...")
+            metadata_engine = UniversalMetadataEngine()
+            explanation = metadata_engine.explain_metadata_profile(silver_table)
+            
+            _print("\nDeterministic Profile Summary (silver_orders):")
+            _print(f"  Rows: {silver_table['row_count']}, Columns: {silver_table['column_count']}")
+            _print(f"  Candidate Keys: {silver_table['candidate_keys']}")
+            _print("\nSemantic Explanation (Ollama LLaMA3):")
+            _print(f"  {explanation}")
+    except Exception as e:
+        _print(f"Metadata discovery failed: {e}")
+        
     return report
 
 
