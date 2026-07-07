@@ -36,7 +36,7 @@ REPORT_PATH = ROOT / "reports" / "report.json"
 
 ### 2.1 Source file
 
-- **Path:** `c:/Users/prakh/OneDrive/Documents/Aurum/reports/report.json`
+- **Path:** `reports/report.json`
 - **Size:** 75,412 bytes, 2031 lines
 - **Produced by:** `src/report_builder.py:write_report()` after `build_report()` (also written by Streamlit's `run_engine_validation()`)
 
