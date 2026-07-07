@@ -59,7 +59,7 @@
   },
   "suggested_action": "Fix the Silver transformation rule (unit_price > 20.0 records are being filtered out) and rerun the ETL.",
   "trust_score": 40,
-  "trust_narrative": "Narrative Generation Failed: HTTPConnectionPool(host='localhost', port=11434): Max retries exceeded with url: /api/generate (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x000001D1626658B0>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it'))",
+  "trust_narrative": "Narrative Generation Failed: HTTPConnectionPool(host='localhost', port=11434): Max retries exceeded with url: /api/generate (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x00000191693E26D0>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it'))",
   "coverage": {
     "total_checks": 75,
     "passed": 56,
@@ -190,7 +190,7 @@
         "status": "WARN",
         "observed": {
           "max_date": "2018-09-03 00:00:00",
-          "run_date": "2026-07-06 00:00:00",
+          "run_date": "2026-07-07 00:00:00",
           "max_future_days": 0,
           "expected_freshness_days": 365
         },
@@ -346,7 +346,7 @@
         "status": "WARN",
         "observed": {
           "max_date": "2018-09-03 00:00:00",
-          "run_date": "2026-07-06 00:00:00",
+          "run_date": "2026-07-07 00:00:00",
           "max_future_days": 0,
           "expected_freshness_days": 365
         },
@@ -512,7 +512,7 @@
         "status": "WARN",
         "observed": {
           "max_date": "2018-08-29 00:00:00",
-          "run_date": "2026-07-06 00:00:00",
+          "run_date": "2026-07-07 00:00:00",
           "max_future_days": 0,
           "expected_freshness_days": 365
         },

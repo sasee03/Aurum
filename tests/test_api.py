@@ -81,7 +81,7 @@ def test_health_degraded_503_when_db_unreachable(client, monkeypatch):
     assert response.json() == {"status": "degraded", "database": "unreachable"}
 
 
-def test_post_runs_returns_full_15_key_report(client):
+def test_post_runs_returns_full_17_key_report(client):
     response = client.post("/runs", json={"run_id": "api_test_run"})
     assert response.status_code == 200
     report = response.json()

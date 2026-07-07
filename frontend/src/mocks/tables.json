@@ -1,0 +1,98 @@
+{
+  "schemas": [
+    {
+      "name": "public",
+      "tables": [
+        {
+          "id": "tbl-001",
+          "schema": "public",
+          "name": "orders",
+          "owner": "data-eng",
+          "rows": "2.4M",
+          "columns": 18,
+          "size": "412 MB",
+          "lastUpdated": "2h ago"
+        },
+        {
+          "id": "tbl-002",
+          "schema": "public",
+          "name": "customers",
+          "owner": "data-eng",
+          "rows": "890K",
+          "columns": 24,
+          "size": "210 MB",
+          "lastUpdated": "2h ago"
+        },
+        {
+          "id": "tbl-003",
+          "schema": "public",
+          "name": "products",
+          "owner": "catalog-team",
+          "rows": "12K",
+          "columns": 15,
+          "size": "8 MB",
+          "lastUpdated": "1d ago"
+        },
+        {
+          "id": "tbl-004",
+          "schema": "public",
+          "name": "stores",
+          "owner": "ops-team",
+          "rows": "340",
+          "columns": 11,
+          "size": "1 MB",
+          "lastUpdated": "3d ago"
+        },
+        {
+          "id": "tbl-005",
+          "schema": "public",
+          "name": "inventory",
+          "owner": "data-eng",
+          "rows": "1.1M",
+          "columns": 9,
+          "size": "95 MB",
+          "lastUpdated": "2h ago"
+        }
+      ]
+    },
+    {
+      "name": "staging",
+      "tables": [
+        {
+          "id": "tbl-006",
+          "schema": "staging",
+          "name": "payments",
+          "owner": "finance-eng",
+          "rows": "7.1M",
+          "columns": 13,
+          "size": "180 MB",
+          "lastUpdated": "2h ago"
+        },
+        {
+          "id": "tbl-007",
+          "schema": "staging",
+          "name": "employees",
+          "owner": "hr-team",
+          "rows": "8K",
+          "columns": 20,
+          "size": "2 MB",
+          "lastUpdated": "5d ago"
+        },
+        {
+          "id": "tbl-008",
+          "schema": "staging",
+          "name": "promotions",
+          "owner": "marketing",
+          "rows": "640",
+          "columns": 14,
+          "size": "1 MB",
+          "lastUpdated": "1d ago"
+        }
+      ]
+    },
+    {
+      "name": "views",
+      "tables": []
+    }
+  ]
+}

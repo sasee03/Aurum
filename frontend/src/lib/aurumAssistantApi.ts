@@ -1,0 +1,17 @@
+/** Re-exports for Aurum Assistant components (backward-compatible shim). */
+export {
+  askAurumAssistant as postAssistantChat,
+  listCustomChecks,
+  createCustomCheck,
+  runCustomCheck,
+  fetchLatestReport,
+  type AssistantPage,
+  type AssistantLayer,
+  type ChatContext,
+  type ChatRequest,
+  type EmailDraft,
+  type AssistantResponseData,
+  type AssistantResponse,
+  type CustomCheck,
+  type CustomCheckRunResult,
+} from './aurumApi';

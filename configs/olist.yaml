@@ -1,0 +1,24 @@
+dataset:
+  name: Olist Brazilian E-Commerce
+  currency: BRL
+  domain: retail
+  geography_label: state
+
+tables:
+  bronze: bronze_orders
+  silver: silver_orders
+  gold: gold_metrics
+
+columns:
+  primary_key: invoice_no
+  customer_id: customer_id
+  timestamp: invoice_date
+  quantity: quantity
+  unit_price: unit_price
+  geography: country
+  revenue: net_revenue
+
+metrics:
+  revenue_formula: "quantity * unit_price"
+  top_revenue_dimension: country
+  top_revenue_label: state

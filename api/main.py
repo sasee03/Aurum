@@ -1,7 +1,7 @@
 """FastAPI transport layer for Aurum (Ring 3 — API only).
 
 This is a thin HTTP layer over the existing engine. It performs NO reshaping:
-every report is returned exactly as ``build_report()`` produces it (the 15
+every report is returned exactly as ``build_report()`` produces it (the 17
 top-level keys and the ``CheckResult`` shape), so a React UI can call these
 endpoints with no field remapping.
 
@@ -30,6 +30,9 @@ from src.metadata_discovery import (
 )
 from src.report_builder import REPORT_PATH
 from src.run_demo import run_validation
+from src.report_builder import attach_trust_narrative
+
+from api.aurum_assistant.router import router as aurum_assistant_router
 
 REACT_DEV_ORIGINS = [
     "http://localhost:5173",
@@ -37,6 +40,8 @@ REACT_DEV_ORIGINS = [
 ]
 
 app = FastAPI(title="Aurum API", version="1.0.0")
+
+app.include_router(aurum_assistant_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -93,7 +98,7 @@ def trigger_run(request: Optional[RunRequest] = None) -> dict:
     """Run a synchronous validation (~5s) and return the full report dict."""
     global _last_report
     run_id = request.run_id if request is not None else "demo_run_001"
-    report = run_validation(run_id=run_id)
+    report = attach_trust_narrative(run_validation(run_id=run_id))
     _last_report = report
     return report
 
