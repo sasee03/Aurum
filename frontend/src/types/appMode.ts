@@ -3,7 +3,7 @@
 export type AppMode = 'loading' | 'live' | 'verified_snapshot' | 'planned';
 
 /** Badge/display mode for data source labels on report and processing pages. */
-export type DataSourceMode = 'live' | 'verified_snapshot' | 'planned' | 'loading';
+export type DataSourceMode = 'live' | 'verified_snapshot' | 'planned' | 'loading' | 'user_upload';
 
 export interface DatabaseTarget {
   host: string;
@@ -32,6 +32,7 @@ export const MODE_LABELS: Record<Exclude<DataSourceMode, 'loading'>, string> = {
   live: 'Live API',
   verified_snapshot: 'Verified Snapshot',
   planned: 'Planned',
+  user_upload: 'Uploaded CSV',
 };
 
 export const SNAPSHOT_MODE_MESSAGE =

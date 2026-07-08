@@ -1,5 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchLatestReport, runValidation, getMetadataHealth } from '@/lib/aurumApi';
+import { useSearchParams } from 'react-router-dom';
+import {
+  fetchLatestReport,
+  fetchReportByRunId,
+  runValidation,
+  getMetadataHealth,
+} from '@/lib/aurumApi';
 import { useAppMode } from '@/context/AppModeContext';
 import type { DataSourceMode } from '@/types/appMode';
 import type { AurumReport } from '@/types/report';
@@ -14,7 +20,30 @@ export interface ReportPayload {
   source: ReportSource;
 }
 
-async function loadReport(displayMode: DataSourceMode): Promise<ReportPayload> {
+/** A run_id produced by a user CSV upload (POST /datasets/upload). */
+function isUploadRunId(runId: string): boolean {
+  return runId.startsWith('upload_');
+}
+
+async function loadReportByRunId(
+  runId: string,
+  displayMode: DataSourceMode,
+): Promise<ReportPayload> {
+  // Deep-linked / uploaded report: fetch the SPECIFIC run by id. This reads
+  // SQLite app-state on the backend (independent of metadata Postgres), so an
+  // uploaded report is retrievable on reload. We deliberately do NOT fall back
+  // to the demo snapshot here — showing demo data under an upload run_id would
+  // be the wrong-data bug this path exists to prevent.
+  const report = await fetchReportByRunId(runId);
+  const source: ReportSource = isUploadRunId(runId)
+    ? 'user_upload'
+    : displayMode === 'live'
+      ? 'live'
+      : 'verified_snapshot';
+  return { report, source };
+}
+
+async function loadLatestReport(displayMode: DataSourceMode): Promise<ReportPayload> {
   const source: ReportSource =
     displayMode === 'live' ? 'live' : 'verified_snapshot';
 
@@ -34,10 +63,13 @@ async function loadReport(displayMode: DataSourceMode): Promise<ReportPayload> {
 
 export function useReport() {
   const { displayMode, isResolved } = useAppMode();
+  const [searchParams] = useSearchParams();
+  const runId = searchParams.get('runId') ?? undefined;
 
   const query = useQuery({
-    queryKey: ['aurum', 'report', 'latest', displayMode],
-    queryFn: () => loadReport(displayMode),
+    queryKey: ['aurum', 'report', runId ?? 'latest', displayMode],
+    queryFn: () =>
+      runId ? loadReportByRunId(runId, displayMode) : loadLatestReport(displayMode),
     enabled: isResolved,
     staleTime: 15_000,
   });

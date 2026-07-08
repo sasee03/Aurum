@@ -27,6 +27,17 @@ export function DataSourceBadge({ mode, className = '' }: Props) {
     );
   }
 
+  if (mode === 'user_upload') {
+    return (
+      <span
+        className={`inline-flex items-center gap-1 rounded-full border border-[#06b6d4]/30 bg-[#06b6d4]/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#22d3ee] ${className}`}
+        title="Validated from your uploaded CSV"
+      >
+        {MODE_LABELS.user_upload}
+      </span>
+    );
+  }
+
   if (mode === 'planned') {
     return (
       <span

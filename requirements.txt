@@ -4,6 +4,7 @@ numpy==1.24.3
 pandas==2.0.3
 psycopg[binary]
 fastapi
+python-multipart==0.0.20
 httpx
 uvicorn[standard]
 streamlit==1.36.0

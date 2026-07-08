@@ -13,11 +13,18 @@ export function ProjectSubNav({ runId, isRunning }: ProjectSubNavProps = {}) {
   const { pathname } = useLocation();
   const { id } = useParams<{ id: string }>();
   
+  // Preserve an uploaded run's id on the Report link so staying within the
+  // report step keeps showing the UPLOAD report (reload-safe). The demo path
+  // (no upload run) keeps using /reports/latest.
+  const reportQuery = runId && runId.startsWith('upload_')
+    ? `?runId=${encodeURIComponent(runId)}`
+    : '';
+
   const steps = [
     { label: 'Connect', path: `/projects/${id}/connect` },
     { label: 'Explore Datasets', path: `/projects/${id}/select` },
     { label: 'Validate', path: `/projects/${id}/validate/config` },
-    { label: 'Report', path: `/projects/${id}/report/quality` },
+    { label: 'Report', path: `/projects/${id}/report/quality${reportQuery}` },
     { label: 'Remediate', path: `/projects/${id}/remediate` },
   ];
 

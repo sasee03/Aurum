@@ -23,11 +23,14 @@ async function fetchWithTimeout(
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const isFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData;
   try {
     return await fetch(`${API_BASE}${path}`, {
-      headers: { 'Content-Type': 'application/json', ...init?.headers },
-      signal: controller.signal,
       ...init,
+      headers: isFormData
+        ? { ...init?.headers }
+        : { 'Content-Type': 'application/json', ...init?.headers },
+      signal: controller.signal,
     });
   } finally {
     window.clearTimeout(timer);
@@ -230,4 +233,35 @@ export async function getMetadataTables(schema?: string): Promise<any> {
 export async function getMetadataTable(tableName: string, schema?: string): Promise<any> {
   const query = schema ? `?schema=${encodeURIComponent(schema)}` : '';
   return request(`/metadata/tables/${encodeURIComponent(tableName)}${query}`);
+}
+
+export interface CsvUploadMismatch {
+  schema_match: false;
+  error: string;
+  expected_columns: string[];
+  missing_columns: string[];
+}
+
+export class CsvUploadError extends Error {
+  constructor(public readonly mismatch: CsvUploadMismatch) {
+    super(mismatch.error);
+    this.name = 'CsvUploadError';
+  }
+}
+
+export async function uploadDatasetCsv(file: File): Promise<AurumReport> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetchWithTimeout('/datasets/upload', {
+    method: 'POST',
+    body: form,
+  });
+  const body = await res.json();
+  if (res.status === 422 && body?.schema_match === false) {
+    throw new CsvUploadError(body as CsvUploadMismatch);
+  }
+  if (!res.ok) {
+    throw new ApiError(API_UNAVAILABLE);
+  }
+  return body as AurumReport;
 }

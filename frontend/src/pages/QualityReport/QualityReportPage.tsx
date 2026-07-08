@@ -86,6 +86,7 @@ export function QualityReportPage() {
   const [byIdLoaded, setByIdLoaded] = useState(false);
   const [byIdUnavailable, setByIdUnavailable] = useState(false);
   const report = data?.report;
+  const reportBadgeMode = data?.source === 'user_upload' ? 'user_upload' : displayMode;
 
   async function loadByRunId() {
     if (!report?.run_id) return;
@@ -117,7 +118,7 @@ export function QualityReportPage() {
 
       <div className="px-6 py-6 border-b border-[#252637] flex flex-wrap items-center gap-3">
         <h2 className="text-xl font-bold text-[#f1f5f9]">Quality Report</h2>
-        <DataSourceBadge mode={displayMode} />
+        <DataSourceBadge mode={reportBadgeMode} />
         <span className="text-xs text-[#6b7280]">17 top-level keys — verbatim engine output</span>
 
         {report && (
