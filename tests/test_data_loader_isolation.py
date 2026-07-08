@@ -1,3 +1,5 @@
+import time
+
 import pandas as pd
 import psycopg
 import pytest
@@ -37,6 +39,20 @@ def test_construction_failure_leaves_no_orphaned_schema(monkeypatch):
     assert not _schema_exists(captured["schema"]), "orphaned schema left behind"
 
     monkeypatch.setattr(DataLoader, "_install_helpers", original_install)
+
+
+def test_data_loader_connects_with_timeout_and_fails_fast(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DB_HOST", "127.0.0.1")
+    monkeypatch.setenv("DB_PORT", "1")
+    monkeypatch.setenv("DB_CONNECT_TIMEOUT", "1")
+
+    start = time.monotonic()
+    with pytest.raises(psycopg.OperationalError):
+        DataLoader(data_dir=None, build=False)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 3
 
 
 def test_data_loader_instances_use_isolated_schemas():

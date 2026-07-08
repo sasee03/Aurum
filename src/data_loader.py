@@ -27,9 +27,9 @@ import psycopg
 from psycopg import sql
 
 try:
-    from .db_config import postgres_conninfo
+    from .db_config import db_connect_timeout, postgres_conninfo
 except ImportError:  # pragma: no cover - supports `python src/data_loader.py`
-    from db_config import postgres_conninfo
+    from db_config import db_connect_timeout, postgres_conninfo
 
 DATA_DIR = Path("data")
 RAW_CSV = DATA_DIR / "raw" / "raw_orders.csv"
@@ -197,7 +197,11 @@ class DataLoader:
         conn: Optional[Any] = None,
         build: bool = True,
     ) -> None:
-        pg_conn = conn or psycopg.connect(postgres_conninfo(), autocommit=True)
+        pg_conn = conn or psycopg.connect(
+            postgres_conninfo(),
+            autocommit=True,
+            connect_timeout=db_connect_timeout(),
+        )
         self.conn = (
             pg_conn
             if isinstance(pg_conn, PostgresCompatConnection)
