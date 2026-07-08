@@ -7,11 +7,13 @@ import { MetricCard } from '@/components/cards/MetricCard';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
+import { useAppMode } from '@/context/AppModeContext';
 import { useReport } from '@/hooks/useReport';
 
 export function TrustScoringPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const { displayMode } = useAppMode();
   const { data, isLoading } = useReport();
   const report = data?.report;
 
@@ -22,7 +24,7 @@ export function TrustScoringPage() {
 
       <div className="px-6 py-6 border-b border-[#252637] flex flex-wrap items-center gap-3">
         <h2 className="text-xl font-bold text-[#f1f5f9]">Trust Scoring</h2>
-        {data && <DataSourceBadge source={data.source} />}
+        <DataSourceBadge mode={displayMode} />
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">

@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from src.db_config import postgres_conninfo
+from src.db_config import db_connect_timeout, postgres_conninfo, postgres_target_info
 from src.metadata_discovery import (
     AmbiguousTableError,
     discover_demo_session_metadata,
@@ -70,6 +70,25 @@ def _load_latest_report() -> Optional[dict]:
     return None
 
 
+def _database_reachable() -> bool:
+    """Fast, side-effect-free Postgres reachability probe.
+
+    Uses ``DB_CONNECT_TIMEOUT`` so a degraded/absent DB fails fast instead of
+    hanging. Shared by ``/health`` and the ``POST /runs`` guard so both agree on
+    what "live" means (a 200 elsewhere is never treated as proof of a live DB).
+    """
+    try:
+        with psycopg.connect(
+            postgres_conninfo(), connect_timeout=db_connect_timeout()
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        return True
+    except Exception:
+        return False
+
+
 @app.get("/health")
 def health(response: Response) -> dict:
     """Liveness plus a quick Postgres reachability probe. Never runs the engine.
@@ -77,25 +96,49 @@ def health(response: Response) -> dict:
     ``status`` reflects ``database``: if the DB probe fails the top-level status
     is ``"degraded"`` (never ``"ok"``) and the HTTP code is 503, so both the body
     and the HTTP layer tell the truth to load balancers / liveness probes.
-    """
-    try:
-        with psycopg.connect(postgres_conninfo(), connect_timeout=3) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                cur.fetchone()
-        database = "ok"
-    except Exception:
-        database = "unreachable"
 
+    ``database_target`` exposes host/port/database for debugging — never passwords.
+    """
+    target = postgres_target_info()
+    database = "ok" if _database_reachable() else "unreachable"
+
+    body = {
+        "status": "ok" if database == "ok" else "degraded",
+        "database": database,
+        "database_target": target,
+    }
     if database == "ok":
-        return {"status": "ok", "database": database}
+        return body
     response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    return {"status": "degraded", "database": database}
+    return body
 
 
 @app.post("/runs")
 def trigger_run(request: Optional[RunRequest] = None) -> dict:
-    """Run a synchronous validation (~5s) and return the full report dict."""
+    """Run a synchronous validation (~5s) and return the full report dict.
+
+    API-layer live guard: this endpoint is structurally UNCALLABLE unless the
+    database is actually reachable. A disabled UI button is only a suggestion;
+    this server-side probe is the guarantee. A degraded DB is refused FAST (via
+    ``DB_CONNECT_TIMEOUT``) with a clear 503 — the engine / DataLoader is never
+    constructed, so a stale click, re-enabled button, or direct call cannot hang
+    against a degraded backend.
+    """
+    if not _database_reachable():
+        target = postgres_target_info()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "live_validation_unavailable",
+                "message": (
+                    "Live validation is unavailable: the database is unreachable. "
+                    "The API refuses to run validation against a degraded backend "
+                    "(verified snapshot mode). Start PostgreSQL and check /health."
+                ),
+                "database_target": target,
+            },
+        )
+
     global _last_report
     run_id = request.run_id if request is not None else "demo_run_001"
     report = attach_trust_narrative(run_validation(run_id=run_id))
@@ -144,7 +187,7 @@ def report_by_id(run_id: str) -> dict:
 def metadata_health(response: Response) -> dict:
     """Read-only metadata subsystem health (Postgres reachability)."""
     try:
-        with psycopg.connect(postgres_conninfo(), connect_timeout=3) as conn:
+        with psycopg.connect(postgres_conninfo(), connect_timeout=db_connect_timeout()) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
                 cur.fetchone()

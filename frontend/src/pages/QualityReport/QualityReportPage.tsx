@@ -7,6 +7,7 @@ import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { VerdictBadge } from '@/components/ui/Badge';
+import { useAppMode } from '@/context/AppModeContext';
 import { useReport } from '@/hooks/useReport';
 import { REPORT_KEYS } from '@/types/report';
 import { fetchReportByRunId } from '@/lib/aurumApi';
@@ -15,6 +16,7 @@ import { cn } from '@/utils/cn';
 
 export function QualityReportPage() {
   const { id: _id } = useParams<{ id: string }>();
+  const { displayMode } = useAppMode();
   const { data, isLoading } = useReport();
   const [jsonOpen, setJsonOpen] = useState(false);
   const [byIdOpen, setByIdOpen] = useState(false);
@@ -41,7 +43,7 @@ export function QualityReportPage() {
 
       <div className="px-6 py-6 border-b border-[#252637] flex flex-wrap items-center gap-3">
         <h2 className="text-xl font-bold text-[#f1f5f9]">Quality Report</h2>
-        {data && <DataSourceBadge source={data.source} />}
+        <DataSourceBadge mode={displayMode} />
         <span className="text-xs text-[#6b7280]">17 top-level keys — verbatim engine output</span>
       </div>
 

@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { CheckCircle2, ArrowRight, Upload, Eye } from 'lucide-react';
+import { ArrowRight, Upload, Eye } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { cn } from '@/utils/cn';
 import { PlannedBanner } from '@/components/common/PlannedBanner';
+import { DataSourceBadge } from '@/components/common/DataSourceBadge';
+import { usePlannedMode } from '@/context/AppModeContext';
 import connectorsData from '@/mocks/connectors.json';
 import type { Connector } from '@/types';
 
@@ -58,7 +60,6 @@ function ConnectorCard({
 // ────────────────────────────────────────────
 function CsvPanel({ onConnect }: { onConnect: () => void }) {
   const [fileName, setFileName] = useState<string | null>(null);
-  const [connected, setConnected] = useState(false);
   const [testing, setTesting] = useState(false);
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -68,10 +69,9 @@ function CsvPanel({ onConnect }: { onConnect: () => void }) {
 
   async function handleValidate() {
     setTesting(true);
-    await new Promise((r) => setTimeout(r, 1200));
+    await new Promise((r) => setTimeout(r, 800));
     setTesting(false);
-    setConnected(true);
-    toast.success('File validated successfully!');
+    toast('Demo preview — file validation is not wired to a live connector.', { icon: 'ℹ️' });
   }
 
   return (
@@ -158,29 +158,19 @@ function CsvPanel({ onConnect }: { onConnect: () => void }) {
           size="sm"
           isLoading={testing}
           onClick={handleValidate}
-          className="gap-2"
         >
-          {connected ? (
-            <>
-              <CheckCircle2 size={14} className="text-[#22c55e]" />
-              <span className="text-[#22c55e]">Validated</span>
-            </>
-          ) : (
-            'Validate Connection'
-          )}
+          Validate (preview)
         </Button>
       </div>
 
-      {connected && (
-        <Button
-          variant="primary"
-          className="w-full"
-          rightIcon={<ArrowRight size={16} />}
-          onClick={onConnect}
-        >
-          Connect &amp; Continue
-        </Button>
-      )}
+      <Button
+        variant="primary"
+        className="w-full"
+        rightIcon={<ArrowRight size={16} />}
+        onClick={onConnect}
+      >
+        Continue walkthrough
+      </Button>
     </div>
   );
 }
@@ -189,16 +179,16 @@ function CsvPanel({ onConnect }: { onConnect: () => void }) {
 // PostgreSQL Config Panel
 // ────────────────────────────────────────────
 function PostgresPanel({ onConnect }: { onConnect: () => void }) {
-  const [connected, setConnected] = useState(false);
   const [testing, setTesting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
   async function handleTest() {
     setTesting(true);
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, 800));
     setTesting(false);
-    setConnected(true);
-    toast.success('PostgreSQL connected successfully!');
+    toast('Demo preview — connection is not tested against a live PostgreSQL endpoint.', {
+      icon: 'ℹ️',
+    });
   }
 
   return (
@@ -242,34 +232,22 @@ function PostgresPanel({ onConnect }: { onConnect: () => void }) {
           isLoading={testing}
           onClick={handleTest}
           size="sm"
-          className="gap-2"
         >
-          {connected ? (
-            <>
-              <CheckCircle2 size={14} className="text-[#22c55e]" />
-              <span className="text-[#22c55e]">Connected</span>
-            </>
-          ) : (
-            'Test Connection'
-          )}
+          Test Connection (preview)
         </Button>
-        {connected && (
-          <Badge variant="pass" dot>
-            Connected
-          </Badge>
-        )}
+        <Badge variant="warning" dot>
+          Preview
+        </Badge>
       </div>
 
-      {connected && (
-        <Button
-          variant="primary"
-          className="w-full"
-          rightIcon={<ArrowRight size={16} />}
-          onClick={onConnect}
-        >
-          Connect &amp; Continue
-        </Button>
-      )}
+      <Button
+        variant="primary"
+        className="w-full"
+        rightIcon={<ArrowRight size={16} />}
+        onClick={onConnect}
+      >
+        Continue walkthrough
+      </Button>
     </div>
   );
 }
@@ -280,6 +258,9 @@ function PostgresPanel({ onConnect }: { onConnect: () => void }) {
 export function ConnectorsPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const { displayMode } = usePlannedMode(
+    'Connector onboarding is preview-only. The verified Olist demo uses preloaded PostgreSQL data.',
+  );
   const [selected, setSelected] = useState<string | null>(null);
 
   function handleConnect() {
@@ -292,7 +273,10 @@ export function ConnectorsPage() {
     <div className="min-h-full px-6 py-8 animate-fade-in">
       {/* Page Header */}
       <div className="mb-8">
-        <h2 className="text-xl font-bold text-[#f1f5f9]">Connect Data Sources</h2>
+        <div className="flex flex-wrap items-center gap-3">
+          <h2 className="text-xl font-bold text-[#f1f5f9]">Connect Data Sources</h2>
+          <DataSourceBadge mode={displayMode} />
+        </div>
         <p className="mt-1 text-sm text-[#6b7280]">
           Current demo uses preloaded Olist data via PostgreSQL. CSV and PostgreSQL connector flows
           are shown as the planned onboarding path.

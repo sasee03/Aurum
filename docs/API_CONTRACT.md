@@ -22,7 +22,7 @@ returns the report dict verbatim with no reshaping.
 
 | Method | Path | Response | Notes |
 |--------|------|----------|-------|
-| `GET` | `/health` | `{ "status", "database" }` | **Not report-shaped.** Returns HTTP `503` with `status: "degraded"` when Postgres is unreachable. |
+| `GET` | `/health` | `{ "status", "database", "database_target" }` | **Not report-shaped.** `database_target` has `host`, `port`, `database` only (no password). Returns HTTP `503` with `status: "degraded"` when Postgres is unreachable. Uses `DB_CONNECT_TIMEOUT` (default 3s). |
 | `POST` | `/runs` | Full report dict (17 keys) | Body optional: `{ "run_id": "demo_run_001" }`. Synchronous (~5s). Does not write `reports/report.json`. `trust_narrative` is filled after deterministic `build_report()` via `attach_trust_narrative()`. |
 | `GET` | `/reports/latest` | Full report dict | In-memory cache from last `POST /runs`, else on-disk `reports/report.json`. |
 | `GET` | `/reports/{run_id}` | Full report dict | Returns latest only when `run_id` matches. Otherwise `404`. **Ring 5 history not built.** |

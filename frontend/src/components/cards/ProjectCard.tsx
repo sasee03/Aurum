@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import type { Project } from '@/types';
 import type { LayerStatus } from '@/types/report';
+import type { DataSourceMode } from '@/types/appMode';
 import { VerdictBadge, Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { Database, Clock } from 'lucide-react';
@@ -17,14 +18,14 @@ interface ProjectCardProps {
   project: Project;
   /** When set, overrides mock project.status for the demo project card. */
   reportStatus?: ProjectReportStatus | null;
-  /** True when live + fixture report could not be loaded. */
-  reportUnavailable?: boolean;
+  /** Current app display mode from shared resolver. */
+  displayMode?: DataSourceMode;
 }
 
 export function ProjectCard({
   project,
   reportStatus,
-  reportUnavailable,
+  displayMode = 'verified_snapshot',
 }: ProjectCardProps) {
   const navigate = useNavigate();
   const isDemoProject = project.id === OLIST_DEMO_PROJECT_ID;
@@ -37,25 +38,22 @@ export function ProjectCard({
         </Badge>
       );
     }
-    if (reportUnavailable) {
+    if (!reportStatus) {
       return (
         <Badge variant="secondary" className="normal-case tracking-normal">
-          Latest report unavailable
+          {displayMode === 'live' ? 'Live project' : 'Verified snapshot'}
         </Badge>
       );
     }
-    if (reportStatus) {
-      const ls = reportStatus.layer_status;
-      return (
-        <div className="flex flex-col gap-1">
-          <VerdictBadge verdict={reportStatus.final_verdict} />
-          <span className="text-[10px] text-[#6b7280] font-mono">
-            B {ls.bronze} · S {ls.silver} · G {ls.gold}
-          </span>
-        </div>
-      );
-    }
-    return null;
+    const ls = reportStatus.layer_status;
+    return (
+      <div className="flex flex-col gap-1">
+        <VerdictBadge verdict={reportStatus.final_verdict} />
+        <span className="text-[10px] text-[#6b7280] font-mono">
+          B {ls.bronze} · S {ls.silver} · G {ls.gold}
+        </span>
+      </div>
+    );
   }
 
   return (

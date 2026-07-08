@@ -9,6 +9,9 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { Dialog } from '@/components/ui/Dialog';
+import { PlannedBanner } from '@/components/common/PlannedBanner';
+import { DataSourceBadge } from '@/components/common/DataSourceBadge';
+import { usePlannedMode } from '@/context/AppModeContext';
 import { cn } from '@/utils/cn';
 import type { Environment, NewProjectFormValues } from '@/types';
 
@@ -26,6 +29,9 @@ type FormValues = z.infer<typeof schema>;
 
 export function NewProjectPage() {
   const navigate = useNavigate();
+  const { displayMode } = usePlannedMode(
+    'Project onboarding is a planned walkthrough — connector setup and dataset selection are preview-only until live processing is wired.',
+  );
   const [domains, setDomains] = useState<string[]>(INITIAL_DOMAINS);
   const [showDomainDialog, setShowDomainDialog] = useState(false);
   const [newDomain, setNewDomain] = useState('');
@@ -70,9 +76,8 @@ export function NewProjectPage() {
   }
 
   function onSubmit(data: FormValues) {
-    // Mock: generate fake ID and navigate
     const fakeId = `proj-${Date.now()}`;
-    toast.success('Project created!');
+    toast.success('Preview project created — continuing onboarding walkthrough.');
     navigate(`/projects/${fakeId}/connect`);
   }
 
@@ -81,10 +86,16 @@ export function NewProjectPage() {
       <div className="w-full max-w-lg">
         {/* Page Header */}
         <div className="mb-8">
-          <h2 className="text-2xl font-bold text-[#f1f5f9]">Create Project</h2>
+          <div className="flex flex-wrap items-center gap-3 mb-2">
+            <h2 className="text-2xl font-bold text-[#f1f5f9]">Create Project</h2>
+            <DataSourceBadge mode={displayMode} />
+          </div>
           <p className="mt-1 text-sm text-[#6b7280]">
             Define the project identity before connecting any data source.
           </p>
+          <div className="mt-4">
+            <PlannedBanner detail="Onboarding is preview-only. For the verified Olist demo, use Open Existing Project on the landing page." />
+          </div>
         </div>
 
         {/* Form Card */}

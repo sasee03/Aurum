@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Check, RefreshCw, CircleDashed, ArrowRight, Play } from 'lucide-react';
-import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { LogConsole } from '@/components/common/LogConsole';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
+import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
+import { useAppMode } from '@/context/AppModeContext';
 import { useReport, useRunValidation } from '@/hooks/useReport';
+import { SNAPSHOT_MODE_MESSAGE } from '@/types/appMode';
 import { layerStageStatus } from '@/utils/reportFormat';
 import { cn } from '@/utils/cn';
 import type { ExecutionLog } from '@/types';
@@ -52,34 +54,36 @@ function getStatusConfig(status: StageStatus) {
 export function ValidationDashboardPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
-  const { data } = useReport();
+  const { displayMode, canRunValidation, isResolved } = useAppMode();
+  const { data, isLoading } = useReport();
   const runValidation = useRunValidation();
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState<ExecutionLog[]>([]);
   const [finished, setFinished] = useState(false);
 
   const report = data?.report;
-  const source = data?.source ?? 'fixture';
+  const snapshotMode = !canRunValidation;
 
   const stages: { stage: StageName; status: StageStatus }[] = report
     ? [
         {
           stage: 'Bronze',
-          status: running && !finished ? 'RUNNING' : layerStageStatus(report.layer_status.bronze),
+          status:
+            running && !finished ? 'RUNNING' : layerStageStatus(report.layer_status.bronze),
         },
         {
           stage: 'Silver',
-          status: finished
-            ? layerStageStatus(report.layer_status.silver)
-            : running
+          status:
+            running && !finished
               ? 'QUEUED'
               : layerStageStatus(report.layer_status.silver),
         },
         {
           stage: 'Gold',
-          status: finished
-            ? layerStageStatus(report.layer_status.gold)
-            : 'QUEUED',
+          status:
+            running && !finished
+              ? 'QUEUED'
+              : layerStageStatus(report.layer_status.gold),
         },
       ]
     : [
@@ -89,6 +93,8 @@ export function ValidationDashboardPage() {
       ];
 
   async function handleRun() {
+    if (!canRunValidation) return;
+
     setRunning(true);
     setFinished(false);
     setLogs([
@@ -117,7 +123,6 @@ export function ValidationDashboardPage() {
         },
       ]);
       setFinished(true);
-      toast.success('Validation complete');
     } catch {
       setLogs((prev) => [
         ...prev,
@@ -128,11 +133,20 @@ export function ValidationDashboardPage() {
           message: 'Validation could not complete. Try again when the service is available.',
         },
       ]);
-      toast.error('Validation could not complete. Try again shortly.');
     } finally {
       setRunning(false);
     }
   }
+
+  if (!isResolved || isLoading) {
+    return (
+      <div className="p-6">
+        <LoadingSkeleton count={3} className="h-16" />
+      </div>
+    );
+  }
+
+  const canViewResults = Boolean(report) && (snapshotMode || finished);
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
@@ -141,7 +155,7 @@ export function ValidationDashboardPage() {
 
       <div className="px-6 py-6 border-b border-[#252637] flex flex-wrap items-center gap-3">
         <h2 className="text-xl font-bold text-[#f1f5f9]">Validation Execution</h2>
-        <DataSourceBadge source={source} />
+        <DataSourceBadge mode={displayMode} />
         {report && (
           <Badge variant="secondary" className="font-mono text-[10px]">
             {report.run_id}
@@ -150,14 +164,29 @@ export function ValidationDashboardPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto scrollbar-thin p-6 flex flex-col gap-6">
+        {snapshotMode && (
+          <p className="text-sm text-[#94a3b8] rounded-lg border border-[#252637] bg-[#13141e] px-4 py-3">
+            {SNAPSHOT_MODE_MESSAGE}
+          </p>
+        )}
+
         <div className="flex justify-center">
           <Button
             variant="primary"
             leftIcon={<Play size={16} />}
-            onClick={handleRun}
-            disabled={running}
+            onClick={canRunValidation ? handleRun : undefined}
+            disabled={!canRunValidation || running}
+            title={
+              snapshotMode
+                ? 'Live validation is unavailable in snapshot mode'
+                : undefined
+            }
           >
-            {running ? 'Running validation…' : 'Run Validation (POST /runs)'}
+            {running
+              ? 'Running validation…'
+              : snapshotMode
+                ? 'Live validation unavailable in snapshot mode'
+                : 'Run Validation (POST /runs)'}
           </Button>
         </div>
 
@@ -178,7 +207,7 @@ export function ValidationDashboardPage() {
                     </div>
                     <div className="flex flex-col items-center gap-1.5">
                       <span className="text-sm font-bold text-[#f1f5f9]">{stage.stage}</span>
-                        <Badge variant={config.badge} className="px-3">
+                      <Badge variant={config.badge} className="px-3">
                         {stage.status}
                       </Badge>
                     </div>
@@ -206,7 +235,7 @@ export function ValidationDashboardPage() {
         <Button
           variant="primary"
           rightIcon={<ArrowRight size={16} />}
-          disabled={!finished && !report}
+          disabled={!canViewResults}
           onClick={() => navigate(`/projects/${id}/validate/bronze`)}
         >
           View Validation Results

@@ -9,12 +9,14 @@ import { RootCauseCard } from '@/components/cards/RootCauseCard';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
+import { useAppMode } from '@/context/AppModeContext';
 import { useReport } from '@/hooks/useReport';
 import { countChecksByDisplay } from '@/utils/reportFormat';
 
 export function SilverValidationPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const { displayMode } = useAppMode();
   const { data, isLoading } = useReport();
 
   const report = data?.report;
@@ -31,7 +33,7 @@ export function SilverValidationPage() {
       <div className="px-6 py-6 border-b border-[#252637]">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Silver Validation</h2>
-          {data && <DataSourceBadge source={data.source} />}
+          <DataSourceBadge mode={displayMode} />
           {report && (
             <Badge variant={report.layer_status.silver === 'FAIL' ? 'failed' : 'pass'}>
               Layer {report.layer_status.silver}

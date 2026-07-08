@@ -1,9 +1,11 @@
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { PlannedBanner } from '@/components/common/PlannedBanner';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
+import { useAppMode } from '@/context/AppModeContext';
 import { useReport } from '@/hooks/useReport';
 
 export function RunHistoryPage() {
+  const { displayMode } = useAppMode();
   const { data } = useReport();
   const report = data?.report;
 
@@ -13,7 +15,7 @@ export function RunHistoryPage() {
 
       <div className="flex flex-wrap items-center gap-3">
         <h2 className="text-xl font-bold text-[#f1f5f9]">Run History</h2>
-        {data && <DataSourceBadge source={data.source} />}
+        <DataSourceBadge mode={displayMode} />
       </div>
 
       <PlannedBanner

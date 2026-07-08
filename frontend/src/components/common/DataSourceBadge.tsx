@@ -1,26 +1,49 @@
-import type { ReportSource } from '@/hooks/useReport';
+import type { DataSourceMode } from '@/types/appMode';
+import { MODE_LABELS } from '@/types/appMode';
 
 interface Props {
-  source: ReportSource;
+  mode: DataSourceMode;
   className?: string;
 }
 
-export function DataSourceBadge({ source, className = '' }: Props) {
-  if (source === 'live') {
+export function DataSourceBadge({ mode, className = '' }: Props) {
+  if (mode === 'loading') {
+    return (
+      <span
+        className={`inline-flex items-center gap-1 rounded-full border border-[#4b5563]/30 bg-[#1a1b28] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#6b7280] ${className}`}
+      >
+        Checking…
+      </span>
+    );
+  }
+
+  if (mode === 'live') {
     return (
       <span
         className={`inline-flex items-center gap-1 rounded-full border border-[#22c55e]/30 bg-[#22c55e]/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#22c55e] ${className}`}
       >
-        Live API
+        {MODE_LABELS.live}
       </span>
     );
   }
+
+  if (mode === 'planned') {
+    return (
+      <span
+        className={`inline-flex items-center gap-1 rounded-full border border-[#6366f1]/30 bg-[#6366f1]/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#818cf8] ${className}`}
+        title="Not wired to live processing yet"
+      >
+        {MODE_LABELS.planned}
+      </span>
+    );
+  }
+
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full border border-[#f59e0b]/30 bg-[#f59e0b]/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#f59e0b] ${className}`}
-      title="NOT TRUSTED failure-path fixture — not a PASS/TRUSTED demo"
+      title="Verified backend-generated snapshot — not live validation"
     >
-      Fixture fallback
+      {MODE_LABELS.verified_snapshot}
     </span>
   );
 }

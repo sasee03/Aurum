@@ -7,15 +7,17 @@ import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
+import { useAppMode } from '@/context/AppModeContext';
 import { useReport } from '@/hooks/useReport';
 import { formatBrl } from '@/utils/reportFormat';
 
 export function ProjectDashboardPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const { displayMode, isResolved } = useAppMode();
   const { data, isLoading } = useReport();
 
-  if (isLoading) {
+  if (!isResolved || isLoading) {
     return (
       <div className="p-6">
         <LoadingSkeleton count={4} className="h-16" />
@@ -24,7 +26,6 @@ export function ProjectDashboardPage() {
   }
 
   const report = data?.report;
-  const source = data?.source ?? 'fixture';
 
   if (!report) {
     return (
@@ -48,7 +49,7 @@ export function ProjectDashboardPage() {
       <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-6">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Validation Dashboard</h2>
-          <DataSourceBadge source={source} />
+          <DataSourceBadge mode={displayMode} />
           <Badge
             variant={
               report.final_verdict === 'TRUSTED'

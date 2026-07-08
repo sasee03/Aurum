@@ -7,7 +7,9 @@ import {
   type CustomCheckRunResult,
 } from '@/lib/aurumApi';
 import { PageAssistant } from '@/components/common/PageAssistant';
+import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { Button } from '@/components/ui/Button';
+import { useAppMode } from '@/context/AppModeContext';
 import { CUSTOM_CHECKS_UNAVAILABLE } from '@/utils/apiErrors';
 
 const EMPTY_FORM: Omit<CustomCheck, 'check_id'> = {
@@ -22,6 +24,7 @@ const EMPTY_FORM: Omit<CustomCheck, 'check_id'> = {
 };
 
 export function CustomChecksPage() {
+  const { displayMode, backendReachable } = useAppMode();
   const [form, setForm] = useState(EMPTY_FORM);
   const [checks, setChecks] = useState<CustomCheck[]>([]);
   const [preview, setPreview] = useState<CustomCheckRunResult | null>(null);
@@ -29,6 +32,11 @@ export function CustomChecksPage() {
   const [serviceUnavailable, setServiceUnavailable] = useState(false);
 
   const load = useCallback(async () => {
+    if (!backendReachable) {
+      setChecks([]);
+      setServiceUnavailable(true);
+      return;
+    }
     try {
       const data = await listCustomChecks();
       setChecks(data.checks);
@@ -37,7 +45,7 @@ export function CustomChecksPage() {
       setChecks([]);
       setServiceUnavailable(true);
     }
-  }, []);
+  }, [backendReachable]);
 
   useEffect(() => {
     load();
@@ -71,10 +79,13 @@ export function CustomChecksPage() {
       <PageAssistant page="custom_checks" layer="silver" />
 
       <div>
-        <h2 className="text-xl font-bold text-[#f1f5f9]">Custom Checks</h2>
+        <div className="flex flex-wrap items-center gap-3">
+          <h2 className="text-xl font-bold text-[#f1f5f9]">Custom Checks</h2>
+          <DataSourceBadge mode={displayMode} />
+        </div>
         <p className="text-sm text-[#6b7280] mt-1">
-          Domain-specific rules — save/list is real when the service is reachable; preview is
-          demo-only.
+          Domain-specific rules — save/list works when the API is reachable; checks are not yet
+          injected into the validation engine.
         </p>
       </div>
 

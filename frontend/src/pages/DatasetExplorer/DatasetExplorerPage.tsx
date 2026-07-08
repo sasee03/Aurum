@@ -6,6 +6,8 @@ import { SearchBar } from '@/components/common/SearchBar';
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { cn } from '@/utils/cn';
 import { PlannedBanner } from '@/components/common/PlannedBanner';
+import { DataSourceBadge } from '@/components/common/DataSourceBadge';
+import { usePlannedMode } from '@/context/AppModeContext';
 import tablesData from '@/mocks/tables.json';
 
 interface DbTable {
@@ -162,6 +164,9 @@ function TableRowCard({
 export function DatasetExplorerPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const { displayMode } = usePlannedMode(
+    'Dataset Explorer for live connector onboarding is planned / not wired yet.',
+  );
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(
     new Set(['tbl-001', 'tbl-002', 'tbl-003', 'tbl-005'])
@@ -217,10 +222,15 @@ export function DatasetExplorerPage() {
         <div className="flex flex-1 flex-col overflow-hidden">
           {/* Header */}
           <div className="border-b border-[#252637] px-6 py-4">
-            <h2 className="text-lg font-bold text-[#f1f5f9]">Dataset Explorer</h2>
-            <p className="text-xs text-[#6b7280]">Select tables for AURUM to validate this run.</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <h2 className="text-lg font-bold text-[#f1f5f9]">Dataset Explorer</h2>
+              <DataSourceBadge mode={displayMode} />
+            </div>
+            <p className="text-xs text-[#6b7280] mt-1">
+              Sample Olist tables shown as a verified snapshot — not live connector catalog.
+            </p>
             <div className="mt-3">
-              <PlannedBanner detail="Preview — not wired to live API yet. Table catalog will connect to GET /metadata/tables in a future release." />
+              <PlannedBanner detail="Preview — not wired to GET /metadata/tables. Tables below are fixture data for the onboarding walkthrough." />
             </div>
           </div>
 

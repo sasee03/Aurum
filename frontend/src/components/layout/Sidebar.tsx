@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Zap,
 } from 'lucide-react';
+import { useAppMode } from '@/context/AppModeContext';
 import { cn } from '@/utils/cn';
 
 interface NavItem {
@@ -26,8 +27,18 @@ const navItems: NavItem[] = [
   { label: 'Audit', icon: Settings, to: '/settings/audit' },
 ];
 
+function systemStatusLabel(mode: ReturnType<typeof useAppMode>['mode'], databaseOk: boolean) {
+  if (mode === 'loading') return 'Checking…';
+  if (mode === 'live' && databaseOk) return 'System Nominal';
+  if (mode === 'verified_snapshot') return 'Snapshot Mode';
+  return 'Preview';
+}
+
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
+  const { mode, databaseOk } = useAppMode();
+  const statusLabel = systemStatusLabel(mode, databaseOk);
+  const statusHealthy = mode === 'live' && databaseOk;
 
   return (
     <aside
@@ -37,7 +48,6 @@ export function Sidebar() {
       )}
       aria-label="Main navigation"
     >
-      {/* Logo */}
       <div
         className={cn(
           'flex h-14 items-center border-b border-[#252637] px-3 gap-2.5 overflow-hidden',
@@ -54,7 +64,6 @@ export function Sidebar() {
         )}
       </div>
 
-      {/* Nav Items */}
       <nav className="flex flex-col gap-1 p-2 flex-1" aria-label="Site navigation">
         {navItems.map(({ label, icon: Icon, to }) => (
           <NavLink
@@ -79,17 +88,20 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* Activity indicator at bottom */}
       {!collapsed && (
         <div className="p-2 border-t border-[#252637]">
           <div className="flex items-center gap-2 px-2.5 py-2 rounded-lg">
-            <Activity size={14} className="text-[#22c55e] animate-pulse" />
-            <span className="text-xs text-[#6b7280]">System Nominal</span>
+            <Activity
+              size={14}
+              className={cn(
+                statusHealthy ? 'text-[#22c55e] animate-pulse' : 'text-[#f59e0b]',
+              )}
+            />
+            <span className="text-xs text-[#6b7280]">{statusLabel}</span>
           </div>
         </div>
       )}
 
-      {/* Collapse Toggle */}
       <button
         onClick={() => setCollapsed((c) => !c)}
         className="absolute -right-3 top-16 z-10 flex h-6 w-6 items-center justify-center rounded-full border border-[#252637] bg-[#13141e] text-[#6b7280] hover:text-[#f1f5f9] hover:bg-[#1a1b28] transition-all focus:outline-none focus:ring-2 focus:ring-[#6366f1]"
