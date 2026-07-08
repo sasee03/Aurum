@@ -116,6 +116,20 @@ def test_upload_refused_when_db_unreachable(client, monkeypatch):
     assert elapsed <= db_connect_timeout() + 2
 
 
+def test_upload_persists_upload_mode(client):
+    response = client.post(
+        "/datasets/upload",
+        files={"file": ("orders.csv", io.BytesIO(_csv_bytes()), "text/csv")},
+    )
+    assert response.status_code == 200
+    run_id = response.json()["run_id"]
+
+    runs = client.get("/runs")
+    assert runs.status_code == 200
+    matched = next(r for r in runs.json()["runs"] if r["run_id"] == run_id)
+    assert matched["mode"] == "upload"
+
+
 def test_upload_does_not_change_reports_latest(client):
     """Upload persists by run_id; GET /reports/latest must remain the demo report."""
     demo = client.post("/runs", json={"run_id": "latest_guard_demo"})

@@ -134,6 +134,17 @@ def test_report_includes_skipped_status(client):
     assert "SKIPPED" in check_statuses or report["coverage"].get("skipped", 0) >= 1
 
 
+def test_post_runs_persists_demo_mode(client):
+    """POST /runs validates the prepared Olist demo — mode must be 'demo', not 'live'."""
+    response = client.post("/runs", json={"run_id": "mode_label_check"})
+    assert response.status_code == 200
+
+    runs = client.get("/runs")
+    assert runs.status_code == 200
+    matched = next(r for r in runs.json()["runs"] if r["run_id"] == "mode_label_check")
+    assert matched["mode"] == "demo"
+
+
 def test_latest_matches_post_runs(client):
     post = client.post("/runs", json={"run_id": "parity_run_001"})
     assert post.status_code == 200

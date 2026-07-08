@@ -23,6 +23,20 @@ function statusBadgeVariant(status: string): 'pass' | 'warning' | 'failed' | 'de
   return 'default';
 }
 
+function runModeDisplay(mode: string): { label: string; variant: 'pass' | 'warning' | 'failed' | 'default' | 'primary' | 'secondary' } {
+  switch (mode) {
+    case 'demo':
+      return { label: 'Demo', variant: 'warning' };
+    case 'upload':
+      return { label: 'Upload', variant: 'primary' };
+    case 'live':
+      // Legacy rows persisted before the honesty fix; show without crashing.
+      return { label: 'Live', variant: 'default' };
+    default:
+      return { label: mode, variant: 'default' };
+  }
+}
+
 export function RunHistoryPage() {
   const { displayMode, backendReachable } = useAppMode();
   const { data: reportData } = useReport();
@@ -85,6 +99,7 @@ export function RunHistoryPage() {
             <thead>
               <tr className="border-b border-[#252637] bg-[#0d0e14] text-left text-xs uppercase tracking-widest text-[#6b7280]">
                 <th className="px-4 py-2 font-semibold">Run ID</th>
+                <th className="px-4 py-2 font-semibold">Mode</th>
                 <th className="px-4 py-2 font-semibold">Status</th>
                 <th className="px-4 py-2 font-semibold">Started</th>
                 <th className="px-4 py-2 font-semibold">Finished</th>
@@ -96,6 +111,12 @@ export function RunHistoryPage() {
               {runs.map((run) => (
                 <tr key={run.run_id} className="border-b border-[#252637] last:border-b-0">
                   <td className="px-4 py-3 font-mono text-[#f1f5f9]">{run.run_id}</td>
+                  <td className="px-4 py-3">
+                    {(() => {
+                      const { label, variant } = runModeDisplay(run.mode);
+                      return <Badge variant={variant}>{label}</Badge>;
+                    })()}
+                  </td>
                   <td className="px-4 py-3">
                     <Badge variant={statusBadgeVariant(run.status)}>{run.status}</Badge>
                   </td>

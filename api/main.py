@@ -160,7 +160,7 @@ def trigger_run(request: Optional[RunRequest] = None) -> dict:
     report = attach_trust_narrative(run_validation(run_id=run_id))
     _last_report = report
     persisted_run_id = report.get("run_id", run_id)
-    save_validation_run(persisted_run_id, status="completed", mode="live")
+    save_validation_run(persisted_run_id, status="completed", mode="demo")
     save_validation_report(persisted_run_id, report)
     return report
 
