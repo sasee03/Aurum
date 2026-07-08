@@ -1,0 +1,65 @@
+[
+  {
+    "id": "brz-val-1",
+    "title": "Metadata Validation",
+    "description": "18/18 columns present - all types match source contract v3.2",
+    "status": "PASS",
+    "details": {
+      "passedChecks": "18 columns matched",
+      "expectedValue": "18",
+      "measuredValue": "18",
+      "timestamp": "Today 12:04 PM"
+    }
+  },
+  {
+    "id": "brz-val-2",
+    "title": "Schema Validation",
+    "description": "No schema drift detected vs. registered schema - stable since last run",
+    "status": "PASS",
+    "details": {
+      "passedChecks": "drift detection",
+      "timestamp": "Today 12:04 PM"
+    }
+  },
+  {
+    "id": "brz-val-3",
+    "title": "Null Check",
+    "description": "order_id: 0.0% null - customer_id: 0.1% null - within tolerance",
+    "status": "PASS",
+    "details": {
+      "threshold": "< 2%",
+      "measuredValue": "0.1%",
+      "timestamp": "Today 12:04 PM"
+    }
+  },
+  {
+    "id": "brz-val-4",
+    "title": "Duplicate Check",
+    "description": "1.2% duplicate rows detected (28,822 of 2,401,884) - above 0.5% threshold",
+    "status": "WARNING",
+    "details": {
+      "threshold": "< 0.5%",
+      "measuredValue": "1.2%",
+      "timestamp": "Today 12:04 PM"
+    }
+  },
+  {
+    "id": "brz-val-5",
+    "title": "PK Validation",
+    "description": "order_id uniqueness confirmed across full 2.4M row dataset",
+    "status": "PASS",
+    "details": {
+      "passedChecks": "100% unique",
+      "timestamp": "Today 12:05 PM"
+    }
+  },
+  {
+    "id": "brz-val-6",
+    "title": "Volume Validation",
+    "description": "Expected data volume arrived within SLA",
+    "status": "PASS",
+    "details": {
+      "timestamp": "Today 12:05 PM"
+    }
+  }
+]

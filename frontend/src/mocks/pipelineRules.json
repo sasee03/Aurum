@@ -1,0 +1,20 @@
+[
+  {
+    "id": "brz-1",
+    "type": "schema_check",
+    "category": "Bronze",
+    "code": "schema_check: strict\nnull_check: order_id, customer_id\npk_check: order_id UNIQUE\nduplicate_threshold: 0.5%\nfreshness_sla: 4h\nvolume_drift: ±10%"
+  },
+  {
+    "id": "slv-1",
+    "type": "join_validation",
+    "category": "Silver",
+    "code": "join: orders -> customers\nfilter: status != 'void'\nderived: net_total formula\nagg_check: daily_revenue\nrow_delta_tolerance: 0.1%"
+  },
+  {
+    "id": "gld-1",
+    "type": "business_rules",
+    "category": "Gold",
+    "code": "kpi: revenue, margin, orders\nmargin_threshold: >= 12%\nrevenue_tolerance: ±5%\nreport_binding: exec_dashboard"
+  }
+]

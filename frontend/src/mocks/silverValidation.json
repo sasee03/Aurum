@@ -1,0 +1,71 @@
+[
+  {
+    "id": "slv-val-1",
+    "title": "Transformation Validation",
+    "description": "Expected 2,401,884 rows after transform - got 2,373,062 (-28,822 rows missing)",
+    "status": "FAIL",
+    "details": {
+      "expectedValue": "2,401,884",
+      "measuredValue": "2,373,062",
+      "timestamp": "Today 12:08 PM",
+      "rootCause": {
+        "explanation": "Line 6: discount_pct <= 0 drops all discount_pct > 0 rows, causing 28,822 missing valid orders.",
+        "affectedRecords": "28,822 records",
+        "suggestedFix": "Change WHERE condition to allow valid discount percentages or handle nulls explicitly."
+      }
+    }
+  },
+  {
+    "id": "slv-val-2",
+    "title": "Join Validation",
+    "description": "orders ↔ customers join: 99.97% match rate - 722 orphaned records (within tolerance)",
+    "status": "PASS",
+    "details": {
+      "threshold": "> 99.0%",
+      "measuredValue": "99.97%",
+      "timestamp": "Today 12:08 PM"
+    }
+  },
+  {
+    "id": "slv-val-3",
+    "title": "Business Rules",
+    "description": "Rule 'exclude void orders' is over-matching - incorrectly removes discount_pct > 0 orders",
+    "status": "FAIL",
+    "details": {
+      "rootCause": {
+        "explanation": "Business rule logic failure in filtering condition.",
+        "affectedRecords": "28,822 records",
+        "suggestedFix": "Update business rule filter expression."
+      }
+    }
+  },
+  {
+    "id": "slv-val-4",
+    "title": "Filters",
+    "description": "status != 'void' filter removes 1.4% more rows than prior validated baseline",
+    "status": "WARNING",
+    "details": {
+      "threshold": "< 1%",
+      "measuredValue": "1.4%",
+      "timestamp": "Today 12:09 PM"
+    }
+  },
+  {
+    "id": "slv-val-5",
+    "title": "Aggregations",
+    "description": "daily_revenue aggregation reconciles to Bronze source within 0.02%",
+    "status": "PASS",
+    "details": {
+      "timestamp": "Today 12:09 PM"
+    }
+  },
+  {
+    "id": "slv-val-6",
+    "title": "Derived Columns",
+    "description": "net_total correctly calculated for all remaining orders",
+    "status": "PASS",
+    "details": {
+      "timestamp": "Today 12:09 PM"
+    }
+  }
+]

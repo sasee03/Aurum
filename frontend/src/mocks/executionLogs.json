@@ -1,0 +1,50 @@
+[
+  {
+    "id": "12:04:01",
+    "timestamp": "12:04:01",
+    "level": "INFO",
+    "message": "Pipeline started - Run #4127 - Retail Analytics"
+  },
+  {
+    "id": "12:04:02",
+    "timestamp": "12:04:02",
+    "level": "INFO",
+    "message": "4 tables dispatched to Bronze engine"
+  },
+  {
+    "id": "12:04:05",
+    "timestamp": "12:04:05",
+    "level": "PASS",
+    "message": "Bronze schema check passed - 18/18 columns matched"
+  },
+  {
+    "id": "12:04:07",
+    "timestamp": "12:04:07",
+    "level": "PASS",
+    "message": "Bronze PK validation passed - order_id uniqueness confirmed"
+  },
+  {
+    "id": "12:04:09",
+    "timestamp": "12:04:09",
+    "level": "PASS",
+    "message": "Bronze layer complete - 7/7 checks passed"
+  },
+  {
+    "id": "12:04:10",
+    "timestamp": "12:04:10",
+    "level": "INFO",
+    "message": "Silver validation started - transformation & join checks"
+  },
+  {
+    "id": "12:04:14",
+    "timestamp": "12:04:14",
+    "level": "WARN",
+    "message": "discount_pct completeness 81%, below 95% threshold"
+  },
+  {
+    "id": "12:04:19",
+    "timestamp": "12:04:19",
+    "level": "RUN",
+    "message": "Evaluating join_validate: orders + customers ..."
+  }
+]

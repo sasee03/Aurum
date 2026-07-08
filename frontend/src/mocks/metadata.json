@@ -1,0 +1,54 @@
+[
+  {
+    "tableId": "tbl-001",
+    "totalRows": "2,401,884",
+    "columns": 18,
+    "primaryKeys": 1,
+    "pkColumns": ["order_id"],
+    "foreignKeys": 3,
+    "missingValuesPct": 0.4,
+    "duplicatePct": 1.2,
+    "nullPct": 2.1,
+    "uniquePct": 99.6,
+    "outliers": 312,
+    "freshness": "2h ago",
+    "columnsQuality": [
+      { "name": "order_id", "completeness": 100 },
+      { "name": "customer_id", "completeness": 99 },
+      { "name": "order_date", "completeness": 97 },
+      { "name": "discount_pct", "completeness": 81 },
+      { "name": "status", "completeness": 100 },
+      { "name": "store_id", "completeness": 88 },
+      { "name": "total", "completeness": 95 }
+    ],
+    "nullDensityPattern": [
+      [1, 0, 1, 0, 2, 0, 0, 1, 0, 0, 0, 2, 1, 0, 3],
+      [0, 1, 0, 1, 0, 0, 2, 1, 0, 0, 1, 0, 0, 4, 0],
+      [1, 0, 0, 2, 2, 0, 1, 0, 0, 1, 0, 4, 0, 0, 1],
+      [0, 0, 1, 0, 0, 3, 0, 1, 0, 0, 2, 0, 1, 0, 0]
+    ]
+  },
+  {
+    "tableId": "tbl-002",
+    "totalRows": "890,123",
+    "columns": 24,
+    "primaryKeys": 1,
+    "pkColumns": ["customer_id"],
+    "foreignKeys": 0,
+    "missingValuesPct": 0.1,
+    "duplicatePct": 0.2,
+    "nullPct": 0.5,
+    "uniquePct": 99.9,
+    "outliers": 45,
+    "freshness": "1d ago",
+    "columnsQuality": [
+      { "name": "customer_id", "completeness": 100 },
+      { "name": "email", "completeness": 95 },
+      { "name": "signup_date", "completeness": 100 }
+    ],
+    "nullDensityPattern": [
+      [0, 0, 1, 0, 0, 0, 0, 1, 0],
+      [0, 1, 0, 0, 1, 0, 0, 0, 0]
+    ]
+  }
+]
