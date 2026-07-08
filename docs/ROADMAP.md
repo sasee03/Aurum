@@ -49,7 +49,11 @@ These are the rules that keep Aurum honest and correct. Breaking any of them is 
 **Known environment facts:**
 - Repo lives under OneDrive — a lock/conflict risk. Move to a non-synced path (e.g. `C:\dev\Aurum`) once work is clean; not mid-flight.
 - DB env precedence: `DATABASE_URL` → `DB_*` → `AURUM_POSTGRES_*` → defaults. Office setup uses `DATABASE_URL` only. No new env families.
-- Docker is intentionally NOT used. Target runtime is local Windows + PostgreSQL + pgAdmin.
+- Local Postgres runs via Docker for the current demo/runtime setup.
+
+### Local Docker Postgres note
+
+Postgres runs via Docker (container `aurum-postgres`, port `5433`). Docker Desktop must be running before the backend, tests, or any live `/runs` call will work. If `GET /health` returns degraded/503, check Docker Desktop first before assuming a config or code problem.
 
 ---
 
