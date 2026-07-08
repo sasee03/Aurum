@@ -14,7 +14,6 @@ import api.main as api_main
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORT_PATH = ROOT / "reports" / "report.json"
-HISTORY_PATH = ROOT / "data" / "history" / "history_records.json"
 CUSTOM_CHECKS_PATH = ROOT / "data" / "custom_checks" / "custom_checks.json"
 
 
@@ -127,12 +126,75 @@ def test_top_states_revenue(client, sample_report):
 
 
 def test_compare_with_history(client, sample_report):
+    from src.app_state.store import save_validation_report, save_validation_run
+
+    save_validation_run("history_sqlite_01", status="completed", mode="live")
+    save_validation_report(
+        "history_sqlite_01",
+        {
+            "run_id": "history_sqlite_01",
+            "final_verdict": "TRUSTED",
+            "checks": {
+                "bronze": [{"check_id": "B1", "observed": 100000, "status": "PASS"}],
+                "silver": [
+                    {
+                        "check_id": "S1",
+                        "status": "PASS",
+                        "extra": {"bronze": 100000, "silver": 95000},
+                    }
+                ],
+                "gold": [],
+                "cross_layer": [],
+            },
+        },
+    )
+
     api_main._last_report = sample_report
     response = _chat(client, "Compare this run with history", page="history")
     assert response.status_code == 200
     body = response.json()
     assert body["intent"] == "history_explanation"
     assert "histor" in body["answer"].lower()
+    assert body["data"]["table"][-1]["run_id"] == "history_sqlite_01"
+
+
+def test_assistant_history_from_sqlite_not_bootstrap_csv():
+    """Assistant history must match GET /runs — never historical_runs.csv."""
+    from api.aurum_assistant.context import load_history_records
+    from src.app_state.store import save_validation_report, save_validation_run
+
+    # Repo ships historical_runs.csv with bootstrap rows; isolated SQLite starts empty.
+    assert load_history_records() == []
+
+    save_validation_run("sparse_run_001", status="completed", mode="live")
+    save_validation_report(
+        "sparse_run_001",
+        {
+            "run_id": "sparse_run_001",
+            "final_verdict": "NOT TRUSTED",
+            "trust_score": 40,
+            "checks": {
+                "bronze": [{"check_id": "B1", "observed": 50000, "status": "PASS"}],
+                "silver": [
+                    {
+                        "check_id": "S1",
+                        "status": "FAIL",
+                        "extra": {"bronze": 50000, "silver": 40000},
+                    }
+                ],
+                "gold": [],
+                "cross_layer": [],
+            },
+        },
+    )
+
+    records = load_history_records()
+    assert len(records) == 1
+    assert records[0]["run_id"] == "sparse_run_001"
+    assert records[0]["bronze_rows"] == 50000
+    assert records[0]["silver_rows"] == 40000
+    assert records[0]["final_verdict"] == "NOT TRUSTED"
+    assert all(not r["run_id"].startswith("history_") for r in records)
 
 
 def test_draft_stakeholder_email(client, sample_report):

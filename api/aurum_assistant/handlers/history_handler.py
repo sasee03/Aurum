@@ -29,8 +29,8 @@ def handle(
 
     if not history:
         return fallback_response(
-            "No local history records found. Add data/historical/historical_runs.csv and try again.",
-            ["Create history file", "Run validation to populate current run"],
+            "No validation run history found yet. Run validation via POST /runs to populate history.",
+            ["Run validation", "Check Run History after a completed run"],
         )
 
     retentions = [_retention_pct(h["bronze_rows"], h["silver_rows"]) for h in history]

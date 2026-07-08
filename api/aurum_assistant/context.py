@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import json
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -11,8 +10,6 @@ from src.config_loader import load_dataset_config
 
 ROOT = Path(__file__).resolve().parents[2]
 REPORT_PATH = ROOT / "reports" / "report.json"
-HISTORICAL_CSV_PATH = ROOT / "data" / "historical" / "historical_runs.csv"
-HISTORY_PATH = ROOT / "data" / "history" / "history_records.json"
 CUSTOM_CHECKS_PATH = ROOT / "data" / "custom_checks" / "custom_checks.json"
 SAMPLE_ORDERS_PATH = ROOT / "data" / "sample" / "sample_orders.json"
 
@@ -66,35 +63,61 @@ def load_latest_report() -> Optional[dict]:
     return load_json_file(REPORT_PATH)
 
 
-def _history_from_csv() -> list[dict]:
-    if not HISTORICAL_CSV_PATH.exists():
-        return []
-    records: list[dict] = []
-    with HISTORICAL_CSV_PATH.open(encoding="utf-8", newline="") as handle:
-        for row in csv.DictReader(handle):
-            records.append(
-                {
-                    "run_id": row["run_id"],
-                    "bronze_rows": int(float(row["bronze_count"])),
-                    "silver_rows": int(float(row["silver_count"])),
-                    "drop_pct": float(row.get("drop_pct", 0)),
-                    "gold_revenue": float(row["gold_revenue"]),
-                    # Engine bootstrap history represents normal retained runs.
-                    "final_verdict": "TRUSTED",
-                }
-            )
-    return records
+def _row_counts_from_report(report: dict) -> tuple[int, int]:
+    """Extract bronze/silver row counts from a validation report when present."""
+    bronze_rows = 0
+    silver_rows = 0
+    checks = report.get("checks", {})
+    for check in checks.get("bronze", []):
+        if check.get("check_id") == "B1" and check.get("observed") is not None:
+            bronze_rows = int(check["observed"])
+            break
+    for check in checks.get("silver", []):
+        extra = check.get("extra")
+        if check.get("check_id") == "S1" and isinstance(extra, dict):
+            if extra.get("silver") is not None:
+                silver_rows = int(extra["silver"])
+            if bronze_rows == 0 and extra.get("bronze") is not None:
+                bronze_rows = int(extra["bronze"])
+            break
+    return bronze_rows, silver_rows
 
 
 def load_history_records() -> list[dict]:
-    """Prefer engine history CSV; fall back to JSON snapshot."""
-    csv_records = _history_from_csv()
-    if csv_records:
-        return csv_records
-    records = load_json_file(HISTORY_PATH, default=None)
-    if records is not None:
-        return records
-    return []
+    """Load run history from SQLite only (same source as GET /runs)."""
+    from src.app_state.store import get_report_by_run_id, list_validation_runs
+
+    records: list[dict] = []
+    for run in list_validation_runs():
+        report = get_report_by_run_id(run["run_id"])
+        bronze_rows = 0
+        silver_rows = 0
+        gold_revenue = 0.0
+        if report:
+            bronze_rows, silver_rows = _row_counts_from_report(report)
+            impact = report.get("business_impact", {})
+            gold_revenue = float(
+                impact.get("actual_revenue") or impact.get("expected_revenue") or 0
+            )
+
+        drop_pct = 0.0
+        if bronze_rows > 0:
+            drop_pct = round((1 - silver_rows / bronze_rows) * 100, 1)
+
+        records.append(
+            {
+                "run_id": run["run_id"],
+                "bronze_rows": bronze_rows,
+                "silver_rows": silver_rows,
+                "drop_pct": drop_pct,
+                "gold_revenue": gold_revenue,
+                "final_verdict": run.get("final_verdict") or "UNKNOWN",
+                "trust_score": run.get("trust_score"),
+                "started_at": run.get("started_at"),
+                "status": run.get("status"),
+            }
+        )
+    return records
 
 
 def load_custom_checks() -> list[dict]:
