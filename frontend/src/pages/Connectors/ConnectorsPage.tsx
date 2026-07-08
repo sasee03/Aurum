@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowRight, Upload, Eye } from 'lucide-react';
+import { CheckCircle2, ArrowRight, Upload, Eye, AlertTriangle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -9,6 +9,7 @@ import { cn } from '@/utils/cn';
 import { PlannedBanner } from '@/components/common/PlannedBanner';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { usePlannedMode } from '@/context/AppModeContext';
+import { getMetadataHealth } from '@/lib/aurumApi';
 import connectorsData from '@/mocks/connectors.json';
 import type { Connector } from '@/types';
 
@@ -56,7 +57,7 @@ function ConnectorCard({
 }
 
 // ────────────────────────────────────────────
-// CSV Config Panel
+// CSV Config Panel (preview-only)
 // ────────────────────────────────────────────
 function CsvPanel({ onConnect }: { onConnect: () => void }) {
   const [fileName, setFileName] = useState<string | null>(null);
@@ -163,6 +164,10 @@ function CsvPanel({ onConnect }: { onConnect: () => void }) {
         </Button>
       </div>
 
+      <p className="text-xs text-[#6b7280] italic">
+        CSV upload flow UI ready; backend ingestion is pending.
+      </p>
+
       <Button
         variant="primary"
         className="w-full"
@@ -176,39 +181,53 @@ function CsvPanel({ onConnect }: { onConnect: () => void }) {
 }
 
 // ────────────────────────────────────────────
-// PostgreSQL Config Panel
+// PostgreSQL Config Panel — real backend DB reachability test
 // ────────────────────────────────────────────
 function PostgresPanel({ onConnect }: { onConnect: () => void }) {
+  const [connected, setConnected] = useState(false);
+  const [degraded, setDegraded] = useState(false);
   const [testing, setTesting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
   async function handleTest() {
     setTesting(true);
-    await new Promise((r) => setTimeout(r, 800));
-    setTesting(false);
-    toast('Demo preview — connection is not tested against a live PostgreSQL endpoint.', {
-      icon: 'ℹ️',
-    });
+    setConnected(false);
+    setDegraded(false);
+    try {
+      const res = await getMetadataHealth();
+      if (res.status === 'ok') {
+        setConnected(true);
+        toast.success('PostgreSQL connected successfully.');
+      } else {
+        setDegraded(true);
+      }
+    } catch {
+      toast.error('Backend API is not running. Check the connection.');
+    } finally {
+      setTesting(false);
+    }
   }
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-3 gap-3">
         <div className="col-span-2">
-          <Input label="Host" placeholder="localhost" />
+          <Input label="Host" defaultValue="localhost" disabled readOnly />
         </div>
-        <Input label="Port" type="number" placeholder="5432" defaultValue="5432" />
+        <Input label="Port" type="number" defaultValue="5433" disabled readOnly />
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <Input label="Database" placeholder="my_database" />
-        <Input label="Schema" placeholder="public" defaultValue="public" />
+        <Input label="Database" defaultValue="aurum" disabled readOnly />
+        <Input label="Schema" defaultValue="public" disabled readOnly />
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <Input label="Username" placeholder="postgres" />
+        <Input label="Username" defaultValue="aurum" disabled readOnly />
         <Input
           label="Password"
           type={showPassword ? 'text' : 'password'}
-          placeholder="••••••••"
+          defaultValue="aurum"
+          disabled
+          readOnly
           rightIcon={
             <button
               type="button"
@@ -221,8 +240,8 @@ function PostgresPanel({ onConnect }: { onConnect: () => void }) {
           }
         />
       </div>
-      <label className="flex items-center gap-2.5 cursor-pointer">
-        <input type="checkbox" className="h-4 w-4 rounded border-[#252637] accent-[#6366f1]" />
+      <label className="flex items-center gap-2.5 cursor-not-allowed opacity-60">
+        <input type="checkbox" disabled className="h-4 w-4 rounded border-[#252637] accent-[#6366f1]" />
         <span className="text-sm text-[#94a3b8]">Enable SSL</span>
       </label>
 
@@ -233,21 +252,59 @@ function PostgresPanel({ onConnect }: { onConnect: () => void }) {
           onClick={handleTest}
           size="sm"
         >
-          Test Connection (preview)
+          {connected ? (
+            <>
+              <CheckCircle2 size={14} className="text-[#22c55e]" />
+              <span className="text-[#22c55e]">Connected</span>
+            </>
+          ) : (
+            'Test Backend DB Connection'
+          )}
         </Button>
         <Badge variant="warning" dot>
           Preview
         </Badge>
       </div>
 
-      <Button
-        variant="primary"
-        className="w-full"
-        rightIcon={<ArrowRight size={16} />}
-        onClick={onConnect}
-      >
-        Continue walkthrough
-      </Button>
+      <p className="text-xs text-[#6b7280] italic">
+        Demo mode: uses the backend-configured PostgreSQL connection. The custom-credentials UI is
+        ready; dynamic connection wiring is pending.
+      </p>
+
+      {connected && (
+        <Button
+          variant="primary"
+          className="w-full"
+          rightIcon={<ArrowRight size={16} />}
+          onClick={onConnect}
+        >
+          Explore Datasets
+        </Button>
+      )}
+
+      {degraded && (
+        <div className="mt-4 p-3 bg-[#451a03] border border-[#78350f] rounded-md space-y-2 animate-slide-up">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={16} className="text-[#f59e0b] mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-sm font-semibold text-[#fde68a]">
+                Backend is running, but local PostgreSQL is unavailable on this machine.
+              </p>
+              <p className="text-xs text-[#fcd34d] mt-1">
+                You can continue with clearly labelled demo metadata.
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="secondary"
+            className="w-full mt-2 border-[#78350f] text-[#fcd34d] hover:bg-[#78350f]/50 gap-2"
+            rightIcon={<ArrowRight size={14} />}
+            onClick={onConnect}
+          >
+            Continue with Demo Metadata
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -282,7 +339,7 @@ export function ConnectorsPage() {
           are shown as the planned onboarding path.
         </p>
         <div className="mt-4 max-w-2xl">
-          <PlannedBanner detail="Preview — not wired to live API yet. Connector selection does not persist credentials or test connections." />
+          <PlannedBanner detail="Preview — connector selection does not persist credentials. The PostgreSQL panel can test live backend DB reachability but does not create new connections yet." />
         </div>
         <p className="mt-2 text-sm text-[#6b7280]">Select a system to configure your connection.</p>
       </div>

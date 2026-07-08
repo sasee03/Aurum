@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchLatestReport, runValidation } from '@/lib/aurumApi';
+import { fetchLatestReport, runValidation, getMetadataHealth } from '@/lib/aurumApi';
 import { useAppMode } from '@/context/AppModeContext';
 import type { DataSourceMode } from '@/types/appMode';
 import type { AurumReport } from '@/types/report';
@@ -19,6 +19,12 @@ async function loadReport(displayMode: DataSourceMode): Promise<ReportPayload> {
     displayMode === 'live' ? 'live' : 'verified_snapshot';
 
   try {
+    // Defensive DB probe: if metadata Postgres is not reachable, serve the
+    // verified snapshot instead of pretending the fetched report is live.
+    const health = await getMetadataHealth().catch(() => ({ status: 'error' }));
+    if (health.status !== 'ok') {
+      return { report: sampleReport, source: 'verified_snapshot' };
+    }
     const report = await fetchLatestReport();
     return { report, source };
   } catch {

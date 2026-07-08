@@ -164,3 +164,17 @@ export async function runCustomCheck(checkId: string): Promise<CustomCheckRunRes
     body: JSON.stringify({ check_id: checkId }),
   });
 }
+
+export async function getMetadataHealth(): Promise<{ status: string; detail?: string }> {
+  return request('/metadata/health');
+}
+
+export async function getMetadataTables(schema?: string): Promise<any> {
+  const query = schema ? `?schema=${encodeURIComponent(schema)}` : '';
+  return request(`/metadata/tables${query}`);
+}
+
+export async function getMetadataTable(tableName: string, schema?: string): Promise<any> {
+  const query = schema ? `?schema=${encodeURIComponent(schema)}` : '';
+  return request(`/metadata/tables/${encodeURIComponent(tableName)}${query}`);
+}
