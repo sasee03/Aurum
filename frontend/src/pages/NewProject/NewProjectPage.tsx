@@ -11,7 +11,8 @@ import { Textarea } from '@/components/ui/Textarea';
 import { Dialog } from '@/components/ui/Dialog';
 import { PlannedBanner } from '@/components/common/PlannedBanner';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
-import { usePlannedMode } from '@/context/AppModeContext';
+import { useAppMode } from '@/context/AppModeContext';
+import { createProject } from '@/lib/aurumApi';
 import { cn } from '@/utils/cn';
 import type { Environment, NewProjectFormValues } from '@/types';
 
@@ -29,9 +30,7 @@ type FormValues = z.infer<typeof schema>;
 
 export function NewProjectPage() {
   const navigate = useNavigate();
-  const { displayMode } = usePlannedMode(
-    'Project onboarding is a planned walkthrough — connector setup and dataset selection are preview-only until live processing is wired.',
-  );
+  const { displayMode } = useAppMode();
   const [domains, setDomains] = useState<string[]>(INITIAL_DOMAINS);
   const [showDomainDialog, setShowDomainDialog] = useState(false);
   const [newDomain, setNewDomain] = useState('');
@@ -75,10 +74,18 @@ export function NewProjectPage() {
     toast.success(`Domain "${trimmed}" added`);
   }
 
-  function onSubmit(data: FormValues) {
-    const fakeId = `proj-${Date.now()}`;
-    toast.success('Preview project created — continuing onboarding walkthrough.');
-    navigate(`/projects/${fakeId}/connect`);
+  async function onSubmit(data: FormValues) {
+    try {
+      const project = await createProject({
+        name: data.name,
+        description: data.description ?? '',
+        environment: data.environment,
+      });
+      toast.success(`Project "${project.name}" created.`);
+      navigate(`/projects/${project.id}/connect`);
+    } catch {
+      toast.error('Could not create project. Check that the API is running.');
+    }
   }
 
   return (
@@ -94,7 +101,7 @@ export function NewProjectPage() {
             Define the project identity before connecting any data source.
           </p>
           <div className="mt-4">
-            <PlannedBanner detail="Onboarding is preview-only. For the verified Olist demo, use Open Existing Project on the landing page." />
+            <PlannedBanner detail="Project is saved to local app storage. Connector setup and dataset selection remain preview-only in the next steps." />
           </div>
         </div>
 
@@ -214,7 +221,7 @@ export function NewProjectPage() {
                 isLoading={isSubmitting}
                 rightIcon={<ArrowRight size={16} />}
               >
-                Continue
+                Create Project
               </Button>
             </div>
           </form>

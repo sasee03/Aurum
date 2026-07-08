@@ -7,6 +7,7 @@ import {
   type CustomCheckRunResult,
 } from '@/lib/aurumApi';
 import { PageAssistant } from '@/components/common/PageAssistant';
+import { PlannedBanner } from '@/components/common/PlannedBanner';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { Button } from '@/components/ui/Button';
 import { useAppMode } from '@/context/AppModeContext';
@@ -89,7 +90,11 @@ export function CustomChecksPage() {
         </p>
       </div>
 
-      {serviceUnavailable && (
+      {!backendReachable && (
+        <PlannedBanner detail="Custom checks require the API. In snapshot mode, save/list/run are disabled." />
+      )}
+
+      {serviceUnavailable && backendReachable && (
         <p className="text-sm text-[#94a3b8] rounded-lg border border-[#252637] bg-[#13141e] px-4 py-3">
           {CUSTOM_CHECKS_UNAVAILABLE}
         </p>

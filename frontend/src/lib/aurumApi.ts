@@ -70,6 +70,59 @@ export async function fetchReportByRunId(runId: string): Promise<AurumReport> {
   return request<AurumReport>(`/reports/${encodeURIComponent(runId)}`);
 }
 
+export interface ValidationRunSummary {
+  run_id: string;
+  project_id: string | null;
+  connection_id: string | null;
+  status: string;
+  mode: string;
+  started_at: string;
+  finished_at: string | null;
+  error_message: string | null;
+  trust_score: number | null;
+  final_verdict: string | null;
+}
+
+export async function fetchRuns(): Promise<{ runs: ValidationRunSummary[] }> {
+  return request<{ runs: ValidationRunSummary[] }>('/runs');
+}
+
+export interface ApiProject {
+  id: string;
+  name: string;
+  description: string;
+  environment: string;
+  created_at: string;
+  updated_at: string;
+  last_run_id: string | null;
+  status: string;
+}
+
+export interface CreateProjectPayload {
+  name: string;
+  description?: string;
+  environment: 'Development' | 'QA' | 'Production';
+}
+
+export async function createProject(payload: CreateProjectPayload): Promise<ApiProject> {
+  const res = await fetchWithTimeout('/projects', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new ApiError(API_UNAVAILABLE);
+  }
+  return res.json() as Promise<ApiProject>;
+}
+
+export async function listProjects(): Promise<{ projects: ApiProject[] }> {
+  return request<{ projects: ApiProject[] }>('/projects');
+}
+
+export async function getProject(projectId: string): Promise<ApiProject> {
+  return request<ApiProject>(`/projects/${encodeURIComponent(projectId)}`);
+}
+
 export type AssistantPage =
   | 'dashboard'
   | 'validation'

@@ -35,12 +35,21 @@ async function loadReport(displayMode: DataSourceMode): Promise<ReportPayload> {
 export function useReport() {
   const { displayMode, isResolved } = useAppMode();
 
-  return useQuery({
+  const query = useQuery({
     queryKey: ['aurum', 'report', 'latest', displayMode],
     queryFn: () => loadReport(displayMode),
     enabled: isResolved,
     staleTime: 15_000,
   });
+
+  // While app-mode is still resolving, the query is disabled (enabled: isResolved),
+  // which leaves react-query's isLoading false and would flash an empty state on a
+  // hard page load. Treat "not yet resolved" as loading so pages show a skeleton
+  // until the snapshot/live decision and the report are both settled.
+  return {
+    ...query,
+    isLoading: query.isLoading || !isResolved,
+  };
 }
 
 export function useRunValidation() {

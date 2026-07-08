@@ -33,18 +33,26 @@ function ConnectorCard({
       onClick={onSelect}
       aria-pressed={selected}
       className={cn(
-        'flex flex-col items-center justify-center gap-2 rounded-xl border p-5 text-center transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[#6366f1]',
+        'relative flex flex-col items-center justify-center gap-2 rounded-xl border p-5 text-center transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[#6366f1]',
         selected
           ? 'border-[#6366f1] bg-[#6366f1]/10 shadow-[0_0_12px_rgba(99,102,241,0.15)]'
-          : 'border-[#252637] bg-[#13141e] hover:border-[#6366f1]/30 hover:bg-[#1a1b28]'
+          : 'border-[#252637] bg-[#13141e] hover:border-[#6366f1]/30 hover:bg-[#1a1b28]',
+        connector.preview && 'opacity-90',
       )}
     >
+      {connector.preview && (
+        <span className="absolute right-2 top-2">
+          <Badge variant="warning" dot>
+            Preview
+          </Badge>
+        </span>
+      )}
       <div
         className={cn(
           'flex h-10 w-10 items-center justify-center rounded-lg text-sm font-bold transition-colors',
           selected
             ? 'bg-[#6366f1] text-white'
-            : 'bg-[#1a1b28] text-[#6366f1] border border-[#252637]'
+            : 'bg-[#1a1b28] text-[#6366f1] border border-[#252637]',
         )}
       >
         {connector.icon}
@@ -255,7 +263,7 @@ function PostgresPanel({ onConnect }: { onConnect: () => void }) {
           {connected ? (
             <>
               <CheckCircle2 size={14} className="text-[#22c55e]" />
-              <span className="text-[#22c55e]">Connected</span>
+              <span className="text-[#22c55e]">DB reachable</span>
             </>
           ) : (
             'Test Backend DB Connection'
@@ -305,6 +313,20 @@ function PostgresPanel({ onConnect }: { onConnect: () => void }) {
           </Button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────
+// Preview-only connector panel
+// ────────────────────────────────────────────
+function PreviewConnectorPanel({ connector }: { connector: Connector }) {
+  return (
+    <div className="space-y-4">
+      <PlannedBanner
+        detail={`${connector.name} connector is planned. No credentials are stored and no connection is attempted.`}
+      />
+      <p className="text-sm text-[#6b7280]">{connector.description}</p>
     </div>
   );
 }
@@ -377,6 +399,9 @@ export function ConnectorsPage() {
 
               {selectedConnector.type === 'csv' && <CsvPanel onConnect={handleConnect} />}
               {selectedConnector.type === 'postgresql' && <PostgresPanel onConnect={handleConnect} />}
+              {selectedConnector.type === 'preview' && (
+                <PreviewConnectorPanel connector={selectedConnector} />
+              )}
             </div>
           </div>
         )}

@@ -31,8 +31,15 @@ from src.metadata_discovery import (
 from src.report_builder import REPORT_PATH
 from src.run_demo import run_validation
 from src.report_builder import attach_trust_narrative
+from src.app_state.store import (
+    get_report_by_run_id,
+    list_validation_runs,
+    save_validation_report,
+    save_validation_run,
+)
 
 from api.aurum_assistant.router import router as aurum_assistant_router
+from api.projects_router import router as projects_router
 
 REACT_DEV_ORIGINS = [
     "http://localhost:5173",
@@ -42,6 +49,7 @@ REACT_DEV_ORIGINS = [
 app = FastAPI(title="Aurum API", version="1.0.0")
 
 app.include_router(aurum_assistant_router)
+app.include_router(projects_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -113,6 +121,12 @@ def health(response: Response) -> dict:
     return body
 
 
+@app.get("/runs")
+def list_runs() -> dict:
+    """List validation runs from SQLite app state only (sparse-but-real)."""
+    return {"runs": list_validation_runs()}
+
+
 @app.post("/runs")
 def trigger_run(request: Optional[RunRequest] = None) -> dict:
     """Run a synchronous validation (~5s) and return the full report dict.
@@ -143,6 +157,9 @@ def trigger_run(request: Optional[RunRequest] = None) -> dict:
     run_id = request.run_id if request is not None else "demo_run_001"
     report = attach_trust_narrative(run_validation(run_id=run_id))
     _last_report = report
+    persisted_run_id = report.get("run_id", run_id)
+    save_validation_run(persisted_run_id, status="completed", mode="live")
+    save_validation_report(persisted_run_id, report)
     return report
 
 
@@ -160,12 +177,11 @@ def latest_report() -> dict:
 
 @app.get("/reports/{run_id}")
 def report_by_id(run_id: str) -> dict:
-    """Fetch a report by id.
+    """Fetch a report by id from SQLite app state, else latest in-memory/disk."""
+    stored = get_report_by_run_id(run_id)
+    if stored is not None:
+        return stored
 
-    v1 limitation: there is no per-run persistence yet (that is Ring 5's Quality
-    Store). Only the latest report is retrievable, so this returns it when the id
-    matches and a clean 404 otherwise.
-    """
     report = _load_latest_report()
     if report is None:
         raise HTTPException(
@@ -175,10 +191,7 @@ def report_by_id(run_id: str) -> dict:
     if report.get("run_id") != run_id:
         raise HTTPException(
             status_code=404,
-            detail=(
-                f"Report '{run_id}' not found. Per-run history arrives in Ring 5; "
-                "only the latest run is currently retrievable."
-            ),
+            detail=f"Report '{run_id}' not found.",
         )
     return report
 

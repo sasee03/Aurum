@@ -1,6 +1,6 @@
 export type ProjectStatus = 'PASS' | 'WARNING' | 'FAILED';
 export type Environment = 'Development' | 'QA' | 'Production';
-export type ConnectorType = 'csv' | 'postgresql';
+export type ConnectorType = 'csv' | 'postgresql' | 'preview';
 
 export interface Project {
   id: string;
@@ -19,6 +19,8 @@ export interface Connector {
   name: string;
   icon: string;
   description: string;
+  /** Preview-only connectors are shown for roadmap continuity — not wired. */
+  preview?: boolean;
 }
 
 export interface CsvConfig {

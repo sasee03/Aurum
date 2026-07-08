@@ -190,7 +190,7 @@ export function DatasetExplorerPage() {
           rows: t.row_count?.toString() || '0',
           columns: t.column_count || 0,
           size: '-',
-          lastUpdated: 'Live'
+          lastUpdated: '—',
         };
         formattedTables.push(dbT);
         
