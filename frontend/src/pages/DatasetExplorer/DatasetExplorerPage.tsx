@@ -1,12 +1,13 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ChevronRight, ChevronDown, ArrowRight, CheckSquare, Square } from 'lucide-react';
+import { ChevronRight, ChevronDown, ArrowRight, CheckSquare, Square, Eye, AlertTriangle } from 'lucide-react';
+import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
 import { SearchBar } from '@/components/common/SearchBar';
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { cn } from '@/utils/cn';
-import { PlannedBanner } from '@/components/common/PlannedBanner';
-import tablesData from '@/mocks/tables.json';
+import { getMetadataTables, getMetadataTable } from '@/lib/aurumApi';
+import tablesJson from '@/mocks/tables.json';
 
 interface DbTable {
   id: string;
@@ -24,12 +25,6 @@ interface SchemaNode {
   tables: DbTable[];
 }
 
-const allSchemas: SchemaNode[] = tablesData.schemas as SchemaNode[];
-const allTables: DbTable[] = allSchemas.flatMap((s) => s.tables);
-
-// ────────────────────────────────────────────
-// Schema Tree
-// ────────────────────────────────────────────
 function SchemaTree({
   schemas,
   selectedIds,
@@ -96,17 +91,16 @@ function SchemaTree({
   );
 }
 
-// ────────────────────────────────────────────
-// Table Row Card
-// ────────────────────────────────────────────
 function TableRowCard({
   table,
   selected,
   onToggle,
+  onPreview,
 }: {
   table: DbTable;
   selected: boolean;
   onToggle: () => void;
+  onPreview: () => void;
 }) {
   return (
     <div
@@ -118,7 +112,6 @@ function TableRowCard({
       role="row"
       aria-selected={selected}
     >
-      {/* Checkbox */}
       <div className="flex-shrink-0">
         {selected ? (
           <CheckSquare size={16} className="text-[#6366f1]" />
@@ -127,7 +120,6 @@ function TableRowCard({
         )}
       </div>
 
-      {/* Name */}
       <div className="flex-1 min-w-0">
         <p className={cn('text-sm font-semibold truncate', selected ? 'text-[#6366f1]' : 'text-[#f1f5f9]')}>
           {table.name}
@@ -137,7 +129,6 @@ function TableRowCard({
         </p>
       </div>
 
-      {/* Stats */}
       <div className="hidden sm:flex items-center gap-6 text-right flex-shrink-0">
         <div>
           <p className="text-xs font-semibold text-[#f1f5f9]">{table.rows}</p>
@@ -152,20 +143,84 @@ function TableRowCard({
           <p className="text-[10px] text-[#4b5563]">size</p>
         </div>
       </div>
+
+      <div className="flex-shrink-0 ml-4">
+        <Button 
+          variant="ghost" 
+          size="sm" 
+          leftIcon={<Eye size={14} />} 
+          onClick={(e) => { e.stopPropagation(); onPreview(); }}
+        >
+          Preview
+        </Button>
+      </div>
     </div>
   );
 }
 
-// ────────────────────────────────────────────
-// Dataset Explorer Page
-// ────────────────────────────────────────────
 export function DatasetExplorerPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const [search, setSearch] = useState('');
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(
-    new Set(['tbl-001', 'tbl-002', 'tbl-003', 'tbl-005'])
-  );
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  
+  const [allSchemas, setAllSchemas] = useState<SchemaNode[]>([]);
+  const [allTables, setAllTables] = useState<DbTable[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [usingFallback, setUsingFallback] = useState(false);
+
+  async function loadData() {
+    setLoading(true);
+    setError(null);
+    setUsingFallback(false);
+    try {
+      const res = await getMetadataTables();
+      const tables = res.tables || [];
+      
+      const schemaMap = new Map<string, DbTable[]>();
+      const formattedTables: DbTable[] = [];
+      
+      for (const t of tables) {
+        const dbT: DbTable = {
+          id: `${t.schema}.${t.table}`,
+          schema: t.schema,
+          name: t.table,
+          owner: 'demo_user',
+          rows: t.row_count?.toString() || '0',
+          columns: t.column_count || 0,
+          size: '-',
+          lastUpdated: 'Live'
+        };
+        formattedTables.push(dbT);
+        
+        if (!schemaMap.has(t.schema)) {
+          schemaMap.set(t.schema, []);
+        }
+        schemaMap.get(t.schema)!.push(dbT);
+      }
+      
+      const schemas: SchemaNode[] = Array.from(schemaMap.entries()).map(([name, tables]) => ({
+        name,
+        tables
+      }));
+      
+      setAllSchemas(schemas);
+      setAllTables(formattedTables);
+    } catch (err) {
+      setUsingFallback(true);
+      const fallbackSchemas = tablesJson.schemas as SchemaNode[];
+      const fallbackTables = fallbackSchemas.flatMap(s => s.tables);
+      setAllSchemas(fallbackSchemas);
+      setAllTables(fallbackTables);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadData();
+  }, []);
 
   const filteredTables = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -176,12 +231,12 @@ export function DatasetExplorerPage() {
         t.owner.toLowerCase().includes(q) ||
         t.schema.toLowerCase().includes(q)
     );
-  }, [search]);
+  }, [search, allTables]);
 
-  function toggleTable(id: string) {
+  function toggleTable(tableId: string) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      next.has(tableId) ? next.delete(tableId) : next.add(tableId);
       return next;
     });
   }
@@ -194,6 +249,29 @@ export function DatasetExplorerPage() {
     setSelectedIds(new Set());
   }
 
+  async function handlePreview(table: DbTable) {
+    try {
+      toast.loading(`Fetching preview for ${table.name}...`, { id: 'preview' });
+      const res = await getMetadataTable(table.name, table.schema);
+      const tableData = res.tables?.[0];
+      if (tableData) {
+        toast.success(
+          <div className="text-xs max-h-60 overflow-y-auto w-80 text-left">
+            <strong className="block mb-2 text-sm">{table.name} details</strong>
+            <pre className="whitespace-pre-wrap font-mono text-[10px] text-gray-800">
+              {JSON.stringify(tableData, null, 2)}
+            </pre>
+          </div>,
+          { id: 'preview', duration: 8000 }
+        );
+      } else {
+        toast.success('No metadata returned', { id: 'preview' });
+      }
+    } catch (e) {
+      toast.error('Failed to load table preview', { id: 'preview' });
+    }
+  }
+
   const selectedTables = allTables.filter((t) => selectedIds.has(t.id));
   const hasResults = filteredTables.length > 0;
 
@@ -202,29 +280,34 @@ export function DatasetExplorerPage() {
       <ProjectSubNav />
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left Panel — Schema Tree */}
         <aside
           className="w-48 flex-shrink-0 border-r border-[#252637] bg-[#0d0e14] overflow-y-auto scrollbar-thin p-3"
           aria-label="Database schema tree"
         >
           <p className="mb-2 px-2 text-[10px] font-bold uppercase tracking-widest text-[#4b5563]">
-            RETAIL_DB / PUBLIC
+            {usingFallback ? 'DEMO SCHEMAS' : 'LIVE SCHEMAS'}
           </p>
           <SchemaTree schemas={allSchemas} selectedIds={selectedIds} onToggle={toggleTable} />
         </aside>
 
-        {/* Main Content */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          {/* Header */}
           <div className="border-b border-[#252637] px-6 py-4">
             <h2 className="text-lg font-bold text-[#f1f5f9]">Dataset Explorer</h2>
             <p className="text-xs text-[#6b7280]">Select tables for AURUM to validate this run.</p>
-            <div className="mt-3">
-              <PlannedBanner detail="Preview — not wired to live API yet. Table catalog will connect to GET /metadata/tables in a future release." />
-            </div>
           </div>
 
-          {/* Search + Actions */}
+          {usingFallback && (
+            <div className="bg-[#451a03] border-b border-[#78350f] px-6 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-3 text-[#fde68a]">
+                <AlertTriangle size={16} className="text-[#f59e0b]" />
+                <p className="text-xs font-semibold">Demo fallback: backend PostgreSQL metadata is unavailable, showing bundled demo dataset metadata.</p>
+              </div>
+              <Button variant="secondary" size="sm" onClick={loadData} className="border-[#78350f] text-[#fcd34d] hover:bg-[#78350f]/50">
+                Retry Live Connection
+              </Button>
+            </div>
+          )}
+
           <div className="flex items-center gap-3 px-6 py-3 border-b border-[#252637]">
             <SearchBar
               value={search}
@@ -248,19 +331,38 @@ export function DatasetExplorerPage() {
             </button>
           </div>
 
-          {/* Table List */}
           <div
-            className="flex-1 overflow-y-auto scrollbar-thin"
+            className="flex-1 overflow-y-auto scrollbar-thin relative"
             role="table"
             aria-label="Available tables"
           >
-            {hasResults ? (
+            {loading ? (
+              <div className="flex items-center justify-center h-full text-[#6b7280]">
+                Loading live tables...
+              </div>
+            ) : error ? (
+              <div className="flex flex-col items-center justify-center h-full">
+                <p className="text-sm font-semibold text-red-500 mb-2">{error}</p>
+                <p className="text-xs text-[#6b7280] mb-4">
+                  Attempted: <code className="font-mono bg-[#1a1b28] px-1 py-0.5 rounded">GET /metadata/tables</code>
+                </p>
+                <p className="text-xs text-[#6b7280] mb-4 text-center">
+                  Check backend/PostgreSQL connection.<br />
+                  Make sure uvicorn is running: <br />
+                  <code className="font-mono text-[#f1f5f9] bg-[#1a1b28] px-1 py-0.5 rounded block mt-1">uvicorn api.main:app --reload --port 8000</code>
+                </p>
+                <Button variant="secondary" size="sm" onClick={loadData}>
+                  Retry
+                </Button>
+              </div>
+            ) : hasResults ? (
               filteredTables.map((table) => (
                 <TableRowCard
                   key={table.id}
                   table={table}
                   selected={selectedIds.has(table.id)}
                   onToggle={() => toggleTable(table.id)}
+                  onPreview={() => handlePreview(table)}
                 />
               ))
             ) : (
@@ -276,7 +378,6 @@ export function DatasetExplorerPage() {
             )}
           </div>
 
-          {/* Sticky Footer */}
           {selectedIds.size > 0 && (
             <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-3 flex items-center justify-between gap-4 animate-slide-up">
               <div className="flex items-center gap-2 flex-wrap min-w-0">

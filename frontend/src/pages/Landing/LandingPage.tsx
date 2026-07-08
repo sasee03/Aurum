@@ -56,7 +56,16 @@ export function LandingPage() {
           >
             + New Project
           </Button>
-          <Button variant="secondary" size="lg" leftIcon={<FolderOpen size={16} />}>
+          <Button 
+            variant="secondary" 
+            size="lg" 
+            leftIcon={<FolderOpen size={16} />}
+            onClick={() => {
+              if (projects.length > 0) {
+                navigate(`/projects/${projects[0].id}/dashboard`);
+              }
+            }}
+          >
             Open Existing Project
           </Button>
           <Button variant="secondary" size="lg" leftIcon={<Clock size={16} />} onClick={() => navigate('/history')}>

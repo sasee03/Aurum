@@ -15,7 +15,7 @@ export function ProjectSubNav({ runId, isRunning }: ProjectSubNavProps = {}) {
   
   const steps = [
     { label: 'Connect', path: `/projects/${id}/connect` },
-    { label: 'Select', path: `/projects/${id}/select` },
+    { label: 'Explore Datasets', path: `/projects/${id}/select` },
     { label: 'Validate', path: `/projects/${id}/validate/config` },
     { label: 'Report', path: `/projects/${id}/report/quality` },
     { label: 'Remediate', path: `/projects/${id}/remediate` },
@@ -24,7 +24,7 @@ export function ProjectSubNav({ runId, isRunning }: ProjectSubNavProps = {}) {
   // Determine active step based on URL path
   let activeLabel = '';
   if (pathname.includes('/connect')) activeLabel = 'Connect';
-  else if (pathname.includes('/select') || pathname.includes('/metadata')) activeLabel = 'Select';
+  else if (pathname.includes('/select') || pathname.includes('/metadata')) activeLabel = 'Explore Datasets';
   else if (pathname.includes('/validate')) activeLabel = 'Validate';
   else if (pathname.includes('/report') || pathname.includes('/impact') || pathname.includes('/trust')) activeLabel = 'Report';
   else if (pathname.includes('/remediate')) activeLabel = 'Remediate';

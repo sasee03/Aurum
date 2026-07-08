@@ -60,26 +60,27 @@ export function ValidationDashboardPage() {
 
   const report = data?.report;
   const source = data?.source ?? 'fixture';
+  const isFixture = source === 'fixture';
 
   const stages: { stage: StageName; status: StageStatus }[] = report
     ? [
         {
           stage: 'Bronze',
-          status: running && !finished ? 'RUNNING' : layerStageStatus(report.layer_status.bronze),
+          status: isFixture ? layerStageStatus(report.layer_status.bronze) : (running && !finished ? 'RUNNING' : layerStageStatus(report.layer_status.bronze)),
         },
         {
           stage: 'Silver',
-          status: finished
+          status: isFixture ? layerStageStatus(report.layer_status.silver) : (finished
             ? layerStageStatus(report.layer_status.silver)
             : running
               ? 'QUEUED'
-              : layerStageStatus(report.layer_status.silver),
+              : layerStageStatus(report.layer_status.silver)),
         },
         {
           stage: 'Gold',
-          status: finished
+          status: isFixture ? layerStageStatus(report.layer_status.gold) : (finished
             ? layerStageStatus(report.layer_status.gold)
-            : 'QUEUED',
+            : 'QUEUED'),
         },
       ]
     : [
@@ -141,7 +142,13 @@ export function ValidationDashboardPage() {
 
       <div className="px-6 py-6 border-b border-[#252637] flex flex-wrap items-center gap-3">
         <h2 className="text-xl font-bold text-[#f1f5f9]">Validation Execution</h2>
-        <DataSourceBadge source={source} />
+        {isFixture ? (
+          <span className="inline-flex items-center gap-1 rounded-full border border-[#8b5cf6]/30 bg-[#8b5cf6]/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#a78bfa]">
+            Verified Snapshot
+          </span>
+        ) : (
+          <DataSourceBadge source={source} />
+        )}
         {report && (
           <Badge variant="secondary" className="font-mono text-[10px]">
             {report.run_id}
@@ -150,14 +157,21 @@ export function ValidationDashboardPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto scrollbar-thin p-6 flex flex-col gap-6">
-        <div className="flex justify-center">
+        <div className="flex flex-col items-center justify-center gap-2">
+          <p className="text-sm text-[#94a3b8] text-center max-w-2xl">
+            {isFixture 
+              ? 'Using a verified backend-generated report snapshot for this walkthrough. Live validation is unavailable in this environment.'
+              : 'This demo run validates the configured/preloaded dataset.'}
+          </p>
           <Button
-            variant="primary"
+            variant={isFixture ? 'secondary' : 'primary'}
             leftIcon={<Play size={16} />}
-            onClick={handleRun}
-            disabled={running}
+            onClick={isFixture ? undefined : handleRun}
+            disabled={running || isFixture}
           >
-            {running ? 'Running validation…' : 'Run Validation (POST /runs)'}
+            {isFixture 
+              ? 'Live validation unavailable in snapshot mode'
+              : running ? 'Running validation…' : 'Run Validation (POST /runs)'}
           </Button>
         </div>
 

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchLatestReport, runValidation } from '@/lib/aurumApi';
+import { fetchLatestReport, runValidation, getMetadataHealth } from '@/lib/aurumApi';
 import type { AurumReport } from '@/types/report';
 import sampleReportJson from '@/fixtures/sample_report.json';
 
@@ -14,6 +14,10 @@ export interface ReportPayload {
 
 async function loadReport(): Promise<ReportPayload> {
   try {
+    const health = await getMetadataHealth().catch(() => ({ status: 'error' }));
+    if (health.status !== 'ok') {
+      return { report: sampleReport, source: 'fixture' };
+    }
     const report = await fetchLatestReport();
     return { report, source: 'live' };
   } catch {
