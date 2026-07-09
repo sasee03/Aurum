@@ -274,11 +274,18 @@ def test_run_custom_check(client, monkeypatch):
         "api.aurum_assistant.router.load_custom_checks",
         lambda: [sample],
     )
+    # Keep this assistant regression fast: inject a tiny frame instead of full ETL.
+    monkeypatch.setattr(
+        "src.custom_checks.load_layer_dataframe",
+        lambda layer: __import__("pandas").DataFrame({"x": [1, 2, 3]}),
+    )
     response = client.post("/custom-checks/run", json={"check_id": "custom_silver_001"})
     assert response.status_code == 200
     body = response.json()
     assert body["check_id"] == "custom_silver_001"
-    assert body["status"] in ("PASS", "FAIL", "SKIPPED")
+    assert body["status"] == "PASS"
+    assert body["observed_value"] == 3
+    assert "demo" not in body["message"].lower()
 
 
 def test_fallback_missing_report(client):

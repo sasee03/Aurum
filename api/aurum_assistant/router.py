@@ -22,6 +22,7 @@ from api.aurum_assistant.handlers import (
 )
 from api.aurum_assistant.handlers.custom_check_handler import next_check_id
 from api.aurum_assistant.intent_router import detect_intent
+from src.custom_checks import execute_custom_check
 
 router = APIRouter(tags=["aurum-assistant"])
 
@@ -128,51 +129,13 @@ def list_custom_checks() -> dict:
     return {"checks": load_custom_checks()}
 
 
-def _preview_run(check: dict) -> dict:
-    """Demo preview — does not replace the validation engine."""
-    rule_type = check.get("rule_type", "")
-    column = check.get("column", "")
-    operator = check.get("operator", "")
-    value = check.get("value", "")
-    layer = check.get("layer", "silver")
-
-    if rule_type == "row_count_condition":
-        observed = 1240
-        passed = observed > 0 if operator == ">" and str(value) == "0" else True
-        return {
-            "check_id": check["check_id"],
-            "status": "PASS" if passed else "FAIL",
-            "message": f"Row count condition on {column} satisfied for {layer} layer (demo preview — not yet connected to validation engine).",
-            "observed_value": observed,
-            "expected_condition": f"{column} count {operator} {value}",
-        }
-    if rule_type == "not_null":
-        return {
-            "check_id": check["check_id"],
-            "status": "PASS",
-            "message": f"No null values found in {column} (demo preview).",
-            "observed_value": 0,
-            "expected_condition": f"{column} is not null",
-        }
-    if rule_type == "numeric_range":
-        return {
-            "check_id": check["check_id"],
-            "status": "PASS",
-            "message": f"{column} values within expected range (demo preview).",
-            "observed_value": 0,
-            "expected_condition": f"{column} {operator} {value}",
-        }
-    return {
-        "check_id": check["check_id"],
-        "status": "PASS",
-        "message": f"Custom rule '{check.get('check_name')}' preview completed (demo).",
-        "observed_value": "demo",
-        "expected_condition": f"{rule_type} on {column}",
-    }
-
-
 @router.post("/custom-checks/run")
 def run_custom_check(body: CustomCheckRunRequest) -> dict:
+    """Execute a saved custom check against allowlisted validation-session data.
+
+    Results are additive only — they never modify the deterministic engine's
+    trust_score, final_verdict, or layer_status.
+    """
     checks = load_custom_checks()
     matched = next((c for c in checks if c.get("check_id") == body.check_id), None)
     if matched is None:
@@ -183,4 +146,4 @@ def run_custom_check(body: CustomCheckRunRequest) -> dict:
             "observed_value": None,
             "expected_condition": "",
         }
-    return _preview_run(matched)
+    return execute_custom_check(matched)

@@ -80,7 +80,8 @@ def handle(
         f"I can help you add a custom {target_layer.capitalize()} validation check. "
         "Data engineers can add domain-specific validation rules instead of relying only on fixed checks. "
         "Use the form on the Custom Checks page to configure layer, rule type, column, and severity, "
-        "then Save Check and Run Preview."
+        "then Save Check and Test Check. Non-SQL checks run against real validation-session data; "
+        "SQL-based checks are not yet supported."
     )
 
     if "negative" in question.lower() and "revenue" in question.lower():
@@ -101,7 +102,7 @@ def handle(
                 "Open Custom Checks page",
                 f"Configure a {target_layer} rule",
                 "Save Check",
-                "Run Preview",
+                "Test Check",
             ],
         },
         confidence="high",

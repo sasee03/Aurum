@@ -12,6 +12,15 @@ import { Button } from '@/components/ui/Button';
 import { useAppMode } from '@/context/AppModeContext';
 import { CUSTOM_CHECKS_UNAVAILABLE } from '@/utils/apiErrors';
 
+const RULE_TYPES = [
+  'not_null',
+  'unique',
+  'accepted_values',
+  'numeric_range',
+  'row_count_condition',
+  'custom_sql_demo',
+] as const;
+
 const EMPTY_FORM: Omit<CustomCheck, 'check_id'> = {
   layer: 'silver',
   check_name: '',
@@ -27,7 +36,8 @@ export function CustomChecksPage() {
   const { displayMode, backendReachable } = useAppMode();
   const [form, setForm] = useState(EMPTY_FORM);
   const [checks, setChecks] = useState<CustomCheck[]>([]);
-  const [preview, setPreview] = useState<CustomCheckRunResult | null>(null);
+  const [result, setResult] = useState<CustomCheckRunResult | null>(null);
+  const [runningId, setRunningId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [serviceUnavailable, setServiceUnavailable] = useState(false);
 
@@ -54,8 +64,8 @@ export function CustomChecksPage() {
   const save = async () => {
     setMessage(null);
     try {
-      const result = await createCustomCheck(form);
-      setMessage(`Saved ${result.check_id}`);
+      const saved = await createCustomCheck(form);
+      setMessage(`Saved ${saved.check_id}`);
       setServiceUnavailable(false);
       await load();
     } catch {
@@ -63,16 +73,22 @@ export function CustomChecksPage() {
     }
   };
 
-  const previewRun = async (checkId: string) => {
+  const testCheck = async (checkId: string) => {
+    setRunningId(checkId);
+    setResult(null);
     try {
-      const result = await runCustomCheck(checkId);
-      setPreview(result);
+      const runResult = await runCustomCheck(checkId);
+      setResult(runResult);
       setServiceUnavailable(false);
     } catch {
       setServiceUnavailable(true);
-      setPreview(null);
+      setResult(null);
+    } finally {
+      setRunningId(null);
     }
   };
+
+  const sqlSelected = form.rule_type === 'custom_sql_demo';
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative p-6 space-y-6">
@@ -84,7 +100,8 @@ export function CustomChecksPage() {
           <DataSourceBadge mode={displayMode} />
         </div>
         <p className="text-sm text-[#6b7280] mt-1">
-          Define domain-specific rules. Saved checks are persisted via the API.
+          Define domain-specific rules and test them against real validation-session data.
+          Results are additive — they do not change the engine trust score or verdict.
         </p>
       </div>
 
@@ -123,6 +140,64 @@ export function CustomChecksPage() {
             disabled={serviceUnavailable}
           />
         </label>
+        <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
+          Rule type
+          <select
+            className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
+            value={form.rule_type}
+            onChange={(e) => setForm({ ...form, rule_type: e.target.value })}
+            disabled={serviceUnavailable}
+          >
+            {RULE_TYPES.map((rt) => (
+              <option key={rt} value={rt}>
+                {rt}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
+          Severity
+          <select
+            className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
+            value={form.severity}
+            onChange={(e) => setForm({ ...form, severity: e.target.value })}
+            disabled={serviceUnavailable}
+          >
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
+          Column
+          <input
+            className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
+            value={form.column}
+            onChange={(e) => setForm({ ...form, column: e.target.value })}
+            placeholder="e.g. customer_id (unused for row_count_condition)"
+            disabled={serviceUnavailable || form.rule_type === 'row_count_condition'}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
+          Operator
+          <input
+            className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
+            value={form.operator}
+            onChange={(e) => setForm({ ...form, operator: e.target.value })}
+            placeholder=">, >=, <, <=, ==, or between"
+            disabled={serviceUnavailable}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-[#94a3b8] md:col-span-2">
+          Value
+          <input
+            className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
+            value={form.value}
+            onChange={(e) => setForm({ ...form, value: e.target.value })}
+            placeholder="e.g. 0 | 1,100 | UK,France,Germany"
+            disabled={serviceUnavailable}
+          />
+        </label>
         <label className="flex flex-col gap-1 text-xs text-[#94a3b8] md:col-span-2">
           Description
           <textarea
@@ -134,6 +209,13 @@ export function CustomChecksPage() {
           />
         </label>
       </div>
+
+      {sqlSelected && (
+        <p className="text-sm text-[#f59e0b] rounded-lg border border-[#3f3a1f] bg-[#1a1810] px-4 py-3 max-w-4xl">
+          SQL-based checks (custom_sql_demo) are not yet supported — Test Check will return
+          SKIPPED and will not execute arbitrary SQL.
+        </p>
+      )}
 
       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
         <Button variant="primary" onClick={save} disabled={serviceUnavailable}>
@@ -152,25 +234,28 @@ export function CustomChecksPage() {
               className="flex items-center justify-between rounded-lg border border-[#252637] px-4 py-2 text-sm"
             >
               <span>
-                {c.check_id} — {c.check_name} ({c.layer})
+                {c.check_id} — {c.check_name} ({c.layer} / {c.rule_type})
               </span>
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => c.check_id && previewRun(c.check_id)}
-                disabled={serviceUnavailable}
+                onClick={() => c.check_id && testCheck(c.check_id)}
+                disabled={serviceUnavailable || runningId === c.check_id}
               >
-                Run Preview
+                {runningId === c.check_id ? 'Running…' : 'Test Check'}
               </Button>
             </div>
           ))}
         </div>
       )}
 
-      {preview && (
-        <div className="rounded-lg border border-[#252637] bg-[#13141e] p-4">
+      {result && (
+        <div className="rounded-lg border border-[#252637] bg-[#13141e] p-4 space-y-1 max-w-4xl">
           <p className="text-sm text-[#f1f5f9]">
-            <strong>{preview.status}</strong> — {preview.message}
+            <strong>{result.status}</strong> — {result.message}
+          </p>
+          <p className="text-xs text-[#94a3b8]">
+            observed: {String(result.observed_value)} · expected: {result.expected_condition}
           </p>
         </div>
       )}
