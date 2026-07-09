@@ -19,8 +19,11 @@ from tests.builders import make_rows, to_df
 
 BASELINE_PATH = Path(__file__).resolve().parent / "fixtures" / "olist_post_runs_baseline.json"
 GOLDEN_RUN_ID = "golden_olist_baseline"
-# Ollama trust_narrative is attached after the deterministic report is built and may vary.
+# Volatile fields excluded from golden baseline comparison:
+# - trust_narrative: Ollama-attached after deterministic report
+# - run_date (nested in detection_layers observed dicts): CURRENT_DATE at run time
 VOLATILE_REPORT_KEYS = frozenset({"trust_narrative"})
+VOLATILE_NESTED_KEYS = frozenset({"run_date"})
 
 
 @contextmanager
@@ -48,7 +51,21 @@ def _sqlite_validation_counts() -> tuple[int, int]:
 
 
 def _strip_volatile(report: dict) -> dict:
-    return {key: value for key, value in report.items() if key not in VOLATILE_REPORT_KEYS}
+    """Normalize a report for golden comparison by dropping volatile fields."""
+    trimmed = {key: value for key, value in report.items() if key not in VOLATILE_REPORT_KEYS}
+
+    def _walk(value):
+        if isinstance(value, dict):
+            return {
+                key: _walk(nested)
+                for key, nested in value.items()
+                if key not in VOLATILE_NESTED_KEYS
+            }
+        if isinstance(value, list):
+            return [_walk(item) for item in value]
+        return value
+
+    return _walk(trimmed)
 
 
 def _csv_bytes(**overrides) -> bytes:
@@ -189,8 +206,8 @@ def test_upload_does_not_change_reports_latest(client):
 
 
 def test_post_runs_demo_path_unchanged_after_upload_added(client):
-    """Golden regression: POST /runs matches captured Olist baseline (minus trust_narrative)."""
+    """Golden regression: POST /runs matches captured Olist baseline."""
     baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
     response = client.post("/runs", json={"run_id": GOLDEN_RUN_ID})
     assert response.status_code == 200
-    assert _strip_volatile(response.json()) == baseline
+    assert _strip_volatile(response.json()) == _strip_volatile(baseline)

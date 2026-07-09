@@ -249,9 +249,12 @@ export class CsvUploadError extends Error {
   }
 }
 
-export async function uploadDatasetCsv(file: File): Promise<AurumReport> {
+export async function uploadDatasetCsv(file: File, projectId?: string): Promise<AurumReport> {
   const form = new FormData();
   form.append('file', file);
+  if (projectId) {
+    form.append('project_id', projectId);
+  }
   const res = await fetchWithTimeout('/datasets/upload', {
     method: 'POST',
     body: form,

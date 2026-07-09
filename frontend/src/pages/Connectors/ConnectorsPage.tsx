@@ -6,9 +6,8 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { cn } from '@/utils/cn';
-import { PlannedBanner } from '@/components/common/PlannedBanner';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
-import { useAppMode, usePlannedMode } from '@/context/AppModeContext';
+import { useAppMode } from '@/context/AppModeContext';
 import { CsvUploadError, getMetadataHealth, uploadDatasetCsv, type CsvUploadMismatch } from '@/lib/aurumApi';
 import connectorsData from '@/mocks/connectors.json';
 import type { Connector } from '@/types';
@@ -37,16 +36,8 @@ function ConnectorCard({
         selected
           ? 'border-[#6366f1] bg-[#6366f1]/10 shadow-[0_0_12px_rgba(99,102,241,0.15)]'
           : 'border-[#252637] bg-[#13141e] hover:border-[#6366f1]/30 hover:bg-[#1a1b28]',
-        connector.preview && 'opacity-90',
       )}
     >
-      {connector.preview && (
-        <span className="absolute right-2 top-2">
-          <Badge variant="warning" dot>
-            Preview
-          </Badge>
-        </span>
-      )}
       <div
         className={cn(
           'flex h-10 w-10 items-center justify-center rounded-lg text-sm font-bold transition-colors',
@@ -97,14 +88,10 @@ function CsvPanel({ projectId }: { projectId: string }) {
     setUploading(true);
     setMismatch(null);
     try {
-      const report = await uploadDatasetCsv(file);
-      // Navigate keyed by the returned run_id. useReport() fetches
-      // /reports/{run_id}, so a reload re-fetches the UPLOAD report (never the
-      // demo). We intentionally do NOT prime the 'latest' cache — the demo's
-      // GET /reports/latest must keep returning the Olist report.
-      toast.success('CSV validated — opening quality report.');
+      const report = await uploadDatasetCsv(file, projectId);
+      toast.success('CSV validated — proceeding to pipeline configuration.');
       navigate(
-        `/projects/${projectId}/report/quality?runId=${encodeURIComponent(report.run_id)}`,
+        `/projects/${projectId}/validate/config?runId=${encodeURIComponent(report.run_id)}`,
       );
     } catch (err) {
       if (err instanceof CsvUploadError) {
@@ -317,14 +304,10 @@ function PostgresPanel({ onConnect }: { onConnect: () => void }) {
             'Test Backend DB Connection'
           )}
         </Button>
-        <Badge variant="warning" dot>
-          Preview
-        </Badge>
       </div>
 
       <p className="text-xs text-[#6b7280] italic">
-        Demo mode: uses the backend-configured PostgreSQL connection. The custom-credentials UI is
-        ready; dynamic connection wiring is pending.
+        Uses the backend-configured PostgreSQL connection from your .env file.
       </p>
 
       {connected && (
@@ -366,15 +349,15 @@ function PostgresPanel({ onConnect }: { onConnect: () => void }) {
 }
 
 // ────────────────────────────────────────────
-// Preview-only connector panel
+// Connector config panel for non-CSV/non-Postgres connectors
 // ────────────────────────────────────────────
 function PreviewConnectorPanel({ connector }: { connector: Connector }) {
   return (
     <div className="space-y-4">
-      <PlannedBanner
-        detail={`${connector.name} connector is planned. No credentials are stored and no connection is attempted.`}
-      />
-      <p className="text-sm text-[#6b7280]">{connector.description}</p>
+      <p className="text-sm text-[#94a3b8]">{connector.description}</p>
+      <p className="text-sm text-[#6b7280]">
+        Connection configuration for {connector.name} is not available in the current build.
+      </p>
     </div>
   );
 }
@@ -385,9 +368,7 @@ function PreviewConnectorPanel({ connector }: { connector: Connector }) {
 export function ConnectorsPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
-  const { displayMode } = usePlannedMode(
-    'Connector onboarding is preview-only. The verified Olist demo uses preloaded PostgreSQL data.',
-  );
+  const { displayMode } = useAppMode();
   const [selected, setSelected] = useState<string | null>(null);
 
   function handleConnect() {
@@ -405,13 +386,8 @@ export function ConnectorsPage() {
           <DataSourceBadge mode={displayMode} />
         </div>
         <p className="mt-1 text-sm text-[#6b7280]">
-          Current demo uses preloaded Olist data via PostgreSQL. CSV and PostgreSQL connector flows
-          are shown as the planned onboarding path.
+          Select a system to configure your connection.
         </p>
-        <div className="mt-4 max-w-2xl">
-          <PlannedBanner detail="Preview — connector selection does not persist credentials. The PostgreSQL panel can test live backend DB reachability but does not create new connections yet." />
-        </div>
-        <p className="mt-2 text-sm text-[#6b7280]">Select a system to configure your connection.</p>
       </div>
 
       <div className="flex flex-col lg:flex-row gap-6">

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 
 import api.main as api_main
@@ -22,7 +22,10 @@ router = APIRouter(tags=["datasets"])
 
 
 @router.post("/datasets/upload")
-async def upload_dataset(file: UploadFile = File(...)) -> dict:
+async def upload_dataset(
+    file: UploadFile = File(...),
+    project_id: str = Form(default=""),
+) -> dict:
     """Accept an Olist-shaped raw_orders CSV, validate, run engine, return 17-key report."""
     if not api_main._database_reachable():
         target = postgres_target_info()
@@ -66,6 +69,11 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict:
     run_id = f"upload_{uuid.uuid4().hex[:12]}"
     report = attach_trust_narrative(run_validation_from_raw_orders(frame, run_id=run_id))
     persisted_run_id = report.get("run_id", run_id)
-    save_validation_run(persisted_run_id, status="completed", mode="upload")
+    save_validation_run(
+        persisted_run_id,
+        status="completed",
+        mode="upload",
+        project_id=project_id or None,
+    )
     save_validation_report(persisted_run_id, report)
     return report

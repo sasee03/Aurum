@@ -14,7 +14,7 @@ import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
-import { Badge, VerdictBadge } from '@/components/ui/Badge';
+import { VerdictBadge } from '@/components/ui/Badge';
 import { useAppMode } from '@/context/AppModeContext';
 import { useReport } from '@/hooks/useReport';
 import { REPORT_KEYS, type AurumReport } from '@/types/report';
@@ -58,19 +58,13 @@ function downloadReportJson(report: AurumReport) {
 interface RowProps {
   label: string;
   children: React.ReactNode;
-  preview?: boolean;
 }
 
-function ReportRow({ label, children, preview }: RowProps) {
+function ReportRow({ label, children }: RowProps) {
   return (
     <div className="flex items-start justify-between gap-4 border-b border-[#1c1d2a] px-4 py-3 last:border-b-0">
       <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-[#6b7280]">
         {label}
-        {preview && (
-          <Badge variant="warning" dot>
-            Preview
-          </Badge>
-        )}
       </span>
       <span className="max-w-[60%] text-right text-sm font-medium">{children}</span>
     </div>
@@ -136,9 +130,6 @@ export function QualityReportPage() {
               className="flex items-center gap-1.5 rounded-lg border border-[#252637] bg-[#13141e] px-3 py-1.5 text-xs font-semibold text-[#94a3b8] hover:bg-[#1a1b28]"
             >
               <FileText size={14} /> PDF
-              <Badge variant="warning" dot>
-                Preview
-              </Badge>
             </button>
             <button
               type="button"
@@ -146,9 +137,6 @@ export function QualityReportPage() {
               className="flex items-center gap-1.5 rounded-lg border border-[#252637] bg-[#13141e] px-3 py-1.5 text-xs font-semibold text-[#94a3b8] hover:bg-[#1a1b28]"
             >
               <FileSpreadsheet size={14} /> Excel
-              <Badge variant="warning" dot>
-                Preview
-              </Badge>
             </button>
             <button
               type="button"
@@ -156,9 +144,6 @@ export function QualityReportPage() {
               className="flex items-center gap-1.5 rounded-lg border border-[#252637] bg-[#13141e] px-3 py-1.5 text-xs font-semibold text-[#94a3b8] hover:bg-[#1a1b28]"
             >
               <Share2 size={14} /> Share
-              <Badge variant="warning" dot>
-                Preview
-              </Badge>
             </button>
           </div>
         )}
@@ -178,7 +163,7 @@ export function QualityReportPage() {
               <ReportRow label="Run ID">
                 <span className="font-mono text-[#f1f5f9]">{report.run_id}</span>
               </ReportRow>
-              <ReportRow label="Timestamp" preview>
+              <ReportRow label="Timestamp">
                 <span className="text-[#6b7280]">Not in report contract</span>
               </ReportRow>
               <ReportRow label="Bronze quality">
@@ -217,7 +202,7 @@ export function QualityReportPage() {
                   {affectedOrders !== null ? affectedOrders.toLocaleString('en-US') : '—'}
                 </span>
               </ReportRow>
-              <ReportRow label="Affected customers" preview>
+              <ReportRow label="Affected customers">
                 <span className="text-[#6b7280]">Not in report contract</span>
               </ReportRow>
               <ReportRow label="Overall trust score">
