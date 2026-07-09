@@ -62,6 +62,41 @@ def _bad_csv_bytes() -> bytes:
     return df.to_csv(index=False).encode("utf-8")
 
 
+def _numeric_invoice_no_csv_bytes() -> bytes:
+    rows = make_rows(5)
+    df = to_df(rows)
+    df["invoice_no"] = range(536365, 536365 + len(df))
+    return df.to_csv(index=False).encode("utf-8")
+
+
+def test_upload_numeric_invoice_no_honest_rejection(client):
+    sentinel = {"run_id": "sentinel_numeric_invoice", "final_verdict": "SENTINEL"}
+    api_main._last_report = sentinel
+    runs_before, reports_before = _sqlite_validation_counts()
+
+    response = client.post(
+        "/datasets/upload",
+        files={
+            "file": (
+                "numeric_invoice.csv",
+                io.BytesIO(_numeric_invoice_no_csv_bytes()),
+                "text/csv",
+            )
+        },
+    )
+    assert response.status_code == 422
+    body = response.json()
+    assert body["schema_match"] is False
+    assert body["missing_columns"] == []
+    assert body["expected_columns"] == list(RAW_ORDERS_COLUMNS)
+    assert body["error"] == "invoice_no must be a text/string value, not numeric"
+
+    runs_after, reports_after = _sqlite_validation_counts()
+    assert runs_after == runs_before
+    assert reports_after == reports_before
+    assert api_main._last_report == sentinel
+
+
 def test_upload_matching_csv_returns_report(client):
     response = client.post(
         "/datasets/upload",

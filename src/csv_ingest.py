@@ -27,13 +27,18 @@ RAW_ORDERS_COLUMNS: tuple[str, ...] = (
 class CsvSchemaMismatch(Exception):
     """Raised when an uploaded CSV does not match the expected raw_orders schema."""
 
-    def __init__(self, missing_columns: list[str], extra_columns: list[str] | None = None):
+    def __init__(
+        self,
+        missing_columns: list[str],
+        extra_columns: list[str] | None = None,
+        *,
+        error: str | None = None,
+    ):
         self.missing_columns = missing_columns
         self.extra_columns = extra_columns or []
         self.expected_columns = list(RAW_ORDERS_COLUMNS)
-        super().__init__(
-            "This file doesn't match the expected schema."
-        )
+        self.error = error or "This file doesn't match the expected schema."
+        super().__init__(self.error)
 
 
 def validate_raw_orders_columns(columns: list[str]) -> None:
@@ -42,6 +47,15 @@ def validate_raw_orders_columns(columns: list[str]) -> None:
     missing = [col for col in RAW_ORDERS_COLUMNS if col not in normalized]
     if missing:
         raise CsvSchemaMismatch(missing_columns=missing)
+
+
+def validate_invoice_no_text(series: pd.Series) -> None:
+    """Raise CsvSchemaMismatch if invoice_no was inferred as numeric (Olist uses text ids)."""
+    if pd.api.types.is_numeric_dtype(series):
+        raise CsvSchemaMismatch(
+            missing_columns=[],
+            error="invoice_no must be a text/string value, not numeric",
+        )
 
 
 def parse_raw_orders_csv(source: Union[str, Path, BinaryIO, bytes]) -> pd.DataFrame:
@@ -55,6 +69,7 @@ def parse_raw_orders_csv(source: Union[str, Path, BinaryIO, bytes]) -> pd.DataFr
         buffer = source  # type: ignore[assignment]
     df = pd.read_csv(buffer)
     validate_raw_orders_columns(list(df.columns))
+    validate_invoice_no_text(df["invoice_no"])
     return df[list(RAW_ORDERS_COLUMNS)].copy()
 
 

@@ -57,7 +57,7 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={
                 "schema_match": False,
-                "error": "This file doesn't match the expected schema.",
+                "error": exc.error,
                 "expected_columns": exc.expected_columns,
                 "missing_columns": exc.missing_columns,
             },
