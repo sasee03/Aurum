@@ -80,7 +80,8 @@ def handle(
         f"I can help you add a custom {target_layer.capitalize()} validation check. "
         "Data engineers can add domain-specific validation rules instead of relying only on fixed checks. "
         "Use the form on the Custom Checks page to configure layer, rule type, column, and severity, "
-        "then Save Check and Test Check. Non-SQL checks run against real validation-session data; "
+        "then Save Check and Test Check. Non-SQL checks currently run against the Olist demo "
+        "validation session; uploaded and connector-run scoped checks are coming soon. "
         "SQL-based checks are not yet supported."
     )
 

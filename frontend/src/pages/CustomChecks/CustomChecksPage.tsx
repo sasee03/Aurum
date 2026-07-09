@@ -100,8 +100,9 @@ export function CustomChecksPage() {
           <DataSourceBadge mode={displayMode} />
         </div>
         <p className="text-sm text-[#6b7280] mt-1">
-          Define domain-specific rules and test them against real validation-session data.
-          Results are additive — they do not change the engine trust score or verdict.
+          Define domain-specific rules. Test Check currently runs against the Olist demo
+          validation session; uploaded and connector-run scoped checks are coming soon.
+          Results are additive and do not change the engine trust score or verdict.
         </p>
       </div>
 
@@ -250,13 +251,24 @@ export function CustomChecksPage() {
       )}
 
       {result && (
-        <div className="rounded-lg border border-[#252637] bg-[#13141e] p-4 space-y-1 max-w-4xl">
+        <div className="rounded-lg border border-[#252637] bg-[#13141e] p-4 space-y-2 max-w-4xl">
+          <p className="text-sm font-semibold text-[#f1f5f9]">Latest Test Check Result</p>
           <p className="text-sm text-[#f1f5f9]">
             <strong>{result.status}</strong> — {result.message}
           </p>
           <p className="text-xs text-[#94a3b8]">
             observed: {String(result.observed_value)} · expected: {result.expected_condition}
           </p>
+          {result.data_source && (
+            <p className="text-xs rounded border border-[#334155] bg-[#0f172a] px-2 py-1 text-[#bfdbfe]">
+              <strong>Data source:</strong> {result.data_source}
+            </p>
+          )}
+          {result.scope_note && (
+            <p className="text-xs rounded border border-[#3f3a1f] bg-[#1a1810] px-2 py-1 text-[#fbbf24]">
+              <strong>Scope note:</strong> {result.scope_note}
+            </p>
+          )}
         </div>
       )}
     </div>

@@ -23,6 +23,12 @@ LAYER_TABLES: dict[str, str] = {
     "gold": "gold_metrics",
 }
 
+DEMO_DATA_SOURCE = "Olist demo validation session"
+DEMO_SCOPE_NOTE = (
+    "Test Check currently runs against the Olist demo validation session, "
+    "not an uploaded or connector run."
+)
+
 SUPPORTED_RULE_TYPES = frozenset(
     {
         "not_null",
@@ -42,14 +48,22 @@ def _result(
     message: str,
     observed_value: Any,
     expected_condition: str,
+    *,
+    data_source: str | None = DEMO_DATA_SOURCE,
+    scope_note: str | None = DEMO_SCOPE_NOTE,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "check_id": check_id,
         "status": status,
         "message": message,
         "observed_value": observed_value,
         "expected_condition": expected_condition,
     }
+    if data_source is not None:
+        result["data_source"] = data_source
+    if scope_note is not None:
+        result["scope_note"] = scope_note
+    return result
 
 
 def _is_blank(series: pd.Series) -> pd.Series:
@@ -124,6 +138,10 @@ def evaluate_check_on_frame(check: dict, df: pd.DataFrame) -> dict[str, Any]:
             "SQL-based custom checks are not yet supported (no arbitrary SQL execution).",
             None,
             f"{rule_type} (not yet supported)",
+            scope_note=(
+                "SQL checks are deferred for safety; no arbitrary SQL is executed "
+                "and this result is still demo-session scoped."
+            ),
         )
 
     if rule_type not in SUPPORTED_RULE_TYPES:

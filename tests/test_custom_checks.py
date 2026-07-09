@@ -121,6 +121,30 @@ def test_row_count_condition_pass_and_fail():
     assert failed["observed_value"] == 1
 
 
+def test_all_real_rule_types_include_scope_fields():
+    cases = [
+        (_check(rule_type="not_null", column="customer_id"), pd.DataFrame({"customer_id": ["A"]})),
+        (_check(rule_type="unique", column="invoice_no"), pd.DataFrame({"invoice_no": ["1", "2"]})),
+        (
+            _check(rule_type="accepted_values", column="country", operator="in", value="UK,France"),
+            pd.DataFrame({"country": ["UK"]}),
+        ),
+        (
+            _check(rule_type="numeric_range", column="unit_price", operator="between", value="0,10"),
+            pd.DataFrame({"unit_price": [1.0, 2.0]}),
+        ),
+        (
+            _check(rule_type="row_count_condition", operator=">", value="0"),
+            pd.DataFrame({"x": [1]}),
+        ),
+    ]
+    for check, frame in cases:
+        result = evaluate_check_on_frame(check, frame)
+        assert result["data_source"] == "Olist demo validation session"
+        assert "scope_note" in result
+        assert "uploaded or connector run" in result["scope_note"].lower()
+
+
 def test_missing_column_returns_skipped():
     df = pd.DataFrame({"customer_id": ["A"]})
     result = evaluate_check_on_frame(
@@ -142,6 +166,8 @@ def test_sql_rule_type_not_executed():
     assert result["status"] == "SKIPPED"
     assert "not yet supported" in result["message"].lower()
     assert result["observed_value"] is None
+    assert result["data_source"] == "Olist demo validation session"
+    assert "scope_note" in result
 
 
 def test_execute_sql_check_skips_without_loading_data(monkeypatch):
@@ -216,8 +242,9 @@ def test_api_run_returns_real_observed_value(client, monkeypatch):
     body = response.json()
     assert body["status"] == "PASS"
     assert body["observed_value"] == 4
-    assert "demo" not in body["message"].lower()
-    assert "preview" not in body["message"].lower()
+    assert body["data_source"] == "Olist demo validation session"
+    assert "olist demo" in body["scope_note"].lower()
+    assert "uploaded or connector run" in body["scope_note"].lower()
 
 
 def test_api_sql_check_skipped(client, monkeypatch):
@@ -231,3 +258,5 @@ def test_api_sql_check_skipped(client, monkeypatch):
     body = response.json()
     assert body["status"] == "SKIPPED"
     assert "not yet supported" in body["message"].lower()
+    assert body["data_source"] == "Olist demo validation session"
+    assert "deferred for safety" in body["scope_note"].lower()

@@ -285,7 +285,8 @@ def test_run_custom_check(client, monkeypatch):
     assert body["check_id"] == "custom_silver_001"
     assert body["status"] == "PASS"
     assert body["observed_value"] == 3
-    assert "demo" not in body["message"].lower()
+    assert body["data_source"] == "Olist demo validation session"
+    assert "uploaded or connector run" in body["scope_note"].lower()
 
 
 def test_fallback_missing_report(client):

@@ -199,6 +199,8 @@ export interface CustomCheckRunResult {
   message: string;
   observed_value: unknown;
   expected_condition: string;
+  data_source?: string;
+  scope_note?: string;
 }
 
 export async function listCustomChecks(): Promise<{ checks: CustomCheck[] }> {
