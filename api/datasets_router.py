@@ -15,10 +15,36 @@ from src.csv_ingest import (
     parse_raw_orders_csv,
     run_validation_from_raw_orders,
 )
+import src.csv_ingest as csv_ingest
 from src.db_config import postgres_target_info
 from src.report_builder import attach_trust_narrative
 
 router = APIRouter(tags=["datasets"])
+
+_READ_CHUNK_BYTES = 1024 * 1024
+
+
+async def _read_upload_bytes_capped(file: UploadFile) -> bytes:
+    """Read upload body in chunks; reject before buffering more than MAX_UPLOAD_BYTES."""
+    limit = csv_ingest.MAX_UPLOAD_BYTES
+    if file.size is not None and file.size > limit:
+        raise csv_ingest._schema_error(
+            f"file exceeds maximum size of {csv_ingest._format_byte_limit(limit)}"
+        )
+
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise csv_ingest._schema_error(
+                f"file exceeds maximum size of {csv_ingest._format_byte_limit(limit)}"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @router.post("/datasets/upload")
@@ -52,8 +78,8 @@ async def upload_dataset(
             },
         )
 
-    raw_bytes = await file.read()
     try:
+        raw_bytes = await _read_upload_bytes_capped(file)
         frame = parse_raw_orders_csv(raw_bytes)
     except CsvSchemaMismatch as exc:
         return JSONResponse(

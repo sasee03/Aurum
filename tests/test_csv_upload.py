@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 import api.main as api_main
 from src.app_state.db import get_connection
-from src.csv_ingest import RAW_ORDERS_COLUMNS
+from src.csv_ingest import MAX_UPLOAD_ROWS, RAW_ORDERS_COLUMNS
 from src.db_config import db_connect_timeout
 from tests.builders import make_rows, to_df
 
@@ -86,6 +86,51 @@ def _numeric_invoice_no_csv_bytes() -> bytes:
     return df.to_csv(index=False).encode("utf-8")
 
 
+def _headers_only_csv_bytes() -> bytes:
+    return (",".join(RAW_ORDERS_COLUMNS) + "\n").encode("utf-8")
+
+
+def _blank_required_field_csv_bytes(column: str = "unit_price") -> bytes:
+    rows = make_rows(3)
+    rows[1][column] = ""
+    return to_df(rows).to_csv(index=False).encode("utf-8")
+
+
+def _non_numeric_unit_price_csv_bytes() -> bytes:
+    rows = make_rows(3)
+    for row in rows:
+        row["unit_price"] = "not-a-price"
+    return to_df(rows).to_csv(index=False).encode("utf-8")
+
+
+def _duplicate_business_key_csv_bytes() -> bytes:
+    rows = make_rows(3)
+    rows[2] = dict(rows[0])
+    return to_df(rows).to_csv(index=False).encode("utf-8")
+
+
+def _assert_upload_rejected(client, payload: bytes, filename: str, expected_error: str):
+    sentinel = {"run_id": "sentinel_reject", "final_verdict": "SENTINEL"}
+    api_main._last_report = sentinel
+    runs_before, reports_before = _sqlite_validation_counts()
+
+    response = client.post(
+        "/datasets/upload",
+        files={"file": (filename, io.BytesIO(payload), "text/csv")},
+    )
+    assert response.status_code == 422
+    body = response.json()
+    assert body["schema_match"] is False
+    assert body["missing_columns"] == []
+    assert body["expected_columns"] == list(RAW_ORDERS_COLUMNS)
+    assert body["error"] == expected_error
+
+    runs_after, reports_after = _sqlite_validation_counts()
+    assert runs_after == runs_before
+    assert reports_after == reports_before
+    assert api_main._last_report == sentinel
+
+
 def test_upload_numeric_invoice_no_honest_rejection(client):
     sentinel = {"run_id": "sentinel_numeric_invoice", "final_verdict": "SENTINEL"}
     api_main._last_report = sentinel
@@ -112,6 +157,87 @@ def test_upload_numeric_invoice_no_honest_rejection(client):
     assert runs_after == runs_before
     assert reports_after == reports_before
     assert api_main._last_report == sentinel
+
+
+def test_upload_headers_only_no_rows_honest_rejection(client):
+    _assert_upload_rejected(
+        client,
+        _headers_only_csv_bytes(),
+        "headers_only.csv",
+        "file contains no data rows",
+    )
+
+
+def test_upload_empty_file_honest_rejection(client):
+    _assert_upload_rejected(client, b"", "empty.csv", "file is empty")
+
+
+def test_upload_garbage_file_honest_rejection(client):
+    _assert_upload_rejected(
+        client,
+        b"this is not csv content {{{",
+        "garbage.csv",
+        "file is not a valid CSV",
+    )
+
+
+def test_upload_blank_required_field_honest_rejection(client):
+    _assert_upload_rejected(
+        client,
+        _blank_required_field_csv_bytes("unit_price"),
+        "blank_unit_price.csv",
+        "Required column 'unit_price' has 1 missing or blank value(s)",
+    )
+
+
+def test_upload_non_numeric_unit_price_honest_rejection(client):
+    _assert_upload_rejected(
+        client,
+        _non_numeric_unit_price_csv_bytes(),
+        "bad_unit_price.csv",
+        "unit_price must be a numeric value",
+    )
+
+
+def test_upload_oversized_row_count_honest_rejection(client, monkeypatch):
+    monkeypatch.setattr("src.csv_ingest.MAX_UPLOAD_ROWS", 2)
+    _assert_upload_rejected(
+        client,
+        _csv_bytes(),
+        "too_many_rows.csv",
+        "file exceeds maximum of 2 data rows",
+    )
+
+
+def test_upload_oversized_file_bytes_honest_rejection(client, monkeypatch):
+    monkeypatch.setattr("src.csv_ingest.MAX_UPLOAD_BYTES", 64)
+    payload = _csv_bytes()
+    assert len(payload) > 64
+    _assert_upload_rejected(
+        client,
+        payload,
+        "too_large.csv",
+        "file exceeds maximum size of 64 bytes",
+    )
+
+
+def test_upload_duplicate_business_key_runs_engine_s3_check(client):
+    response = client.post(
+        "/datasets/upload",
+        files={
+            "file": (
+                "duplicate_keys.csv",
+                io.BytesIO(_duplicate_business_key_csv_bytes()),
+                "text/csv",
+            )
+        },
+    )
+    assert response.status_code == 200
+    report = response.json()
+    silver_checks = report["checks"]["silver"]
+    s3 = next(check for check in silver_checks if check["check_id"] == "S3")
+    assert s3["observed"]["bronze_duplicates"] >= 1
+    assert s3["observed"]["silver_duplicates"] >= 1
 
 
 def test_upload_matching_csv_returns_report(client):
