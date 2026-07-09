@@ -120,6 +120,22 @@ def validate_column_dtypes(df: pd.DataFrame) -> None:
         raise _schema_error("invoice_date must be a date/text value, not numeric")
 
 
+def validate_raw_orders_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply the same Olist-shape checks used for CSV uploads to an in-memory frame.
+
+    Raises CsvSchemaMismatch on mismatch — never falls back to demo data.
+    """
+    # Intentional broadening: accept case-insensitive/trimmed headers from CSV and connectors.
+    renamed = {col: str(col).strip().lower() for col in df.columns}
+    normalized = df.rename(columns=renamed)
+    validate_raw_orders_columns(list(normalized.columns))
+    validate_row_count(normalized)
+    out = normalized[list(RAW_ORDERS_COLUMNS)].copy()
+    validate_required_non_null(out)
+    validate_column_dtypes(out)
+    return out
+
+
 def parse_raw_orders_csv(source: Union[str, Path, BinaryIO, bytes]) -> pd.DataFrame:
     """Read a CSV and return a normalized raw_orders DataFrame.
 
@@ -147,12 +163,7 @@ def parse_raw_orders_csv(source: Union[str, Path, BinaryIO, bytes]) -> pd.DataFr
     except pd.errors.ParserError:
         raise _schema_error("file is not a valid CSV") from None
 
-    validate_raw_orders_columns(list(df.columns))
-    validate_row_count(df)
-    df = df[list(RAW_ORDERS_COLUMNS)].copy()
-    validate_required_non_null(df)
-    validate_column_dtypes(df)
-    return df
+    return validate_raw_orders_frame(df)
 
 
 def materialize_upload_pipeline(loader: DataLoader) -> None:

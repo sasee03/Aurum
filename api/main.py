@@ -39,6 +39,7 @@ from src.app_state.store import (
 )
 
 from api.aurum_assistant.router import router as aurum_assistant_router
+from api.connectors_router import router as connectors_router
 from api.datasets_router import router as datasets_router
 from api.projects_router import router as projects_router
 
@@ -50,6 +51,7 @@ REACT_DEV_ORIGINS = [
 app = FastAPI(title="Aurum API", version="1.0.0")
 
 app.include_router(aurum_assistant_router)
+app.include_router(connectors_router)
 app.include_router(datasets_router)
 app.include_router(projects_router)
 

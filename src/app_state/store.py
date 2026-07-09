@@ -172,3 +172,74 @@ def list_validation_runs() -> list[dict[str, Any]]:
             }
         )
     return runs
+
+
+def _row_to_connection(row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "type": row["type"],
+        "name": row["name"],
+        "host": row["host"],
+        "port": row["port"],
+        "database_name": row["database_name"],
+        "username": row["username"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def save_data_connection(
+    *,
+    connection_id: str,
+    project_id: str,
+    name: str,
+    host: str,
+    port: int,
+    database_name: str,
+    username: str,
+    status: str = "active",
+    connection_type: str = "postgresql",
+) -> dict[str, Any]:
+    """Persist connection metadata only — never stores a password."""
+    now = _utc_now()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO data_connections (
+                id, project_id, type, name, host, port, database_name,
+                username, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                connection_id,
+                project_id,
+                connection_type,
+                name,
+                host,
+                int(port),
+                database_name,
+                username,
+                status,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM data_connections WHERE id = ?",
+            (connection_id,),
+        ).fetchone()
+    return _row_to_connection(row)
+
+
+def get_data_connection(connection_id: str) -> Optional[dict[str, Any]]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM data_connections WHERE id = ?",
+            (connection_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return _row_to_connection(row)

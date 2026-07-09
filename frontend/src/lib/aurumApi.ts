@@ -268,3 +268,89 @@ export async function uploadDatasetCsv(file: File, projectId?: string): Promise<
   }
   return body as AurumReport;
 }
+
+export interface PostgresTestPayload {
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  project_id?: string;
+  name?: string;
+}
+
+export interface PostgresTestSuccess {
+  connected: true;
+  connection_id: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  name: string;
+}
+
+export interface PostgresTestFailure {
+  connected: false;
+  error: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  username?: string;
+}
+
+export type PostgresTestResult = PostgresTestSuccess | PostgresTestFailure;
+
+export async function testPostgresConnection(
+  payload: PostgresTestPayload,
+): Promise<PostgresTestResult> {
+  const res = await fetchWithTimeout('/connectors/postgres/test', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, 15_000);
+  const body = (await res.json()) as PostgresTestResult;
+  if (!res.ok && !('connected' in body)) {
+    throw new ApiError(API_UNAVAILABLE);
+  }
+  return body;
+}
+
+export async function listPostgresSchemas(
+  connectionId: string,
+): Promise<{ connection_id: string; schemas: string[] }> {
+  return request(`/connectors/postgres/schemas?connection_id=${encodeURIComponent(connectionId)}`);
+}
+
+export interface PostgresTableEntry {
+  schema: string;
+  table: string;
+  layer: string;
+}
+
+export async function listPostgresTables(
+  connectionId: string,
+  schema?: string,
+): Promise<{ connection_id: string; schema: string | null; tables: PostgresTableEntry[] }> {
+  const params = new URLSearchParams({ connection_id: connectionId });
+  if (schema) params.set('schema', schema);
+  return request(`/connectors/postgres/tables?${params.toString()}`);
+}
+
+export async function validatePostgresTable(payload: {
+  connection_id: string;
+  schema: string;
+  table: string;
+  project_id?: string;
+}): Promise<AurumReport> {
+  const res = await fetchWithTimeout('/connectors/postgres/validate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, 60_000);
+  const body = await res.json();
+  if (res.status === 422 && body?.schema_match === false) {
+    throw new CsvUploadError(body as CsvUploadMismatch);
+  }
+  if (!res.ok) {
+    throw new ApiError(API_UNAVAILABLE);
+  }
+  return body as AurumReport;
+}

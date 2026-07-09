@@ -30,6 +30,8 @@ function runModeDisplay(mode: string): { label: string; variant: 'pass' | 'warni
       return { label: 'Demo', variant: 'warning' };
     case 'upload':
       return { label: 'Upload', variant: 'primary' };
+    case 'connector':
+      return { label: 'Connector', variant: 'secondary' };
     case 'live':
       // Legacy rows persisted before the honesty fix; show without crashing.
       return { label: 'Live', variant: 'default' };

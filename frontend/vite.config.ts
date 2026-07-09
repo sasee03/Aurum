@@ -33,6 +33,7 @@ export default defineConfig({
       '/custom-checks': apiProxy('http://127.0.0.1:8000'),
       '/projects': apiProxy('http://127.0.0.1:8000'),
       '/datasets': apiProxy('http://127.0.0.1:8000'),
+      '/connectors': apiProxy('http://127.0.0.1:8000'),
     },
   },
 });

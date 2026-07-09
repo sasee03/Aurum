@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { CheckCircle2, ArrowRight, Upload, Eye, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, ArrowRight, Upload, Eye } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -8,7 +8,16 @@ import { Badge } from '@/components/ui/Badge';
 import { cn } from '@/utils/cn';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { useAppMode } from '@/context/AppModeContext';
-import { CsvUploadError, getMetadataHealth, uploadDatasetCsv, type CsvUploadMismatch } from '@/lib/aurumApi';
+import {
+  CsvUploadError,
+  listPostgresSchemas,
+  listPostgresTables,
+  testPostgresConnection,
+  uploadDatasetCsv,
+  validatePostgresTable,
+  type CsvUploadMismatch,
+  type PostgresTableEntry,
+} from '@/lib/aurumApi';
 import connectorsData from '@/mocks/connectors.json';
 import type { Connector } from '@/types';
 
@@ -224,30 +233,148 @@ function CsvPanel({ projectId }: { projectId: string }) {
 }
 
 // ────────────────────────────────────────────
-// PostgreSQL Config Panel — real backend DB reachability test
+// PostgreSQL Config Panel — user-supplied connection (not app DATABASE_URL)
 // ────────────────────────────────────────────
-function PostgresPanel({ onConnect }: { onConnect: () => void }) {
-  const [connected, setConnected] = useState(false);
-  const [degraded, setDegraded] = useState(false);
-  const [testing, setTesting] = useState(false);
+type ConnectStatus = 'idle' | 'testing' | 'connected' | 'failed';
+
+function PostgresPanel({ projectId }: { projectId: string }) {
+  const navigate = useNavigate();
+  const { canRunValidation } = useAppMode();
+
+  const [host, setHost] = useState('localhost');
+  const [port, setPort] = useState('');
+  const [database, setDatabase] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
+  const [status, setStatus] = useState<ConnectStatus>('idle');
+  const [error, setError] = useState<string | null>(null);
+  const [connectionId, setConnectionId] = useState<string | null>(null);
+
+  const [schemas, setSchemas] = useState<string[]>([]);
+  const [selectedSchema, setSelectedSchema] = useState('');
+  const [tables, setTables] = useState<PostgresTableEntry[]>([]);
+  const [selectedTable, setSelectedTable] = useState('');
+  const [loadingMeta, setLoadingMeta] = useState(false);
+  const [validating, setValidating] = useState(false);
+  const [mismatch, setMismatch] = useState<CsvUploadMismatch | null>(null);
+
   async function handleTest() {
-    setTesting(true);
-    setConnected(false);
-    setDegraded(false);
+    if (!host.trim() || !port.trim() || !database.trim() || !username.trim()) {
+      toast.error('Host, port, database, and username are required.');
+      return;
+    }
+    const portNum = Number(port);
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+      toast.error('Port must be an integer between 1 and 65535.');
+      return;
+    }
+
+    setStatus('testing');
+    setError(null);
+    setConnectionId(null);
+    setSchemas([]);
+    setTables([]);
+    setSelectedSchema('');
+    setSelectedTable('');
+    setMismatch(null);
+
     try {
-      const res = await getMetadataHealth();
-      if (res.status === 'ok') {
-        setConnected(true);
-        toast.success('PostgreSQL connected successfully.');
-      } else {
-        setDegraded(true);
+      const result = await testPostgresConnection({
+        host: host.trim(),
+        port: portNum,
+        database: database.trim(),
+        username: username.trim(),
+        password,
+        project_id: projectId,
+      });
+      // Clear password from UI state after submission — never show it back.
+      setPassword('');
+
+      if (!result.connected) {
+        setStatus('failed');
+        setError(result.error);
+        toast.error(result.error);
+        return;
+      }
+
+      setStatus('connected');
+      setConnectionId(result.connection_id);
+      toast.success('Connected to PostgreSQL.');
+
+      setLoadingMeta(true);
+      try {
+        const schemaRes = await listPostgresSchemas(result.connection_id);
+        setSchemas(schemaRes.schemas);
+        const preferred = schemaRes.schemas.includes('public')
+          ? 'public'
+          : (schemaRes.schemas[0] ?? '');
+        setSelectedSchema(preferred);
+        if (preferred) {
+          const tableRes = await listPostgresTables(result.connection_id, preferred);
+          setTables(tableRes.tables);
+        }
+      } catch {
+        toast.error('Connected, but schema listing failed. Re-test the connection.');
+      } finally {
+        setLoadingMeta(false);
       }
     } catch {
+      setStatus('failed');
+      setError('Backend API is not running or the request timed out.');
       toast.error('Backend API is not running. Check the connection.');
+      setPassword('');
+    }
+  }
+
+  async function handleSchemaChange(nextSchema: string) {
+    setSelectedSchema(nextSchema);
+    setSelectedTable('');
+    setTables([]);
+    setMismatch(null);
+    if (!connectionId || !nextSchema) return;
+    setLoadingMeta(true);
+    try {
+      const tableRes = await listPostgresTables(connectionId, nextSchema);
+      setTables(tableRes.tables);
+    } catch {
+      toast.error('Failed to list tables. Re-test the connection.');
     } finally {
-      setTesting(false);
+      setLoadingMeta(false);
+    }
+  }
+
+  async function handleValidate() {
+    if (!connectionId || !selectedSchema || !selectedTable) {
+      toast.error('Select a schema and table first.');
+      return;
+    }
+    if (!canRunValidation) {
+      toast.error('Aurum database is unreachable — start PostgreSQL and check /health.');
+      return;
+    }
+    setValidating(true);
+    setMismatch(null);
+    try {
+      const report = await validatePostgresTable({
+        connection_id: connectionId,
+        schema: selectedSchema,
+        table: selectedTable,
+        project_id: projectId,
+      });
+      toast.success('Table validated — opening quality report.');
+      navigate(
+        `/projects/${projectId}/report/quality?runId=${encodeURIComponent(report.run_id)}`,
+      );
+    } catch (err) {
+      if (err instanceof CsvUploadError) {
+        setMismatch(err.mismatch);
+      } else {
+        toast.error('Validation failed. Check the backend and database.');
+      }
+    } finally {
+      setValidating(false);
     }
   }
 
@@ -255,92 +382,151 @@ function PostgresPanel({ onConnect }: { onConnect: () => void }) {
     <div className="space-y-4">
       <div className="grid grid-cols-3 gap-3">
         <div className="col-span-2">
-          <Input label="Host" defaultValue="localhost" disabled readOnly />
+          <Input
+            label="Host"
+            value={host}
+            onChange={(e) => setHost(e.target.value)}
+            placeholder="localhost"
+            autoComplete="off"
+          />
         </div>
-        <Input label="Port" type="number" defaultValue="5433" disabled readOnly />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <Input label="Database" defaultValue="aurum" disabled readOnly />
-        <Input label="Schema" defaultValue="public" disabled readOnly />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <Input label="Username" defaultValue="aurum" disabled readOnly />
         <Input
-          label="Password"
-          type={showPassword ? 'text' : 'password'}
-          defaultValue="aurum"
-          disabled
-          readOnly
-          rightIcon={
-            <button
-              type="button"
-              onClick={() => setShowPassword((v) => !v)}
-              className="text-xs text-[#6b7280] hover:text-[#f1f5f9] transition-colors"
-              aria-label={showPassword ? 'Hide password' : 'Show password'}
-            >
-              {showPassword ? 'Hide' : 'Show'}
-            </button>
-          }
+          label="Port"
+          type="number"
+          value={port}
+          onChange={(e) => setPort(e.target.value)}
+          placeholder="e.g. 5432"
+          autoComplete="off"
         />
       </div>
-      <label className="flex items-center gap-2.5 cursor-not-allowed opacity-60">
-        <input type="checkbox" disabled className="h-4 w-4 rounded border-[#252637] accent-[#6366f1]" />
-        <span className="text-sm text-[#94a3b8]">Enable SSL</span>
-      </label>
+      <div className="grid grid-cols-2 gap-3">
+        <Input
+          label="Database"
+          value={database}
+          onChange={(e) => setDatabase(e.target.value)}
+          placeholder="your_database"
+          autoComplete="off"
+        />
+        <Input
+          label="Username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="postgres"
+          autoComplete="off"
+        />
+      </div>
+      <Input
+        label="Password"
+        type={showPassword ? 'text' : 'password'}
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        placeholder="Enter password"
+        autoComplete="new-password"
+        rightIcon={
+          <button
+            type="button"
+            onClick={() => setShowPassword((v) => !v)}
+            className="text-xs text-[#6b7280] hover:text-[#f1f5f9] transition-colors"
+            aria-label={showPassword ? 'Hide password' : 'Show password'}
+          >
+            {showPassword ? 'Hide' : 'Show'}
+          </button>
+        }
+      />
 
-      <div className="flex items-center gap-3 pt-2 border-t border-[#252637]">
-        <Button
-          variant="secondary"
-          isLoading={testing}
-          onClick={handleTest}
-          size="sm"
-        >
-          {connected ? (
+      <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-[#252637]">
+        <Button variant="secondary" isLoading={status === 'testing'} onClick={handleTest} size="sm">
+          {status === 'connected' ? (
             <>
               <CheckCircle2 size={14} className="text-[#22c55e]" />
-              <span className="text-[#22c55e]">DB reachable</span>
+              <span className="text-[#22c55e]">Connected</span>
             </>
+          ) : status === 'testing' ? (
+            'Testing…'
           ) : (
-            'Test Backend DB Connection'
+            'Test Connection'
           )}
         </Button>
+        {status === 'failed' && error && (
+          <span className="text-xs text-[#ef4444]" role="alert">
+            Failed: {error}
+          </span>
+        )}
+        {status === 'connected' && connectionId && (
+          <span className="text-xs text-[#6b7280]">Session {connectionId}</span>
+        )}
       </div>
 
       <p className="text-xs text-[#6b7280] italic">
-        Uses the backend-configured PostgreSQL connection from your .env file.
+        Connects to YOUR Postgres (host/port you enter). Password is never stored or returned —
+        re-test after an API restart.
       </p>
 
-      {connected && (
-        <Button
-          variant="primary"
-          className="w-full"
-          rightIcon={<ArrowRight size={16} />}
-          onClick={onConnect}
-        >
-          Explore Datasets
-        </Button>
-      )}
-
-      {degraded && (
-        <div className="mt-4 p-3 bg-[#451a03] border border-[#78350f] rounded-md space-y-2 animate-slide-up">
-          <div className="flex items-start gap-2">
-            <AlertTriangle size={16} className="text-[#f59e0b] mt-0.5 flex-shrink-0" />
-            <div>
-              <p className="text-sm font-semibold text-[#fde68a]">
-                Backend is running, but PostgreSQL is unavailable in this environment.
-              </p>
-              <p className="text-xs text-[#fcd34d] mt-1">
-                You can continue with clearly labelled demo metadata.
-              </p>
+      {status === 'connected' && (
+        <div className="space-y-3 pt-2 border-t border-[#252637]">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold uppercase tracking-widest text-[#6b7280]">
+                Schema
+              </label>
+              <select
+                className="w-full rounded-lg border border-[#252637] bg-[#1a1b28] px-3 py-2.5 text-sm text-[#f1f5f9] focus:border-[#6366f1] focus:outline-none"
+                value={selectedSchema}
+                disabled={loadingMeta || schemas.length === 0}
+                onChange={(e) => handleSchemaChange(e.target.value)}
+              >
+                {schemas.length === 0 && <option value="">No schemas</option>}
+                {schemas.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold uppercase tracking-widest text-[#6b7280]">
+                Table
+              </label>
+              <select
+                className="w-full rounded-lg border border-[#252637] bg-[#1a1b28] px-3 py-2.5 text-sm text-[#f1f5f9] focus:border-[#6366f1] focus:outline-none"
+                value={selectedTable}
+                disabled={loadingMeta || tables.length === 0}
+                onChange={(e) => {
+                  setSelectedTable(e.target.value);
+                  setMismatch(null);
+                }}
+              >
+                <option value="">Select a table</option>
+                {tables.map((t) => (
+                  <option key={`${t.schema}.${t.table}`} value={t.table}>
+                    {t.table}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
+
+          {mismatch && (
+            <div className="rounded-md border border-[#7f1d1d] bg-[#450a0a] p-3 space-y-1">
+              <p className="text-sm font-semibold text-[#fecaca]">Schema mismatch</p>
+              <p className="text-xs text-[#fca5a5]">{mismatch.error}</p>
+              {mismatch.missing_columns.length > 0 && (
+                <p className="text-xs text-[#fca5a5]">
+                  Missing: {mismatch.missing_columns.join(', ')}
+                </p>
+              )}
+            </div>
+          )}
+
           <Button
-            variant="secondary"
-            className="w-full mt-2 border-[#78350f] text-[#fcd34d] hover:bg-[#78350f]/50 gap-2"
-            rightIcon={<ArrowRight size={14} />}
-            onClick={onConnect}
+            variant="primary"
+            className="w-full"
+            isLoading={validating}
+            disabled={!selectedTable || validating}
+            rightIcon={<ArrowRight size={16} />}
+            onClick={handleValidate}
           >
-            Continue with Demo Metadata
+            Validate this table
           </Button>
         </div>
       )}
@@ -366,14 +552,9 @@ function PreviewConnectorPanel({ connector }: { connector: Connector }) {
 // Main Connectors Page
 // ────────────────────────────────────────────
 export function ConnectorsPage() {
-  const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const { displayMode } = useAppMode();
   const [selected, setSelected] = useState<string | null>(null);
-
-  function handleConnect() {
-    navigate(`/projects/${id}/select`);
-  }
 
   const selectedConnector = connectors.find((c) => c.id === selected);
 
@@ -422,7 +603,9 @@ export function ConnectorsPage() {
               </div>
 
               {selectedConnector.type === 'csv' && <CsvPanel projectId={id ?? 'demo'} />}
-              {selectedConnector.type === 'postgresql' && <PostgresPanel onConnect={handleConnect} />}
+              {selectedConnector.type === 'postgresql' && (
+                <PostgresPanel projectId={id ?? 'demo'} />
+              )}
               {selectedConnector.type === 'preview' && (
                 <PreviewConnectorPanel connector={selectedConnector} />
               )}
