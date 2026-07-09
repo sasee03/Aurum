@@ -8,6 +8,7 @@ from api.aurum_assistant.context import (
     DEMO_PK_ISSUE,
     format_response,
     load_latest_report,
+    load_report_for_run,
 )
 
 
@@ -33,8 +34,9 @@ def handle_primary_key(
     page: str = "validation",
     layer: Optional[str] = None,
     context: Optional[dict] = None,
+    run_id: str = "latest",
 ) -> dict:
-    report = load_latest_report()
+    report = load_report_for_run(run_id)
     pk_checks = _find_pk_checks(report) if report else []
     failed_pk = [c for c in pk_checks if c.get("status") in ("FAIL", "WARN")]
 
@@ -75,10 +77,11 @@ def handle_datetime(
     page: str = "validation",
     layer: Optional[str] = None,
     context: Optional[dict] = None,
+    run_id: str = "latest",
 ) -> dict:
     from api.aurum_assistant.context import DEMO_DATETIME_ISSUE
 
-    report = load_latest_report()
+    report = load_report_for_run(run_id)
     time_checks: list[dict] = []
     if report:
         for layer_checks in report.get("checks", {}).values():

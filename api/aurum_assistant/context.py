@@ -63,6 +63,19 @@ def load_latest_report() -> Optional[dict]:
     return load_json_file(REPORT_PATH)
 
 
+def load_report_for_run(run_id: Optional[str]) -> Optional[dict]:
+    """Load report by run_id from SQLite store, falling back to latest."""
+    if run_id and run_id not in ("latest", "demo_run_001", ""):
+        try:
+            from src.app_state.store import get_report_by_run_id
+            stored = get_report_by_run_id(run_id)
+            if stored is not None:
+                return stored
+        except Exception:
+            pass
+    return load_latest_report()
+
+
 def _row_counts_from_report(report: dict) -> tuple[int, int]:
     """Extract bronze/silver row counts from a validation report when present."""
     bronze_rows = 0

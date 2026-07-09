@@ -255,7 +255,7 @@ export async function uploadDatasetCsv(file: File): Promise<AurumReport> {
   const res = await fetchWithTimeout('/datasets/upload', {
     method: 'POST',
     body: form,
-  });
+  }, 60_000);
   const body = await res.json();
   if (res.status === 422 && body?.schema_match === false) {
     throw new CsvUploadError(body as CsvUploadMismatch);

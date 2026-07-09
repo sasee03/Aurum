@@ -9,6 +9,7 @@ from api.aurum_assistant.context import (
     format_response,
     load_history_records,
     load_latest_report,
+    load_report_for_run,
 )
 
 
@@ -23,9 +24,10 @@ def handle(
     page: str = "history",
     layer: Optional[str] = None,
     context: Optional[dict] = None,
+    run_id: str = "latest",
 ) -> dict:
     history = load_history_records()
-    report = load_latest_report()
+    report = load_report_for_run(run_id)
 
     if not history:
         return fallback_response(

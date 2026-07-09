@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from api.aurum_assistant.context import fallback_response, format_response, load_latest_report
+from api.aurum_assistant.context import fallback_response, format_response, load_latest_report, load_report_for_run
 
 
 def _layer_from_context(page: str, layer: Optional[str]) -> Optional[str]:
@@ -27,7 +27,7 @@ def handle(
     run_id: str = "latest",
     context: Optional[dict] = None,
 ) -> dict:
-    report = load_latest_report()
+    report = load_report_for_run(run_id)
     if report is None:
         return fallback_response(
             "I could not find the latest report context. Please run the pipeline once and try again.",

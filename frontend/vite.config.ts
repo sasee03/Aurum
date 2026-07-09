@@ -31,6 +31,8 @@ export default defineConfig({
       '/aurum-assistant': apiProxy('http://127.0.0.1:8000'),
       '/assistant': apiProxy('http://127.0.0.1:8000'),
       '/custom-checks': apiProxy('http://127.0.0.1:8000'),
+      '/projects': apiProxy('http://127.0.0.1:8000'),
+      '/datasets': apiProxy('http://127.0.0.1:8000'),
     },
   },
 });

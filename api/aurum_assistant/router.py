@@ -77,6 +77,7 @@ def _dispatch_intent(intent: str, request: ChatRequest) -> dict:
         "page": request.page,
         "layer": request.layer,
         "context": request.context.model_dump(),
+        "run_id": request.run_id,
     }
     handlers = {
         "validation_explanation": validation_explainer.handle,
@@ -89,6 +90,11 @@ def _dispatch_intent(intent: str, request: ChatRequest) -> dict:
         "custom_check_builder": custom_check_handler.handle,
     }
     handler = handlers.get(intent, validation_explainer.handle)
+    # Pass run_id only to handlers that accept it; others ignore extra kwargs via **kwargs
+    import inspect
+    sig = inspect.signature(handler)
+    if "run_id" not in sig.parameters:
+        kwargs.pop("run_id")
     return handler(**kwargs)
 
 
