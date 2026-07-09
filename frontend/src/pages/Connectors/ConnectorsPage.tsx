@@ -327,7 +327,7 @@ function PostgresPanel({ onConnect }: { onConnect: () => void }) {
             <AlertTriangle size={16} className="text-[#f59e0b] mt-0.5 flex-shrink-0" />
             <div>
               <p className="text-sm font-semibold text-[#fde68a]">
-                Backend is running, but local PostgreSQL is unavailable on this machine.
+                Backend is running, but PostgreSQL is unavailable in this environment.
               </p>
               <p className="text-xs text-[#fcd34d] mt-1">
                 You can continue with clearly labelled demo metadata.

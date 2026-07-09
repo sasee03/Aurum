@@ -84,7 +84,7 @@ export function LandingPage() {
             leftIcon={<Plus size={16} />}
             onClick={() => navigate('/projects/new')}
           >
-            + New Project
+            New Project
           </Button>
           <Button
             variant="secondary"
@@ -102,7 +102,12 @@ export function LandingPage() {
           >
             Recent Runs
           </Button>
-          <Button variant="ghost" size="lg" leftIcon={<FileText size={16} />}>
+          <Button
+            variant="ghost"
+            size="lg"
+            leftIcon={<FileText size={16} />}
+            onClick={() => navigate('/documentation')}
+          >
             Documentation
           </Button>
         </div>

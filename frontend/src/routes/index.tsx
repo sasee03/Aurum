@@ -16,6 +16,7 @@ import { TrustScoringPage } from '@/pages/TrustScoring/TrustScoringPage';
 import { QualityReportPage } from '@/pages/QualityReport/QualityReportPage';
 import { RunHistoryPage } from '@/pages/RunHistory/RunHistoryPage';
 import { CustomChecksPage } from '@/pages/CustomChecks/CustomChecksPage';
+import { DocumentationPage } from '@/pages/Documentation/DocumentationPage';
 import { PlannedFeaturePage } from '@/pages/Planned/PlannedFeaturePage';
 
 const router = createBrowserRouter([
@@ -27,6 +28,7 @@ const router = createBrowserRouter([
       { path: 'projects/new', element: <NewProjectPage /> },
       { path: 'history', element: <RunHistoryPage /> },
       { path: 'custom-checks', element: <CustomChecksPage /> },
+      { path: 'documentation', element: <DocumentationPage /> },
       { path: 'projects/:id/dashboard', element: <ProjectDashboardPage /> },
       { path: 'projects/:id/connect', element: <ConnectorsPage /> },
       { path: 'projects/:id/select', element: <DatasetExplorerPage /> },
