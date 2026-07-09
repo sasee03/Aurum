@@ -109,6 +109,13 @@ def _duplicate_business_key_csv_bytes() -> bytes:
     return to_df(rows).to_csv(index=False).encode("utf-8")
 
 
+def _alphanumeric_customer_id_csv_bytes() -> bytes:
+    rows = make_rows(25)
+    for idx, row in enumerate(rows, start=1):
+        row["customer_id"] = f"CUST-{idx:03d}"
+    return to_df(rows).to_csv(index=False).encode("utf-8")
+
+
 def _assert_upload_rejected(client, payload: bytes, filename: str, expected_error: str):
     sentinel = {"run_id": "sentinel_reject", "final_verdict": "SENTINEL"}
     api_main._last_report = sentinel
@@ -251,6 +258,24 @@ def test_upload_matching_csv_returns_report(client):
     assert report["final_verdict"]
     assert "checks" in report
     assert len(report["checks"]["bronze"]) >= 1
+
+
+def test_upload_accepts_alphanumeric_customer_id_identifier(client):
+    response = client.post(
+        "/datasets/upload",
+        files={
+            "file": (
+                "customer_ids.csv",
+                io.BytesIO(_alphanumeric_customer_id_csv_bytes()),
+                "text/csv",
+            )
+        },
+    )
+    assert response.status_code == 200
+    report = response.json()
+    assert report["run_id"].startswith("upload_")
+    assert report["final_verdict"]
+    assert "checks" in report
 
 
 def test_upload_mismatched_csv_honest_rejection(client):

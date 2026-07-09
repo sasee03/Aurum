@@ -24,7 +24,7 @@ RAW_ORDERS_COLUMNS: tuple[str, ...] = (
 )
 
 TEXT_COLUMNS: tuple[str, ...] = ("invoice_no", "stock_code", "description", "country")
-NUMERIC_COLUMNS: tuple[str, ...] = ("quantity", "unit_price", "customer_id")
+NUMERIC_COLUMNS: tuple[str, ...] = ("quantity", "unit_price")
 
 # Upload limits — reject before parsing huge payloads into memory.
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
@@ -133,6 +133,7 @@ def validate_raw_orders_frame(df: pd.DataFrame) -> pd.DataFrame:
     out = normalized[list(RAW_ORDERS_COLUMNS)].copy()
     validate_required_non_null(out)
     validate_column_dtypes(out)
+    out["customer_id"] = out["customer_id"].astype(str)
     return out
 
 
