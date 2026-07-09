@@ -1,0 +1,80 @@
+"""SQLite connection and schema for Aurum app state."""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+from pathlib import Path
+
+DEFAULT_RELATIVE_PATH = Path("data") / "app_state.sqlite"
+
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    environment TEXT NOT NULL DEFAULT 'Development',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_run_id TEXT,
+    status TEXT NOT NULL DEFAULT 'active'
+);
+
+CREATE TABLE IF NOT EXISTS data_connections (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    host TEXT,
+    port INTEGER,
+    database_name TEXT,
+    username TEXT,
+    status TEXT NOT NULL DEFAULT 'inactive',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+
+CREATE TABLE IF NOT EXISTS validation_runs (
+    run_id TEXT PRIMARY KEY,
+    project_id TEXT,
+    connection_id TEXT,
+    status TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    error_message TEXT,
+    FOREIGN KEY (project_id) REFERENCES projects(id),
+    FOREIGN KEY (connection_id) REFERENCES data_connections(id)
+);
+
+CREATE TABLE IF NOT EXISTS validation_reports (
+    run_id TEXT PRIMARY KEY,
+    report_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES validation_runs(run_id)
+);
+"""
+
+
+def app_state_path() -> Path:
+    """Return SQLite file path (env override or gitignored default under data/)."""
+    override = os.getenv("AURUM_APP_STATE_DB", "").strip()
+    if override:
+        return Path(override)
+    return DEFAULT_RELATIVE_PATH
+
+
+def init_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(_SCHEMA_SQL)
+    conn.commit()
+
+
+def get_connection() -> sqlite3.Connection:
+    path = app_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    init_schema(conn)
+    return conn

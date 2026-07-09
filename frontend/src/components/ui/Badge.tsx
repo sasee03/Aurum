@@ -54,3 +54,9 @@ export function StatusBadge({ status }: { status: ProjectStatus }) {
   };
   return <Badge variant={map[status]}>{status}</Badge>;
 }
+
+export function VerdictBadge({ verdict }: { verdict: string }) {
+  const variant: BadgeVariant =
+    verdict === 'TRUSTED' ? 'pass' : verdict === 'WARNING' ? 'warning' : 'failed';
+  return <Badge variant={variant}>{verdict}</Badge>;
+}

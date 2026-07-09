@@ -4,7 +4,8 @@
     "type": "csv",
     "name": "Local CSV",
     "icon": "Cs",
-    "description": "Upload a local CSV file as a data source."
+    "description": "Upload a local CSV file as a data source.",
+    "preview": true
   },
   {
     "id": "postgresql",
@@ -12,5 +13,53 @@
     "name": "PostgreSQL",
     "icon": "Pg",
     "description": "Connect to a PostgreSQL database."
+  },
+  {
+    "id": "snowflake",
+    "type": "preview",
+    "name": "Snowflake",
+    "icon": "Sf",
+    "description": "Planned — Snowflake warehouse connector.",
+    "preview": true
+  },
+  {
+    "id": "bigquery",
+    "type": "preview",
+    "name": "BigQuery",
+    "icon": "Bq",
+    "description": "Planned — Google BigQuery connector.",
+    "preview": true
+  },
+  {
+    "id": "databricks",
+    "type": "preview",
+    "name": "Databricks",
+    "icon": "Db",
+    "description": "Planned — Databricks lakehouse connector.",
+    "preview": true
+  },
+  {
+    "id": "mysql",
+    "type": "preview",
+    "name": "MySQL",
+    "icon": "My",
+    "description": "Planned — MySQL connector.",
+    "preview": true
+  },
+  {
+    "id": "redshift",
+    "type": "preview",
+    "name": "Redshift",
+    "icon": "Rs",
+    "description": "Planned — Amazon Redshift connector.",
+    "preview": true
+  },
+  {
+    "id": "s3",
+    "type": "preview",
+    "name": "Amazon S3",
+    "icon": "S3",
+    "description": "Planned — S3 object store connector.",
+    "preview": true
   }
 ]

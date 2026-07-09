@@ -31,11 +31,11 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from src.data_loader import DataLoader, RAW_CSV
     from src.generate_data import generate
-    from src.report_builder import build_report, write_report
+    from src.report_builder import attach_trust_narrative, build_report, write_report
 else:
     from .data_loader import DataLoader, RAW_CSV
     from .generate_data import generate
-    from .report_builder import build_report, write_report
+    from .report_builder import attach_trust_narrative, build_report, write_report
 
 
 def _money(value) -> str:
@@ -124,7 +124,7 @@ def run_validation(run_id: str = "demo_run_001") -> dict:
 
 
 def main() -> dict:
-    report = run_validation()
+    report = attach_trust_narrative(run_validation())
     path = write_report(report)
     print_summary(report)
     print(f"Report written to {path}")

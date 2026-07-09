@@ -22,8 +22,8 @@ returns the report dict verbatim with no reshaping.
 
 | Method | Path | Response | Notes |
 |--------|------|----------|-------|
-| `GET` | `/health` | `{ "status", "database" }` | **Not report-shaped.** Returns HTTP `503` with `status: "degraded"` when Postgres is unreachable. |
-| `POST` | `/runs` | Full report dict (15 keys) | Body optional: `{ "run_id": "demo_run_001" }`. Synchronous (~5s). Does not write `reports/report.json`. |
+| `GET` | `/health` | `{ "status", "database", "database_target" }` | **Not report-shaped.** `database_target` has `host`, `port`, `database` only (no password). Returns HTTP `503` with `status: "degraded"` when Postgres is unreachable. Uses `DB_CONNECT_TIMEOUT` (default 3s). |
+| `POST` | `/runs` | Full report dict (17 keys) | Body optional: `{ "run_id": "demo_run_001" }`. Synchronous (~5s). Does not write `reports/report.json`. `trust_narrative` is filled after deterministic `build_report()` via `attach_trust_narrative()`. |
 | `GET` | `/reports/latest` | Full report dict | In-memory cache from last `POST /runs`, else on-disk `reports/report.json`. |
 | `GET` | `/reports/{run_id}` | Full report dict | Returns latest only when `run_id` matches. Otherwise `404`. **Ring 5 history not built.** |
 
@@ -31,7 +31,7 @@ returns the report dict verbatim with no reshaping.
 
 **CORS (React/Vite):** `http://localhost:5173`, `http://127.0.0.1:5173`
 
-## Report top-level keys (15)
+## Report top-level keys (17)
 
 ```
 project
@@ -46,10 +46,18 @@ first_failed_layer
 root_cause
 business_impact
 suggested_action
+trust_score
+trust_narrative
 coverage
 detection_layers
 checks
 ```
+
+`estimated_loss` is nested inside `business_impact`, not a top-level key.
+
+`trust_narrative` is generated after the deterministic report via `attach_trust_narrative()` (Ollama). It is not an input to `final_verdict`.
+
+`trust_score` is computed deterministically from layer statuses inside `compute_final_verdict()` and is emitted with the report; it is not LLM-derived.
 
 ## Check statuses
 

@@ -202,10 +202,10 @@ def load_report_from_disk() -> Optional[dict]:
 def run_engine_validation() -> dict:
     """Trigger the Python engine; returns fresh report dict."""
     from src.data_loader import DataLoader
-    from src.report_builder import build_report, write_report
+    from src.report_builder import attach_trust_narrative, build_report, write_report
 
     loader = DataLoader()
-    report = build_report(loader)
+    report = attach_trust_narrative(build_report(loader))
     write_report(report, REPORT_PATH)
     return report
 

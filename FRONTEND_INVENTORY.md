@@ -36,7 +36,7 @@ REPORT_PATH = ROOT / "reports" / "report.json"
 
 ### 2.1 Source file
 
-- **Path:** `c:/Users/prakh/OneDrive/Documents/Aurum/reports/report.json`
+- **Path:** `reports/report.json`
 - **Size:** 75,412 bytes, 2031 lines
 - **Produced by:** `src/report_builder.py:write_report()` after `build_report()` (also written by Streamlit's `run_engine_validation()`)
 
@@ -2318,7 +2318,7 @@ When both come from the same engine run, shape is identical; only provenance dif
 
 | Comparison | Result |
 |------------|--------|
-| **Top-level keys** | Identical set (15 keys in current report including `coverage`) |
+| **Top-level keys** | Identical set (17 keys in current report including `trust_score`, `trust_narrative`, and `coverage`) |
 | **Structure** | API returns `build_report()` dict unchanged (no reshaping in `api/main.py`) |
 | **Byte-identical JSON** | **Not guaranteed** ? disk file is `json.dumps(report, indent=2, default=str)`; API serializes via FastAPI/Starlette JSON encoder. Same data, possible float/string formatting differences. |
 | **Content after `POST /runs` vs disk** | Differs until `python src/run_demo.py` or Streamlit run writes disk ? API POST does not persist |

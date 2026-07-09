@@ -6,6 +6,8 @@ import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { MetricCard } from '@/components/cards/MetricCard';
 import { ProgressMetric } from '@/components/common/ProgressMetric';
 import { Heatmap } from '@/components/common/Heatmap';
+import { PlannedBanner } from '@/components/common/PlannedBanner';
+import { PageAssistant } from '@/components/common/PageAssistant';
 import { cn } from '@/utils/cn';
 
 import type { DatasetMetadata, DbTable } from '@/types';
@@ -43,16 +45,22 @@ export function MetadataDiscoveryPage() {
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden animate-fade-in">
+    <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
       <ProjectSubNav />
+      <PageAssistant page="validation" />
 
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Page Header */}
         <div className="px-6 py-6 border-b border-[#252637]">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Metadata Discovery</h2>
           <p className="mt-1 text-sm text-[#6b7280]">
-            Auto-generated profile for selected tables. Zero manual input required.
+            Stage 2 profiling — Preview — not wired to live API yet.
           </p>
+          <div className="mt-4">
+            <PlannedBanner
+              detail="Foreign Keys, Duplicate %, Outliers, and Freshness below are preview placeholders. Live profiling will use GET /metadata when wired. Validation report remains the source of truth for checks."
+            />
+          </div>
           
           {/* Tabs */}
           <div className="flex gap-2 mt-6">
@@ -96,7 +104,8 @@ export function MetadataDiscoveryPage() {
             />
             <MetricCard 
               label="Foreign Keys" 
-              value={activeMetadata.foreignKeys} 
+              value={activeMetadata.foreignKeys}
+              subValue="Preview — planned"
             />
 
             <MetricCard 
@@ -108,7 +117,7 @@ export function MetadataDiscoveryPage() {
             <MetricCard 
               label="Duplicate %" 
               value={`${activeMetadata.duplicatePct}%`} 
-              subValue="above threshold" 
+              subValue="Preview — planned"
               valueClass="text-[#f59e0b]"
             />
             <MetricCard 
@@ -124,14 +133,15 @@ export function MetadataDiscoveryPage() {
 
             <MetricCard 
               label="Outliers" 
-              value={activeMetadata.outliers} 
+              value={activeMetadata.outliers}
+              subValue="Preview — planned"
               valueClass="text-[#f59e0b]"
             />
             <MetricCard 
               label="Freshness" 
-              value={activeMetadata.freshness} 
-              subValue="SLA Met" 
-              valueClass="text-[#22c55e]"
+              value={activeMetadata.freshness}
+              subValue="Preview — planned"
+              valueClass="text-[#94a3b8]"
             />
           </div>
 

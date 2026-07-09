@@ -9,6 +9,10 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { Dialog } from '@/components/ui/Dialog';
+import { PlannedBanner } from '@/components/common/PlannedBanner';
+import { DataSourceBadge } from '@/components/common/DataSourceBadge';
+import { useAppMode } from '@/context/AppModeContext';
+import { createProject } from '@/lib/aurumApi';
 import { cn } from '@/utils/cn';
 import type { Environment, NewProjectFormValues } from '@/types';
 
@@ -26,6 +30,7 @@ type FormValues = z.infer<typeof schema>;
 
 export function NewProjectPage() {
   const navigate = useNavigate();
+  const { displayMode } = useAppMode();
   const [domains, setDomains] = useState<string[]>(INITIAL_DOMAINS);
   const [showDomainDialog, setShowDomainDialog] = useState(false);
   const [newDomain, setNewDomain] = useState('');
@@ -69,11 +74,18 @@ export function NewProjectPage() {
     toast.success(`Domain "${trimmed}" added`);
   }
 
-  function onSubmit(data: FormValues) {
-    // Mock: generate fake ID and navigate
-    const fakeId = `proj-${Date.now()}`;
-    toast.success('Project created!');
-    navigate(`/projects/${fakeId}/connect`);
+  async function onSubmit(data: FormValues) {
+    try {
+      const project = await createProject({
+        name: data.name,
+        description: data.description ?? '',
+        environment: data.environment,
+      });
+      toast.success(`Project "${project.name}" created.`);
+      navigate(`/projects/${project.id}/connect`);
+    } catch {
+      toast.error('Could not create project. Check that the API is running.');
+    }
   }
 
   return (
@@ -81,10 +93,16 @@ export function NewProjectPage() {
       <div className="w-full max-w-lg">
         {/* Page Header */}
         <div className="mb-8">
-          <h2 className="text-2xl font-bold text-[#f1f5f9]">Create Project</h2>
+          <div className="flex flex-wrap items-center gap-3 mb-2">
+            <h2 className="text-2xl font-bold text-[#f1f5f9]">Create Project</h2>
+            <DataSourceBadge mode={displayMode} />
+          </div>
           <p className="mt-1 text-sm text-[#6b7280]">
             Define the project identity before connecting any data source.
           </p>
+          <div className="mt-4">
+            <PlannedBanner detail="Project is saved to local app storage. Connector setup and dataset selection remain preview-only in the next steps." />
+          </div>
         </div>
 
         {/* Form Card */}
@@ -203,7 +221,7 @@ export function NewProjectPage() {
                 isLoading={isSubmitting}
                 rightIcon={<ArrowRight size={16} />}
               >
-                Continue
+                Create Project
               </Button>
             </div>
           </form>

@@ -30,7 +30,7 @@ streamlit run streamlit_app.py
 
 The current test and demo commands check:
 
-- current report contract fields (15 top-level keys per `docs/API_CONTRACT.md`)
+- current report contract fields (17 top-level keys per `docs/API_CONTRACT.md`)
 - Olist demo: 112,650 bronze line items, silver FAIL, gold IMPACTED, NOT TRUSTED
 - planted bug: Silver filters `unit_price > 20` BRL
 - business impact: expected revenue ~BRL 13.59 M, estimated loss ~BRL 13.45 M

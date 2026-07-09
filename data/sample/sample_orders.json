@@ -1,0 +1,22 @@
+[
+  {"state": "SP", "quantity": 12, "unit_price": 89.90},
+  {"state": "SP", "quantity": 3, "unit_price": 45.00},
+  {"state": "SP", "quantity": 8, "unit_price": 120.50},
+  {"state": "RJ", "quantity": 5, "unit_price": 199.99},
+  {"state": "RJ", "quantity": 2, "unit_price": 350.00},
+  {"state": "RJ", "quantity": 10, "unit_price": 75.25},
+  {"state": "MG", "quantity": 6, "unit_price": 88.00},
+  {"state": "MG", "quantity": 4, "unit_price": 155.75},
+  {"state": "RS", "quantity": 7, "unit_price": 62.30},
+  {"state": "RS", "quantity": 1, "unit_price": 420.00},
+  {"state": "PR", "quantity": 9, "unit_price": 54.20},
+  {"state": "PR", "quantity": 3, "unit_price": 98.50},
+  {"state": "SP", "quantity": 11, "unit_price": 33.80},
+  {"state": "MG", "quantity": 2, "unit_price": 210.00},
+  {"state": "RJ", "quantity": 5, "unit_price": 67.40},
+  {"state": "RS", "quantity": 4, "unit_price": 112.00},
+  {"state": "PR", "quantity": 15, "unit_price": 28.50},
+  {"state": "SP", "quantity": 6, "unit_price": 41.20},
+  {"state": "MG", "quantity": 8, "unit_price": 52.75},
+  {"state": "RJ", "quantity": 3, "unit_price": 95.00}
+]

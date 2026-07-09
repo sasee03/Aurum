@@ -92,11 +92,6 @@ def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
     )
 
     trust_score = verdict.get("trust_score", 0)
-    trust_narrative = trust_engine.generate_trust_narrative(
-        score=trust_score,
-        business_impact=business_impact,
-        root_cause=root_cause
-    )
 
     return {
         "project": "Aurum",
@@ -112,7 +107,7 @@ def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
         "business_impact": business_impact,
         "suggested_action": suggested_action,
         "trust_score": trust_score,
-        "trust_narrative": trust_narrative,
+        "trust_narrative": "",
         "coverage": coverage,
         "detection_layers": {
             "layer_1_rules": [r.to_dict() for r in detection.layer_1_rules],
@@ -130,6 +125,16 @@ def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
             "cross_layer": [r.to_dict() for r in cross_results],
         },
     }
+
+
+def attach_trust_narrative(report: dict) -> dict:
+    """Post-build seam: Ollama narration only, after deterministic verdict is fixed."""
+    report["trust_narrative"] = trust_engine.generate_trust_narrative(
+        score=report.get("trust_score", 0),
+        business_impact=report.get("business_impact", {}),
+        root_cause=report.get("root_cause", {}),
+    )
+    return report
 
 
 def write_report(report: dict, path: Path = REPORT_PATH) -> Path:

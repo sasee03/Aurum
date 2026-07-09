@@ -36,3 +36,6 @@ profiling-output/
 data/olist/
 data/raw/raw_orders.csv
 data/historical/historical_runs.csv
+
+# Aurum SQLite app state (projects, runs, reports)
+data/app_state.sqlite

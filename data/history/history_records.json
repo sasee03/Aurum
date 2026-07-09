@@ -1,0 +1,122 @@
+[
+  {
+    "run_id": "history_01",
+    "bronze_rows": 112650,
+    "silver_rows": 107243,
+    "drop_pct": 4.8,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  },
+  {
+    "run_id": "history_02",
+    "bronze_rows": 112550,
+    "silver_rows": 106697,
+    "drop_pct": 5.2,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  },
+  {
+    "run_id": "history_03",
+    "bronze_rows": 112750,
+    "silver_rows": 107676,
+    "drop_pct": 4.5,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  },
+  {
+    "run_id": "history_04",
+    "bronze_rows": 112600,
+    "silver_rows": 106407,
+    "drop_pct": 5.5,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  },
+  {
+    "run_id": "history_05",
+    "bronze_rows": 112700,
+    "silver_rows": 105938,
+    "drop_pct": 6.0,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  },
+  {
+    "run_id": "history_06",
+    "bronze_rows": 112650,
+    "silver_rows": 107130,
+    "drop_pct": 4.9,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  },
+  {
+    "run_id": "history_07",
+    "bronze_rows": 112500,
+    "silver_rows": 106762,
+    "drop_pct": 5.1,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  },
+  {
+    "run_id": "history_08",
+    "bronze_rows": 112800,
+    "silver_rows": 106258,
+    "drop_pct": 5.8,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  },
+  {
+    "run_id": "history_09",
+    "bronze_rows": 112650,
+    "silver_rows": 107355,
+    "drop_pct": 4.7,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  },
+  {
+    "run_id": "history_10",
+    "bronze_rows": 112570,
+    "silver_rows": 105591,
+    "drop_pct": 6.2,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  },
+  {
+    "run_id": "history_11",
+    "bronze_rows": 112730,
+    "silver_rows": 107094,
+    "drop_pct": 5.0,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  },
+  {
+    "run_id": "history_12",
+    "bronze_rows": 112650,
+    "silver_rows": 106680,
+    "drop_pct": 5.3,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  },
+  {
+    "run_id": "history_13",
+    "bronze_rows": 112620,
+    "silver_rows": 107439,
+    "drop_pct": 4.6,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  },
+  {
+    "run_id": "history_14",
+    "bronze_rows": 112680,
+    "silver_rows": 106032,
+    "drop_pct": 5.9,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  },
+  {
+    "run_id": "history_15",
+    "bronze_rows": 112650,
+    "silver_rows": 106567,
+    "drop_pct": 5.4,
+    "gold_revenue": 13591643.7,
+    "final_verdict": "TRUSTED"
+  }
+]

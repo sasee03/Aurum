@@ -4,6 +4,7 @@ import { PlayCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { PipelineStepper } from '@/components/common/PipelineStepper';
+import { PlannedBanner } from '@/components/common/PlannedBanner';
 import pipelineRulesJson from '@/mocks/pipelineRules.json';
 import type { PipelineRule } from '@/types';
 
@@ -30,6 +31,13 @@ export function PipelineConfigPage() {
         <div className="px-6 py-6 border-b border-[#252637]">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Pipeline Configuration</h2>
           <p className="mt-1 text-sm text-[#6b7280]">
+            Current demo uses engine-defined Bronze, Silver, and Gold validation rules. Rule editing
+            through API/configuration is planned.
+          </p>
+          <div className="mt-4 max-w-2xl">
+            <PlannedBanner detail="Preview — not wired to live API yet. Pipeline rules are defined in the Aurum engine for the Olist demo." />
+          </div>
+          <p className="mt-2 text-sm text-[#6b7280]">
             Define or accept default validation rules per medallion layer before execution.
           </p>
         </div>
