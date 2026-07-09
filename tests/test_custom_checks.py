@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import io
+
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
 import api.main as api_main
-from src.custom_checks import evaluate_check_on_frame, execute_custom_check
+from src.custom_checks import (
+    evaluate_check_on_frame,
+    execute_custom_check,
+    execute_custom_check_against_frame,
+)
 from src.run_demo import run_validation
 
 
@@ -260,3 +266,285 @@ def test_api_sql_check_skipped(client, monkeypatch):
     assert "not yet supported" in body["message"].lower()
     assert body["data_source"] == "Olist demo validation session"
     assert "deferred for safety" in body["scope_note"].lower()
+
+
+# ── run-scoped check tests ──────────────────────────────────────────────────
+
+
+def test_demo_scope_no_run_id_unchanged(client, monkeypatch):
+    """No run_id → demo session, same behaviour as before this unit."""
+    sample = _check(
+        rule_type="row_count_condition",
+        operator=">",
+        value="0",
+    )
+    monkeypatch.setattr("api.aurum_assistant.router.load_custom_checks", lambda: [sample])
+    monkeypatch.setattr(
+        "src.custom_checks.load_layer_dataframe",
+        lambda layer: pd.DataFrame({"x": [1, 2, 3]}),
+    )
+    response = client.post("/custom-checks/run", json={"check_id": "custom_silver_001"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "PASS"
+    assert body["data_source"] == "Olist demo validation session"
+
+
+def test_run_id_not_found_returns_honest_skipped(client, monkeypatch):
+    """Providing a run_id that doesn't exist must return SKIPPED, not a crash."""
+    sample = _check(rule_type="not_null", column="customer_id")
+    monkeypatch.setattr("api.aurum_assistant.router.load_custom_checks", lambda: [sample])
+    monkeypatch.setattr("api.aurum_assistant.router.run_info_for_check", lambda run_id: None)
+    response = client.post(
+        "/custom-checks/run",
+        json={"check_id": "custom_silver_001", "run_id": "upload_nonexistent_abc"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "SKIPPED"
+    assert "not found" in body["message"].lower()
+
+
+def test_upload_run_without_file_returns_honest_skipped(client, monkeypatch):
+    """Upload run_id without a re-attached file → SKIPPED with clear instructions."""
+    sample = _check(rule_type="not_null", column="customer_id")
+    monkeypatch.setattr("api.aurum_assistant.router.load_custom_checks", lambda: [sample])
+    monkeypatch.setattr(
+        "api.aurum_assistant.router.run_info_for_check",
+        lambda run_id: {
+            "run_id": "upload_abc123",
+            "mode": "upload",
+            "connection_id": None,
+            "project_id": None,
+            "status": "completed",
+            "started_at": "2026-07-10T00:00:00Z",
+            "finished_at": "2026-07-10T00:01:00Z",
+            "error_message": None,
+            "source_schema": None,
+            "source_table": None,
+        },
+    )
+    response = client.post(
+        "/custom-checks/run",
+        json={"check_id": "custom_silver_001", "run_id": "upload_abc123"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "SKIPPED"
+    assert "not persisted" in body["message"].lower()
+    assert "upload_abc123" in body["data_source"]
+
+
+def test_run_with_file_executes_real_check(client, monkeypatch):
+    """POST /custom-checks/run-with-file runs the check against the re-uploaded CSV."""
+    sample = _check(
+        rule_type="row_count_condition",
+        operator=">",
+        value="0",
+    )
+    monkeypatch.setattr("api.aurum_assistant.router.load_custom_checks", lambda: [sample])
+    monkeypatch.setattr(
+        "api.aurum_assistant.router.run_info_for_check",
+        lambda run_id: {
+            "run_id": run_id,
+            "mode": "upload",
+            "connection_id": None,
+            "project_id": None,
+            "status": "completed",
+            "started_at": "2026-07-10T00:00:00Z",
+            "finished_at": "2026-07-10T00:01:00Z",
+            "error_message": None,
+            "source_schema": None,
+            "source_table": None,
+        },
+    )
+
+    # Minimal valid Olist-shaped CSV.
+    csv_rows = [
+        "invoice_no,stock_code,description,quantity,invoice_date,unit_price,customer_id,country",
+        "INV001,SC001,Widget,1,2024-01-01,9.99,CUST001,UK",
+        "INV002,SC002,Gadget,2,2024-01-02,19.99,CUST002,France",
+    ]
+    csv_bytes = "\n".join(csv_rows).encode()
+
+    # Patch build_layer_frame_from_raw to avoid a full Postgres pipeline in the unit test.
+    monkeypatch.setattr(
+        "src.custom_checks.build_layer_frame_from_raw",
+        lambda raw, layer: pd.DataFrame({"x": [1, 2]}),
+    )
+
+    response = client.post(
+        "/custom-checks/run-with-file",
+        data={"check_id": "custom_silver_001", "run_id": "upload_test_run"},
+        files={"file": ("orders.csv", io.BytesIO(csv_bytes), "text/csv")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] in ("PASS", "FAIL")
+    assert "orders.csv" in body["data_source"]
+    assert "upload_test_run" in body["data_source"]
+    assert "demo" not in body["data_source"].lower()
+    assert "file identity is not verified" in body["scope_note"].lower()
+
+
+def test_run_with_file_rejects_nonexistent_run_id(client, monkeypatch):
+    """run-with-file must SKIP when run_id is missing — not silently proceed."""
+    sample = _check(rule_type="row_count_condition", operator=">", value="0")
+    monkeypatch.setattr("api.aurum_assistant.router.load_custom_checks", lambda: [sample])
+    monkeypatch.setattr("api.aurum_assistant.router.run_info_for_check", lambda run_id: None)
+
+    csv = (
+        "invoice_no,stock_code,description,quantity,invoice_date,unit_price,customer_id,country\n"
+        "INV001,SC001,Widget,1,2024-01-01,9.99,CUST001,UK\n"
+    ).encode()
+    response = client.post(
+        "/custom-checks/run-with-file",
+        data={"check_id": "custom_silver_001", "run_id": "upload_DOES_NOT_EXIST"},
+        files={"file": ("wrong.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "SKIPPED"
+    assert "not found" in body["message"].lower()
+    assert body["data_source"] == "unavailable"
+    assert "file identity is not verified" in body["scope_note"].lower()
+
+
+def test_run_with_file_rejects_non_upload_mode(client, monkeypatch):
+    """run-with-file must SKIP when run_id exists but mode is not upload."""
+    sample = _check(rule_type="row_count_condition", operator=">", value="0")
+    monkeypatch.setattr("api.aurum_assistant.router.load_custom_checks", lambda: [sample])
+    monkeypatch.setattr(
+        "api.aurum_assistant.router.run_info_for_check",
+        lambda run_id: {
+            "run_id": run_id,
+            "mode": "connector",
+            "connection_id": "conn_x",
+            "project_id": None,
+            "status": "completed",
+            "started_at": "2026-07-10T00:00:00Z",
+            "finished_at": "2026-07-10T00:01:00Z",
+            "error_message": None,
+            "source_schema": "public",
+            "source_table": "raw_orders",
+        },
+    )
+    csv = (
+        "invoice_no,stock_code,description,quantity,invoice_date,unit_price,customer_id,country\n"
+        "INV001,SC001,Widget,1,2024-01-01,9.99,CUST001,UK\n"
+    ).encode()
+    response = client.post(
+        "/custom-checks/run-with-file",
+        data={"check_id": "custom_silver_001", "run_id": "connector_xyz"},
+        files={"file": ("orders.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "SKIPPED"
+    assert "not 'upload'" in body["message"].lower() or "mode" in body["message"].lower()
+
+
+def test_run_with_file_bad_csv_returns_skipped(client, monkeypatch):
+    """A garbage file to run-with-file returns SKIPPED, not a crash."""
+    sample = _check(rule_type="not_null", column="customer_id")
+    monkeypatch.setattr("api.aurum_assistant.router.load_custom_checks", lambda: [sample])
+    monkeypatch.setattr(
+        "api.aurum_assistant.router.run_info_for_check",
+        lambda run_id: {
+            "run_id": run_id,
+            "mode": "upload",
+            "connection_id": None,
+            "project_id": None,
+            "status": "completed",
+            "started_at": "2026-07-10T00:00:00Z",
+            "finished_at": "2026-07-10T00:01:00Z",
+            "error_message": None,
+            "source_schema": None,
+            "source_table": None,
+        },
+    )
+
+    garbage = b"this is not a csv\x00\x01\x02"
+    response = client.post(
+        "/custom-checks/run-with-file",
+        data={"check_id": "custom_silver_001", "run_id": "upload_garbage"},
+        files={"file": ("bad.csv", io.BytesIO(garbage), "text/csv")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "SKIPPED"
+    assert "schema" in body["message"].lower()
+    assert "file identity is not verified" in body["scope_note"].lower()
+
+
+def test_connector_run_expired_session_honest_skipped(client, monkeypatch):
+    """Connector run with an expired/unknown session → SKIPPED, not a crash."""
+    sample = _check(rule_type="not_null", column="customer_id")
+    monkeypatch.setattr("api.aurum_assistant.router.load_custom_checks", lambda: [sample])
+    monkeypatch.setattr(
+        "api.aurum_assistant.router.run_info_for_check",
+        lambda run_id: {
+            "run_id": "connector_xyz789",
+            "mode": "connector",
+            "connection_id": "conn_expired",
+            "project_id": None,
+            "status": "completed",
+            "started_at": "2026-07-10T00:00:00Z",
+            "finished_at": "2026-07-10T00:01:00Z",
+            "error_message": None,
+            "source_schema": "public",
+            "source_table": "raw_orders",
+        },
+    )
+    # Session store returns None (expired / unknown).
+    monkeypatch.setattr(
+        "src.postgres_connector.get_session_connection",
+        lambda conn_id: None,
+    )
+    response = client.post(
+        "/custom-checks/run",
+        json={
+            "check_id": "custom_silver_001",
+            "run_id": "connector_xyz789",
+            "connection_id": "conn_expired",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "SKIPPED"
+    assert "expired" in body["message"].lower() or "unknown" in body["message"].lower()
+
+
+def test_execute_against_frame_sets_real_data_source():
+    """execute_custom_check_against_frame sets data_source to the supplied label."""
+    df = pd.DataFrame({"customer_id": ["A", "B", "C"]})
+    check = _check(rule_type="not_null", column="customer_id")
+    result = execute_custom_check_against_frame(check, df, "Uploaded file: test.csv (run upload_abc)")
+    assert result["status"] == "PASS"
+    assert result["data_source"] == "Uploaded file: test.csv (run upload_abc)"
+    assert "demo" not in result["data_source"].lower()
+
+
+def test_verdict_unchanged_across_all_run_modes(monkeypatch):
+    """Engine verdict must remain identical whether check runs against demo, frame, etc."""
+    monkeypatch.setattr(
+        "src.custom_checks.load_layer_dataframe",
+        lambda layer: pd.DataFrame({"x": [1, 2, 3]}),
+    )
+
+    baseline = run_validation(run_id="verdict_check_v2")
+    keys = ("trust_score", "final_verdict", "layer_status")
+    baseline_core = {k: baseline[k] for k in keys}
+
+    # Demo path.
+    execute_custom_check(_check(rule_type="row_count_condition", operator=">", value="0"))
+    # Frame path.
+    execute_custom_check_against_frame(
+        _check(rule_type="row_count_condition", operator=">", value="0"),
+        pd.DataFrame({"x": [1]}),
+        "test source",
+    )
+
+    after = run_validation(run_id="verdict_check_v2b")
+    after_core = {k: after[k] for k in keys}
+    assert baseline_core == after_core

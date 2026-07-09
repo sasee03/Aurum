@@ -3,9 +3,16 @@
 Custom checks are additive findings. They must never modify trust_score,
 final_verdict, or layer_status from the deterministic engine.
 
-Execution loads a short-lived allowlisted DataLoader session (same demo
-pipeline as POST /runs), reads one layer table into pandas, then evaluates
-the check in-process. No user SQL is executed.
+Execution modes:
+  - Demo session (default): loads the Olist demo data via a short-lived DataLoader.
+  - Upload run (run_id supplied, mode="upload"): caller must provide a re-uploaded
+    CSV frame; this module evaluates on that frame and labels the data source clearly.
+  - Connector run (run_id supplied, mode="connector"): requires a live session_connection
+    (password held in the existing short-TTL in-memory session store). If the session has
+    expired or no connection_id is available, returns honest SKIPPED — never falls back to
+    demo silently.
+
+No user SQL is executed in any path.
 """
 
 from __future__ import annotations
@@ -14,6 +21,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from src.app_state.store import get_data_connection
 from src.data_loader import DataLoader
 
 # Layer → fixed table in the validation session schema. No free-form table names.
@@ -348,7 +356,12 @@ def evaluate_check_on_frame(check: dict, df: pd.DataFrame) -> dict[str, Any]:
 
 
 def execute_custom_check(check: dict) -> dict[str, Any]:
-    """Load allowlisted layer data and evaluate the check. Never runs user SQL."""
+    """Execute against the Olist demo session (fallback / explicit demo path).
+
+    Results are additive only — never modifies trust_score, final_verdict, or
+    layer_status. Caller should prefer execute_custom_check_against_frame() when
+    a specific run's data is available.
+    """
     check_id = str(check.get("check_id", ""))
     rule_type = str(check.get("rule_type", "")).strip()
 
@@ -377,3 +390,84 @@ def execute_custom_check(check: dict) -> dict[str, Any]:
         )
 
     return evaluate_check_on_frame(check, df)
+
+
+def execute_custom_check_against_frame(
+    check: dict,
+    df: pd.DataFrame,
+    data_source: str,
+) -> dict[str, Any]:
+    """Evaluate a check against a caller-supplied frame with an explicit data_source label.
+
+    Used for upload-scoped and connector-scoped runs. The caller is responsible
+    for loading the correct layer frame from the run's data. data_source must
+    unambiguously describe where the data came from (e.g. run_id + mode).
+    """
+    check_id = str(check.get("check_id", ""))
+    rule_type = str(check.get("rule_type", "")).strip()
+
+    if rule_type in SQL_RULE_TYPES:
+        return _result(
+            check_id,
+            "SKIPPED",
+            "SQL-based custom checks are not yet supported (no arbitrary SQL execution).",
+            None,
+            f"{rule_type} (not yet supported)",
+            data_source=data_source,
+            scope_note="SQL checks are deferred for safety; no arbitrary SQL is executed.",
+        )
+
+    if not df.empty and len(df.columns) > 0:
+        pass  # frame is usable as-is
+
+    result = evaluate_check_on_frame(check, df)
+    result["data_source"] = data_source
+    result["scope_note"] = (
+        f"Check ran against the actual data for this run ({data_source})."
+    )
+    return result
+
+
+def run_info_for_check(run_id: str) -> Optional[dict[str, Any]]:
+    """Return mode + connection_id (+ source coords) for a stored run, or None."""
+    from src.app_state.store import get_validation_run
+
+    return get_validation_run(run_id)
+
+
+def build_layer_frame_from_raw(raw_frame, layer: str):
+    """Build bronze/silver/gold from a raw_orders frame for check execution.
+
+    Uses DataLoader.from_frames() so the pipeline runs in-memory without touching
+    the app DB search path. Always closes the loader before returning.
+    """
+    from src.csv_ingest import materialize_upload_pipeline
+
+    table_name = LAYER_TABLES.get(str(layer).strip().lower(), "silver_orders")
+    loader = DataLoader.from_frames({"raw_orders": raw_frame})
+    try:
+        materialize_upload_pipeline(loader)
+        return loader.query(f"SELECT * FROM {table_name}")
+    finally:
+        loader.close()
+
+
+def build_run_scoped_data_source(run: dict[str, Any]) -> str:
+    """Human-readable label describing what data source a run used."""
+    mode = run.get("mode", "unknown")
+    run_id = run.get("run_id", "")
+    if mode == "upload":
+        return f"Uploaded file (run {run_id})"
+    if mode == "connector":
+        conn_id = run.get("connection_id") or ""
+        if conn_id:
+            conn_meta = get_data_connection(conn_id)
+            if conn_meta:
+                host = conn_meta.get("host", "")
+                db = conn_meta.get("database_name", "")
+                user = conn_meta.get("username", "")
+                return f"Connector: {user}@{host}/{db} (run {run_id})"
+        return f"Connector run {run_id}"
+    if mode == "demo":
+        return DEMO_DATA_SOURCE
+    return f"Run {run_id} (mode: {mode})"

@@ -216,11 +216,38 @@ export async function createCustomCheck(
   });
 }
 
-export async function runCustomCheck(checkId: string): Promise<CustomCheckRunResult> {
+export async function runCustomCheck(
+  checkId: string,
+  opts?: { runId?: string; connectionId?: string },
+): Promise<CustomCheckRunResult> {
   return request('/custom-checks/run', {
     method: 'POST',
-    body: JSON.stringify({ check_id: checkId }),
+    body: JSON.stringify({
+      check_id: checkId,
+      ...(opts?.runId ? { run_id: opts.runId } : {}),
+      ...(opts?.connectionId ? { connection_id: opts.connectionId } : {}),
+    }),
   });
+}
+
+export async function runCustomCheckWithFile(
+  checkId: string,
+  runId: string,
+  file: File,
+): Promise<CustomCheckRunResult> {
+  const form = new FormData();
+  form.append('check_id', checkId);
+  form.append('run_id', runId);
+  form.append('file', file);
+  const res = await fetchWithTimeout(
+    '/custom-checks/run-with-file',
+    { method: 'POST', body: form },
+    60_000,
+  );
+  if (!res.ok) {
+    throw new ApiError(API_UNAVAILABLE);
+  }
+  return res.json() as Promise<CustomCheckRunResult>;
 }
 
 export async function getMetadataHealth(): Promise<{ status: string; detail?: string }> {

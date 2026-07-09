@@ -278,6 +278,47 @@ def test_validate_success_persists_connector_mode(client):
     assert matched["mode"] == "connector"
 
 
+def test_validate_returns_exactly_17_key_report(client):
+    """Connector validate must return the 17-key contract — source coords stay on the run row."""
+    from tests.test_api import EXPECTED_REPORT_KEYS
+    from src.app_state.store import get_validation_run
+
+    session = store_session_connection(
+        UserPostgresTarget(
+            host="localhost",
+            port=5433,
+            database="aurum",
+            username="aurum",
+            password="aurum",
+        )
+    )
+    frame = _olist_frame(4)
+
+    with patch(
+        "api.connectors_router.load_and_validate_user_table",
+        return_value=frame,
+    ):
+        response = client.post(
+            "/connectors/postgres/validate",
+            json={
+                "connection_id": session.connection_id,
+                "schema": "public",
+                "table": "raw_orders",
+            },
+        )
+    assert response.status_code == 200
+    report = response.json()
+    assert set(report.keys()) == set(EXPECTED_REPORT_KEYS)
+    assert "source_schema" not in report
+    assert "source_table" not in report
+
+    run = get_validation_run(report["run_id"])
+    assert run is not None
+    assert run["source_schema"] == "public"
+    assert run["source_table"] == "raw_orders"
+    assert run["mode"] == "connector"
+
+
 def test_schemas_unknown_connection_404(client):
     response = client.get("/connectors/postgres/schemas?connection_id=conn_missing")
     assert response.status_code == 404

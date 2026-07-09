@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS validation_runs (
     started_at TEXT NOT NULL,
     finished_at TEXT,
     error_message TEXT,
+    source_schema TEXT,
+    source_table TEXT,
     FOREIGN KEY (project_id) REFERENCES projects(id),
     FOREIGN KEY (connection_id) REFERENCES data_connections(id)
 );
@@ -65,8 +67,19 @@ def app_state_path() -> Path:
     return DEFAULT_RELATIVE_PATH
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    """Add a column to an existing table if missing (SQLite has no IF NOT EXISTS for columns)."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    existing = {row[1] for row in rows}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA_SQL)
+    # Migrate older DBs created before source_schema/source_table existed.
+    _ensure_column(conn, "validation_runs", "source_schema", "source_schema TEXT")
+    _ensure_column(conn, "validation_runs", "source_table", "source_table TEXT")
     conn.commit()
 
 

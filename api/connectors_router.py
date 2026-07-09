@@ -207,6 +207,9 @@ def validate_postgres_table(body: PostgresValidateRequest) -> dict:
 
     run_id = f"connector_{uuid.uuid4().hex[:12]}"
     report = attach_trust_narrative(run_validation_from_raw_orders(frame, run_id=run_id))
+    # Source coordinates live on validation_runs — never inside the 17-key report.
+    source_schema = body.schema_name.strip()
+    source_table = body.table.strip()
     persisted_run_id = report.get("run_id", run_id)
     project_id = body.project_id or session.project_id
     # Only attach connection_id when metadata was persisted (FK-safe).
@@ -219,6 +222,8 @@ def validate_postgres_table(body: PostgresValidateRequest) -> dict:
         mode="connector",
         project_id=project_id if project_id and get_project(project_id) else None,
         connection_id=connection_id_for_run,
+        source_schema=source_schema,
+        source_table=source_table,
     )
     save_validation_report(persisted_run_id, report)
     return report

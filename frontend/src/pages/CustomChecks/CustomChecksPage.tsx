@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   createCustomCheck,
+  fetchRuns,
   listCustomChecks,
   runCustomCheck,
+  runCustomCheckWithFile,
   type CustomCheck,
   type CustomCheckRunResult,
+  type ValidationRunSummary,
 } from '@/lib/aurumApi';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
@@ -32,14 +35,41 @@ const EMPTY_FORM: Omit<CustomCheck, 'check_id'> = {
   description: '',
 };
 
+type RunScope =
+  | { type: 'demo' }
+  | { type: 'upload'; run: ValidationRunSummary }
+  | { type: 'connector'; run: ValidationRunSummary };
+
 export function CustomChecksPage() {
   const { displayMode, backendReachable } = useAppMode();
   const [form, setForm] = useState(EMPTY_FORM);
   const [checks, setChecks] = useState<CustomCheck[]>([]);
+  const [runs, setRuns] = useState<ValidationRunSummary[]>([]);
   const [result, setResult] = useState<CustomCheckRunResult | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [serviceUnavailable, setServiceUnavailable] = useState(false);
+
+  // Run-scope selector state.
+  const [selectedRunId, setSelectedRunId] = useState<string>('demo');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Reserved for future inline auth — today re-auth is via Connectors page + paste connection_id.
+  // const [connectorPassword, setConnectorPassword] = useState('');
+  // const authenticateConnector = async (...) => { ... };
+  const [connectorSessionId, setConnectorSessionId] = useState<string | null>(null);
+
+  const selectedRun: ValidationRunSummary | undefined = runs.find(
+    (r) => r.run_id === selectedRunId,
+  );
+  const scope: RunScope = !selectedRun
+    ? { type: 'demo' }
+    : selectedRun.mode === 'upload'
+      ? { type: 'upload', run: selectedRun }
+      : selectedRun.mode === 'connector'
+        ? { type: 'connector', run: selectedRun }
+        : { type: 'demo' };
 
   const load = useCallback(async () => {
     if (!backendReachable) {
@@ -48,8 +78,9 @@ export function CustomChecksPage() {
       return;
     }
     try {
-      const data = await listCustomChecks();
-      setChecks(data.checks);
+      const [checksData, runsData] = await Promise.all([listCustomChecks(), fetchRuns()]);
+      setChecks(checksData.checks);
+      setRuns(runsData.runs.filter((r) => ['upload', 'connector', 'demo'].includes(r.mode)));
       setServiceUnavailable(false);
     } catch {
       setChecks([]);
@@ -77,7 +108,50 @@ export function CustomChecksPage() {
     setRunningId(checkId);
     setResult(null);
     try {
-      const runResult = await runCustomCheck(checkId);
+      let runResult: CustomCheckRunResult;
+
+      if (scope.type === 'demo') {
+        runResult = await runCustomCheck(checkId);
+      } else if (scope.type === 'upload') {
+        if (!uploadFile) {
+          setResult({
+            check_id: checkId,
+            status: 'SKIPPED',
+            message:
+              'Re-select the original CSV file to run this check against the upload data.',
+            observed_value: null,
+            expected_condition: '',
+            data_source: `Uploaded file (run ${scope.run.run_id})`,
+            scope_note:
+              'File identity is not verified — this checks whatever file you attach, ' +
+              'not necessarily the original upload. Ensure you\'re re-uploading the same ' +
+              'file used in the original run.',
+          });
+          return;
+        }
+        runResult = await runCustomCheckWithFile(checkId, scope.run.run_id, uploadFile);
+      } else {
+        // connector
+        if (!connectorSessionId) {
+          setResult({
+            check_id: checkId,
+            status: 'SKIPPED',
+            message:
+              'Connector session is not active. Re-test the connection via the Connectors page, ' +
+              'then enter the session connection ID below.',
+            observed_value: null,
+            expected_condition: '',
+            data_source: `Connector run ${scope.run.run_id}`,
+            scope_note: 'Connector passwords are not persisted. Re-authenticate to continue.',
+          });
+          return;
+        }
+        runResult = await runCustomCheck(checkId, {
+          runId: scope.run.run_id,
+          connectionId: connectorSessionId,
+        });
+      }
+
       setResult(runResult);
       setServiceUnavailable(false);
     } catch {
@@ -100,9 +174,8 @@ export function CustomChecksPage() {
           <DataSourceBadge mode={displayMode} />
         </div>
         <p className="text-sm text-[#6b7280] mt-1">
-          Define domain-specific rules. Test Check currently runs against the Olist demo
-          validation session; uploaded and connector-run scoped checks are coming soon.
-          Results are additive and do not change the engine trust score or verdict.
+          Define domain-specific rules and test them against real validation data. Results are
+          additive and do not change the engine trust score or verdict.
         </p>
       </div>
 
@@ -118,6 +191,7 @@ export function CustomChecksPage() {
         </p>
       )}
 
+      {/* ── Define check form ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl">
         <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
           Layer
@@ -226,6 +300,82 @@ export function CustomChecksPage() {
 
       {message && <p className="text-sm text-[#22c55e]">{message}</p>}
 
+      {/* ── Run scope selector ── */}
+      {checks.length > 0 && (
+        <div className="space-y-3 max-w-4xl">
+          <h3 className="text-sm font-semibold text-[#f1f5f9]">Test data source</h3>
+          <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
+            Run to test against
+            <select
+              className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
+              value={selectedRunId}
+              onChange={(e) => {
+                setSelectedRunId(e.target.value);
+                setUploadFile(null);
+                setConnectorSessionId(null);
+                setResult(null);
+              }}
+              disabled={serviceUnavailable}
+            >
+              <option value="demo">Olist demo session (default)</option>
+              {runs.map((r) => (
+                <option key={r.run_id} value={r.run_id}>
+                  [{r.mode}] {r.run_id} —{' '}
+                  {r.started_at ? r.started_at.slice(0, 10) : ''}
+                  {r.trust_score != null ? ` (score ${r.trust_score})` : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {/* Upload run: re-attach file */}
+          {scope.type === 'upload' && (
+            <div className="rounded-lg border border-[#252637] bg-[#0f172a] px-4 py-3 space-y-2">
+              <p className="text-xs text-[#bfdbfe]">
+                <strong>Upload run selected.</strong> Re-attach the original CSV to run checks
+                against it. The file is processed in-memory and not saved again. File identity
+                is not verified — attach the same file used in the original run.
+              </p>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv"
+                className="text-xs text-[#94a3b8]"
+                onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
+              />
+              {uploadFile && (
+                <p className="text-xs text-[#22c55e]">Selected: {uploadFile.name}</p>
+              )}
+            </div>
+          )}
+
+          {/* Connector run: session ID input */}
+          {scope.type === 'connector' && (
+            <div className="rounded-lg border border-[#252637] bg-[#0f172a] px-4 py-3 space-y-2">
+              <p className="text-xs text-[#bfdbfe]">
+                <strong>Connector run selected.</strong> To re-run checks against this data,
+                go to the <span className="font-semibold">Connectors</span> page, test the
+                connection (password required), and paste the resulting connection ID here.
+                Passwords are never stored.
+              </p>
+              <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
+                Connection ID (from Connectors page)
+                <input
+                  type="text"
+                  className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9] font-mono text-xs"
+                  value={connectorSessionId ?? ''}
+                  onChange={(e) => {
+                    setConnectorSessionId(e.target.value || null);
+                  }}
+                  placeholder="conn_abc123def456"
+                />
+              </label>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Saved checks list ── */}
       {checks.length > 0 && (
         <div className="space-y-2">
           <h3 className="text-sm font-semibold text-[#f1f5f9]">Saved checks</h3>
@@ -250,6 +400,7 @@ export function CustomChecksPage() {
         </div>
       )}
 
+      {/* ── Result panel ── */}
       {result && (
         <div className="rounded-lg border border-[#252637] bg-[#13141e] p-4 space-y-2 max-w-4xl">
           <p className="text-sm font-semibold text-[#f1f5f9]">Latest Test Check Result</p>

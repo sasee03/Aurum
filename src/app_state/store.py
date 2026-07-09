@@ -73,6 +73,8 @@ def save_validation_run(
     started_at: Optional[str] = None,
     finished_at: Optional[str] = None,
     error_message: Optional[str] = None,
+    source_schema: Optional[str] = None,
+    source_table: Optional[str] = None,
 ) -> None:
     started = started_at or _utc_now()
     finished = finished_at or _utc_now()
@@ -81,8 +83,9 @@ def save_validation_run(
             """
             INSERT OR REPLACE INTO validation_runs (
                 run_id, project_id, connection_id, status, mode,
-                started_at, finished_at, error_message
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                started_at, finished_at, error_message,
+                source_schema, source_table
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -93,6 +96,8 @@ def save_validation_run(
                 started,
                 finished,
                 error_message,
+                source_schema,
+                source_table,
             ),
         )
         if project_id:
@@ -101,6 +106,36 @@ def save_validation_run(
                 (run_id, finished, project_id),
             )
         conn.commit()
+
+
+def get_validation_run(run_id: str) -> Optional[dict[str, Any]]:
+    """Return a single validation_runs row (including source_schema/table), or None."""
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                run_id, project_id, connection_id, status, mode,
+                started_at, finished_at, error_message,
+                source_schema, source_table
+            FROM validation_runs
+            WHERE run_id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "run_id": row["run_id"],
+        "project_id": row["project_id"],
+        "connection_id": row["connection_id"],
+        "status": row["status"],
+        "mode": row["mode"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+        "error_message": row["error_message"],
+        "source_schema": row["source_schema"],
+        "source_table": row["source_table"],
+    }
 
 
 def save_validation_report(run_id: str, report: dict[str, Any]) -> None:
@@ -142,6 +177,8 @@ def list_validation_runs() -> list[dict[str, Any]]:
                 r.started_at,
                 r.finished_at,
                 r.error_message,
+                r.source_schema,
+                r.source_table,
                 rep.report_json
             FROM validation_runs r
             LEFT JOIN validation_reports rep ON rep.run_id = r.run_id
@@ -167,6 +204,8 @@ def list_validation_runs() -> list[dict[str, Any]]:
                 "started_at": row["started_at"],
                 "finished_at": row["finished_at"],
                 "error_message": row["error_message"],
+                "source_schema": row["source_schema"],
+                "source_table": row["source_table"],
                 "trust_score": trust_score,
                 "final_verdict": final_verdict,
             }
