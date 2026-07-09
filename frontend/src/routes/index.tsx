@@ -44,7 +44,7 @@ const router = createBrowserRouter([
         element: (
           <PlannedFeaturePage
             title="Transformation Verification"
-            detail="Transformation evidence is available in the quality report today. A dedicated comparison view is planned for a future release."
+            detail="Inspect and verify the transformation logic applied at each medallion layer. Evidence for the current run is available in the quality report."
           />
         ),
       },
@@ -53,7 +53,7 @@ const router = createBrowserRouter([
         element: (
           <PlannedFeaturePage
             title="Business Contract Engine"
-            detail="Business rules run inside the validation engine today and appear in the quality report. A standalone contract editor is planned."
+            detail="Define and enforce business rules across your data pipeline. Rule outcomes for the current run are included in the quality report."
           />
         ),
       },
@@ -62,7 +62,7 @@ const router = createBrowserRouter([
         element: (
           <PlannedFeaturePage
             title="Lineage Explorer"
-            detail="Lineage visualization is planned. The current report includes first_failed_layer and evidence SQL for the Olist demo."
+            detail="Trace any number in the report back to its origin across pipeline layers. The current report includes first_failed_layer and evidence SQL."
           />
         ),
       },
@@ -71,7 +71,7 @@ const router = createBrowserRouter([
         element: (
           <PlannedFeaturePage
             title="Remediation Center"
-            detail="Remediation guidance comes from suggested_action in the quality report today. Workflow and ticketing integration are planned."
+            detail="Review quarantined records and apply fixes. Suggested remediation actions for the current run are available in the quality report."
             assistantPage="failure"
           />
         ),
@@ -81,7 +81,7 @@ const router = createBrowserRouter([
         element: (
           <PlannedFeaturePage
             title="Audit & Governance"
-            detail="Audit and governance views are planned. Validation history is partially available through Aurum Assistant and the latest report."
+            detail="Review who ran what and when. Validation history is available through Run History and the Aurum Assistant."
           />
         ),
       },

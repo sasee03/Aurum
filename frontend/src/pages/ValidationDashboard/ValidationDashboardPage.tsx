@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Check, RefreshCw, CircleDashed, ArrowRight, Play } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -10,7 +10,6 @@ import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { useAppMode } from '@/context/AppModeContext';
 import { useReport, useRunValidation } from '@/hooks/useReport';
-import { SNAPSHOT_MODE_MESSAGE } from '@/types/appMode';
 import { layerStageStatus } from '@/utils/reportFormat';
 import { cn } from '@/utils/cn';
 import type { ExecutionLog } from '@/types';
@@ -54,12 +53,15 @@ function getStatusConfig(status: StageStatus) {
 export function ValidationDashboardPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const runIdParam = searchParams.get('runId') ?? undefined;
   const { displayMode, canRunValidation, isResolved } = useAppMode();
   const { data, isLoading } = useReport();
   const runValidation = useRunValidation();
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState<ExecutionLog[]>([]);
   const [finished, setFinished] = useState(false);
+  const [completedRunId, setCompletedRunId] = useState<string | undefined>(runIdParam);
 
   const report = data?.report;
   const snapshotMode = !canRunValidation;
@@ -68,22 +70,15 @@ export function ValidationDashboardPage() {
     ? [
         {
           stage: 'Bronze',
-          status:
-            running && !finished ? 'RUNNING' : layerStageStatus(report.layer_status.bronze),
+          status: running && !finished ? 'RUNNING' : layerStageStatus(report.layer_status.bronze),
         },
         {
           stage: 'Silver',
-          status:
-            running && !finished
-              ? 'QUEUED'
-              : layerStageStatus(report.layer_status.silver),
+          status: running && !finished ? 'QUEUED' : layerStageStatus(report.layer_status.silver),
         },
         {
           stage: 'Gold',
-          status:
-            running && !finished
-              ? 'QUEUED'
-              : layerStageStatus(report.layer_status.gold),
+          status: running && !finished ? 'QUEUED' : layerStageStatus(report.layer_status.gold),
         },
       ]
     : [
@@ -102,11 +97,12 @@ export function ValidationDashboardPage() {
         id: '1',
         timestamp: new Date().toISOString(),
         level: 'RUN',
-        message: 'POST /runs — starting Olist validation (~5s)…',
+        message: 'POST /runs — starting validation…',
       },
     ]);
     try {
       const result = await runValidation('demo_run_001');
+      setCompletedRunId(result.report.run_id);
       setLogs((prev) => [
         ...prev,
         {
@@ -130,7 +126,7 @@ export function ValidationDashboardPage() {
           id: 'err',
           timestamp: new Date().toISOString(),
           level: 'FAIL',
-          message: 'Validation could not complete. Try again when the service is available.',
+          message: 'Validation could not complete. Check that the backend and database are running.',
         },
       ]);
     } finally {
@@ -146,29 +142,29 @@ export function ValidationDashboardPage() {
     );
   }
 
-  const canViewResults = Boolean(report) && (snapshotMode || finished);
+  // Results are viewable when there is a report (snapshot or after a live run)
+  const canViewResults = Boolean(report) || finished;
+
+  const resultsPath = completedRunId
+    ? `/projects/${id}/validate/bronze?runId=${encodeURIComponent(completedRunId)}`
+    : `/projects/${id}/validate/bronze`;
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
-      <ProjectSubNav runId={report?.run_id} isRunning={running} />
-      <PageAssistant page="validation" runId={report?.run_id} />
+      <ProjectSubNav runId={completedRunId ?? report?.run_id} isRunning={running} />
+      <PageAssistant page="validation" runId={completedRunId ?? report?.run_id} />
 
       <div className="px-6 py-6 border-b border-[#252637] flex flex-wrap items-center gap-3">
         <h2 className="text-xl font-bold text-[#f1f5f9]">Validation Execution</h2>
         <DataSourceBadge mode={displayMode} />
-        {report && (
+        {(completedRunId ?? report?.run_id) && (
           <Badge variant="secondary" className="font-mono text-[10px]">
-            {report.run_id}
+            {completedRunId ?? report?.run_id}
           </Badge>
         )}
       </div>
 
       <div className="flex-1 overflow-y-auto scrollbar-thin p-6 flex flex-col gap-6">
-        {snapshotMode && (
-          <p className="text-sm text-[#94a3b8] rounded-lg border border-[#252637] bg-[#13141e] px-4 py-3">
-            {SNAPSHOT_MODE_MESSAGE}
-          </p>
-        )}
 
         <div className="flex justify-center">
           <Button
@@ -176,17 +172,9 @@ export function ValidationDashboardPage() {
             leftIcon={<Play size={16} />}
             onClick={canRunValidation ? handleRun : undefined}
             disabled={!canRunValidation || running}
-            title={
-              snapshotMode
-                ? 'Live validation is unavailable in snapshot mode'
-                : undefined
-            }
+            title={snapshotMode ? 'Start PostgreSQL and check /health to enable live validation' : undefined}
           >
-            {running
-              ? 'Running validation…'
-              : snapshotMode
-                ? 'Live validation unavailable in snapshot mode'
-                : 'Run Validation (POST /runs)'}
+            {running ? 'Running validation…' : 'Run Validation'}
           </Button>
         </div>
 
@@ -236,7 +224,7 @@ export function ValidationDashboardPage() {
           variant="primary"
           rightIcon={<ArrowRight size={16} />}
           disabled={!canViewResults}
-          onClick={() => navigate(`/projects/${id}/validate/bronze`)}
+          onClick={() => navigate(resultsPath)}
         >
           View Validation Results
         </Button>

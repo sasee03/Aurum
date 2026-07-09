@@ -9,7 +9,6 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { Dialog } from '@/components/ui/Dialog';
-import { PlannedBanner } from '@/components/common/PlannedBanner';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { useAppMode } from '@/context/AppModeContext';
 import { createProject } from '@/lib/aurumApi';
@@ -100,9 +99,6 @@ export function NewProjectPage() {
           <p className="mt-1 text-sm text-[#6b7280]">
             Define the project identity before connecting any data source.
           </p>
-          <div className="mt-4">
-            <PlannedBanner detail="Project is saved to local app storage. Connector setup and dataset selection remain preview-only in the next steps." />
-          </div>
         </div>
 
         {/* Form Card */}

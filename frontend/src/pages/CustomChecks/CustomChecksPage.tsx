@@ -7,7 +7,6 @@ import {
   type CustomCheckRunResult,
 } from '@/lib/aurumApi';
 import { PageAssistant } from '@/components/common/PageAssistant';
-import { PlannedBanner } from '@/components/common/PlannedBanner';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { Button } from '@/components/ui/Button';
 import { useAppMode } from '@/context/AppModeContext';
@@ -85,13 +84,14 @@ export function CustomChecksPage() {
           <DataSourceBadge mode={displayMode} />
         </div>
         <p className="text-sm text-[#6b7280] mt-1">
-          Domain-specific rules — save/list works when the API is reachable; checks are not yet
-          injected into the validation engine.
+          Define domain-specific rules. Saved checks are persisted via the API.
         </p>
       </div>
 
       {!backendReachable && (
-        <PlannedBanner detail="Custom checks require the API. In snapshot mode, save/list/run are disabled." />
+        <p className="text-sm text-[#94a3b8] rounded-lg border border-[#252637] bg-[#13141e] px-4 py-3">
+          Custom checks require the API to be running. Start the backend and refresh.
+        </p>
       )}
 
       {serviceUnavailable && backendReachable && (
@@ -139,9 +139,6 @@ export function CustomChecksPage() {
         <Button variant="primary" onClick={save} disabled={serviceUnavailable}>
           Save Check
         </Button>
-        <span className="text-xs text-[#f59e0b]">
-          Demo preview — not yet connected to validation engine.
-        </span>
       </div>
 
       {message && <p className="text-sm text-[#22c55e]">{message}</p>}
@@ -172,9 +169,6 @@ export function CustomChecksPage() {
 
       {preview && (
         <div className="rounded-lg border border-[#252637] bg-[#13141e] p-4">
-          <p className="text-xs text-[#f59e0b] mb-2">
-            Demo preview — not yet connected to validation engine.
-          </p>
           <p className="text-sm text-[#f1f5f9]">
             <strong>{preview.status}</strong> — {preview.message}
           </p>

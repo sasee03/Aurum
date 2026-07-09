@@ -1,10 +1,9 @@
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PlayCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { PipelineStepper } from '@/components/common/PipelineStepper';
-import { PlannedBanner } from '@/components/common/PlannedBanner';
 import pipelineRulesJson from '@/mocks/pipelineRules.json';
 import type { PipelineRule } from '@/types';
 
@@ -20,25 +19,20 @@ const STAGES = [
 export function PipelineConfigPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const runId = searchParams.get('runId') ?? undefined;
   const [activeStageId, setActiveStageId] = useState('bronze');
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in">
-      <ProjectSubNav />
+      <ProjectSubNav runId={runId} />
 
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Page Header */}
         <div className="px-6 py-6 border-b border-[#252637]">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Pipeline Configuration</h2>
           <p className="mt-1 text-sm text-[#6b7280]">
-            Current demo uses engine-defined Bronze, Silver, and Gold validation rules. Rule editing
-            through API/configuration is planned.
-          </p>
-          <div className="mt-4 max-w-2xl">
-            <PlannedBanner detail="Preview — not wired to live API yet. Pipeline rules are defined in the Aurum engine for the Olist demo." />
-          </div>
-          <p className="mt-2 text-sm text-[#6b7280]">
-            Define or accept default validation rules per medallion layer before execution.
+            Review validation rules per medallion layer before starting execution.
           </p>
         </div>
 
@@ -79,14 +73,14 @@ export function PipelineConfigPage() {
         <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-4 flex items-center justify-end gap-3">
           <Button
             variant="ghost"
-            onClick={() => navigate(`/projects/${id}/metadata`)} // Go back to metadata or previous step
+            onClick={() => navigate(`/projects/${id}/connect`)}
           >
-            Validate Metadata
+            Back to Connect
           </Button>
           <Button
             variant="primary"
             rightIcon={<PlayCircle size={16} />}
-            onClick={() => navigate(`/projects/${id}/validate/execution`)}
+            onClick={() => navigate(`/projects/${id}/validate/execution${runId ? `?runId=${encodeURIComponent(runId)}` : ''}`)}
           >
             Start Validation
           </Button>

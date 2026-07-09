@@ -1,44 +1,185 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowRight } from 'lucide-react';
+import { AlertTriangle, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { MetricCard } from '@/components/cards/MetricCard';
 import { ProgressMetric } from '@/components/common/ProgressMetric';
 import { Heatmap } from '@/components/common/Heatmap';
-import { PlannedBanner } from '@/components/common/PlannedBanner';
 import { PageAssistant } from '@/components/common/PageAssistant';
+import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
+import { getMetadataTables, getMetadataTable } from '@/lib/aurumApi';
 import { cn } from '@/utils/cn';
 
-import type { DatasetMetadata, DbTable } from '@/types';
-import metadataJson from '@/mocks/metadata.json';
-import tablesJson from '@/mocks/tables.json';
+interface ColumnProfile {
+  name: string;
+  completeness: number;
+}
 
-const metadataRecords = metadataJson as DatasetMetadata[];
-const allSchemas = tablesJson.schemas;
-const allTables: DbTable[] = allSchemas.flatMap((s) => s.tables);
+interface TableProfile {
+  tableId: string;
+  tableName: string;
+  schema: string;
+  totalRows: string;
+  columns: number;
+  primaryKeys: number;
+  pkColumns: string[];
+  missingValuesPct: number;
+  nullPct: number;
+  uniquePct: number;
+  columnsQuality: ColumnProfile[];
+  nullDensityPattern: number[][];
+}
+
+/** Build a null density heatmap pattern from column null rates (fallback: zeros). */
+function buildHeatmapPattern(columnStats: Record<string, unknown>[]): number[][] {
+  const vals = columnStats.slice(0, 20).map((c) => {
+    const rate = (c as Record<string, unknown>).null_rate;
+    return typeof rate === 'number' ? Math.round(rate * 10) : 0;
+  });
+  const rows: number[][] = [];
+  for (let i = 0; i < 4; i++) {
+    rows.push(vals.slice(i * 5, i * 5 + 5).concat([0, 0, 0, 0, 0]).slice(0, 5));
+  }
+  return rows;
+}
+
+/** Map the raw GET /metadata/tables/{name} response into a flat TableProfile. */
+function toTableProfile(raw: Record<string, unknown>): TableProfile {
+  const tables = (raw.tables as Record<string, unknown>[] | undefined) ?? [];
+  const t = (tables[0] ?? raw) as Record<string, unknown>;
+
+  const schema = (t.schema as string | undefined) ?? '';
+  const tableName = (t.table as string | undefined) ?? (t.name as string | undefined) ?? 'unknown';
+  const tableId = `${schema}.${tableName}`;
+  const rowCount = (t.row_count as number | undefined) ?? 0;
+  const columnStats = (t.columns as Record<string, unknown>[] | undefined) ?? [];
+  const candidateKeys = (t.candidate_keys as string[][] | undefined) ?? [];
+  const pkColumns = candidateKeys[0] ?? [];
+
+  const columnsQuality: ColumnProfile[] = columnStats.map((c) => {
+    const nullRate = typeof c.null_rate === 'number' ? c.null_rate : 0;
+    return { name: c.name as string, completeness: Math.round((1 - nullRate) * 100) };
+  });
+
+  const avgNullPct =
+    columnStats.length > 0
+      ? Math.round(
+          (columnStats.reduce((sum, c) => sum + (typeof c.null_rate === 'number' ? c.null_rate : 0), 0) /
+            columnStats.length) *
+            100,
+        )
+      : 0;
+
+  return {
+    tableId,
+    tableName,
+    schema,
+    totalRows: rowCount.toLocaleString(),
+    columns: columnStats.length || (t.column_count as number | undefined) || 0,
+    primaryKeys: pkColumns.length,
+    pkColumns,
+    missingValuesPct: avgNullPct,
+    nullPct: avgNullPct,
+    uniquePct: 100 - avgNullPct,
+    columnsQuality,
+    nullDensityPattern: buildHeatmapPattern(columnStats),
+  };
+}
 
 export function MetadataDiscoveryPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
 
-  // Only consider tables that have metadata available
-  const availableTables = useMemo(() => {
-    return allTables.filter((t) => metadataRecords.some((m) => m.tableId === t.id));
+  const [tableNames, setTableNames] = useState<{ name: string; schema: string }[]>([]);
+  const [profiles, setProfiles] = useState<Map<string, TableProfile>>(new Map());
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadingProfile, setLoadingProfile] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load table list on mount
+  useEffect(() => {
+    async function fetchTables() {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await getMetadataTables();
+        const tables: { name: string; schema: string }[] = (res.tables ?? []).map(
+          (t: Record<string, unknown>) => ({
+            name: t.table as string,
+            schema: t.schema as string,
+          }),
+        );
+        setTableNames(tables);
+        if (tables.length > 0) {
+          setActiveTabId(`${tables[0].schema}.${tables[0].name}`);
+        }
+      } catch {
+        setError('Could not load tables from GET /metadata/tables. Check the backend is running.');
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchTables();
   }, []);
 
-  const [activeTabId, setActiveTabId] = useState(availableTables[0]?.id);
+  // Load profile for active table whenever it changes
+  useEffect(() => {
+    if (!activeTabId) return;
+    const entry = tableNames.find((t) => `${t.schema}.${t.name}` === activeTabId);
+    if (!entry) return;
+    if (profiles.has(activeTabId)) return; // already loaded
 
-  const activeMetadata = useMemo(() => {
-    return metadataRecords.find((m) => m.tableId === activeTabId) || metadataRecords[0];
-  }, [activeTabId]);
+    async function fetchProfile() {
+      setLoadingProfile(true);
+      try {
+        const raw = await getMetadataTable(entry!.name, entry!.schema);
+        const profile = toTableProfile(raw as Record<string, unknown>);
+        setProfiles((prev) => new Map(prev).set(activeTabId!, profile));
+      } catch {
+        // leave profile missing — show empty state for this table
+      } finally {
+        setLoadingProfile(false);
+      }
+    }
+    fetchProfile();
+  }, [activeTabId, tableNames, profiles]);
 
-  if (!activeMetadata || availableTables.length === 0) {
+  const activeProfile = activeTabId ? profiles.get(activeTabId) : undefined;
+
+  if (loading) {
     return (
       <div className="flex h-full flex-col overflow-hidden animate-fade-in">
         <ProjectSubNav />
-        <div className="flex-1 flex items-center justify-center text-[#6b7280]">
-          No metadata available.
+        <div className="p-6">
+          <LoadingSkeleton count={4} className="h-16" />
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex h-full flex-col overflow-hidden animate-fade-in">
+        <ProjectSubNav />
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
+          <AlertTriangle size={32} className="text-[#f59e0b]" />
+          <p className="text-sm text-[#94a3b8]">{error}</p>
+          <Button variant="secondary" onClick={() => window.location.reload()}>
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (tableNames.length === 0) {
+    return (
+      <div className="flex h-full flex-col overflow-hidden animate-fade-in">
+        <ProjectSubNav />
+        <div className="flex flex-1 items-center justify-center text-[#6b7280]">
+          No tables found in the connected database.
         </div>
       </div>
     );
@@ -54,30 +195,26 @@ export function MetadataDiscoveryPage() {
         <div className="px-6 py-6 border-b border-[#252637]">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Metadata Discovery</h2>
           <p className="mt-1 text-sm text-[#6b7280]">
-            Stage 2 profiling — Preview — not wired to live API yet.
+            Auto-profiled from GET /metadata/tables — select a table to inspect.
           </p>
-          <div className="mt-4">
-            <PlannedBanner
-              detail="Foreign Keys, Duplicate %, Outliers, and Freshness below are preview placeholders. Live profiling will use GET /metadata when wired. Validation report remains the source of truth for checks."
-            />
-          </div>
-          
-          {/* Tabs */}
-          <div className="flex gap-2 mt-6">
-            {availableTables.map((table) => {
-              const isActive = activeTabId === table.id;
+
+          {/* Table tabs */}
+          <div className="flex gap-2 mt-6 flex-wrap">
+            {tableNames.map((t) => {
+              const tabId = `${t.schema}.${t.name}`;
+              const isActive = activeTabId === tabId;
               return (
                 <button
-                  key={table.id}
-                  onClick={() => setActiveTabId(table.id)}
+                  key={tabId}
+                  onClick={() => setActiveTabId(tabId)}
                   className={cn(
                     'px-4 py-1.5 rounded-full text-xs font-semibold transition-all focus:outline-none focus:ring-2 focus:ring-[#6366f1]',
                     isActive
                       ? 'bg-[#6366f1] text-white shadow-[0_4px_12px_rgba(99,102,241,0.3)]'
-                      : 'border border-[#252637] text-[#94a3b8] hover:border-[#6366f1]/40 hover:text-[#f1f5f9]'
+                      : 'border border-[#252637] text-[#94a3b8] hover:border-[#6366f1]/40 hover:text-[#f1f5f9]',
                   )}
                 >
-                  {table.name}
+                  {t.name}
                 </button>
               );
             })}
@@ -86,107 +223,73 @@ export function MetadataDiscoveryPage() {
 
         {/* Scrollable Content */}
         <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-6">
-          
-          {/* Stats Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <MetricCard 
-              label="Total Rows" 
-              value={activeMetadata.totalRows} 
-            />
-            <MetricCard 
-              label="Columns" 
-              value={activeMetadata.columns} 
-            />
-            <MetricCard 
-              label="Primary Keys" 
-              value={activeMetadata.primaryKeys} 
-              subValue={activeMetadata.pkColumns.join(', ')} 
-            />
-            <MetricCard 
-              label="Foreign Keys" 
-              value={activeMetadata.foreignKeys}
-              subValue="Preview — planned"
-            />
-
-            <MetricCard 
-              label="Missing Values" 
-              value={`${activeMetadata.missingValuesPct}%`} 
-              subValue="below threshold" 
-              valueClass="text-[#22c55e]"
-            />
-            <MetricCard 
-              label="Duplicate %" 
-              value={`${activeMetadata.duplicatePct}%`} 
-              subValue="Preview — planned"
-              valueClass="text-[#f59e0b]"
-            />
-            <MetricCard 
-              label="Null %" 
-              value={`${activeMetadata.nullPct}%`} 
-              valueClass="text-[#ef4444]"
-            />
-            <MetricCard 
-              label="Unique %" 
-              value={`${activeMetadata.uniquePct}%`} 
-              valueClass="text-[#22c55e]"
-            />
-
-            <MetricCard 
-              label="Outliers" 
-              value={activeMetadata.outliers}
-              subValue="Preview — planned"
-              valueClass="text-[#f59e0b]"
-            />
-            <MetricCard 
-              label="Freshness" 
-              value={activeMetadata.freshness}
-              subValue="Preview — planned"
-              valueClass="text-[#94a3b8]"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-6">
-            {/* Left Panel: Column Completeness */}
-            <div className="rounded-xl border border-[#252637] bg-[#1a1b28]/30 p-5">
-              <h3 className="text-xs font-semibold uppercase tracking-widest text-[#6b7280] mb-5">
-                Column Quality Completeness
-              </h3>
-              <div className="space-y-4">
-                {activeMetadata.columnsQuality.map((col) => (
-                  <ProgressMetric
-                    key={col.name}
-                    label={col.name}
-                    percentage={col.completeness}
-                    colorClass={
-                      col.completeness === 100 
-                        ? 'bg-[#22c55e]' 
-                        : col.completeness > 90 
-                          ? 'bg-[#22c55e]/80'
-                          : 'bg-[#f59e0b]'
-                    }
-                  />
-                ))}
+          {loadingProfile ? (
+            <LoadingSkeleton count={4} className="h-16" />
+          ) : activeProfile ? (
+            <>
+              {/* Stats Grid */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <MetricCard label="Total Rows" value={activeProfile.totalRows} />
+                <MetricCard label="Columns" value={activeProfile.columns} />
+                <MetricCard
+                  label="Primary Keys"
+                  value={activeProfile.primaryKeys}
+                  subValue={activeProfile.pkColumns.join(', ') || '—'}
+                />
+                <MetricCard label="Missing Values" value={`${activeProfile.missingValuesPct}%`} />
+                <MetricCard label="Null %" value={`${activeProfile.nullPct}%`} />
+                <MetricCard label="Unique %" value={`${activeProfile.uniquePct}%`} />
+                <MetricCard label="Schema" value={activeProfile.schema} />
+                <MetricCard label="Table" value={activeProfile.tableName} />
               </div>
-            </div>
 
-            {/* Right Panel: Heatmap */}
-            <div className="rounded-xl border border-[#252637] bg-[#1a1b28]/30 p-5">
-              <h3 className="text-xs font-semibold uppercase tracking-widest text-[#6b7280] mb-5">
-                Null Density Heatmap
-              </h3>
-              <div className="flex items-center justify-center h-[calc(100%-2rem)]">
-                <Heatmap pattern={activeMetadata.nullDensityPattern} />
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-6">
+                {/* Column completeness */}
+                {activeProfile.columnsQuality.length > 0 && (
+                  <div className="rounded-xl border border-[#252637] bg-[#1a1b28]/30 p-5">
+                    <h3 className="text-xs font-semibold uppercase tracking-widest text-[#6b7280] mb-5">
+                      Column Completeness
+                    </h3>
+                    <div className="space-y-4">
+                      {activeProfile.columnsQuality.slice(0, 12).map((col) => (
+                        <ProgressMetric
+                          key={col.name}
+                          label={col.name}
+                          percentage={col.completeness}
+                          colorClass={
+                            col.completeness === 100
+                              ? 'bg-[#22c55e]'
+                              : col.completeness > 90
+                                ? 'bg-[#22c55e]/80'
+                                : 'bg-[#f59e0b]'
+                          }
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Null density heatmap */}
+                <div className="rounded-xl border border-[#252637] bg-[#1a1b28]/30 p-5">
+                  <h3 className="text-xs font-semibold uppercase tracking-widest text-[#6b7280] mb-5">
+                    Null Density Heatmap
+                  </h3>
+                  <div className="flex items-center justify-center h-[calc(100%-2rem)]">
+                    <Heatmap pattern={activeProfile.nullDensityPattern} />
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            </>
+          ) : (
+            <p className="text-sm text-[#6b7280]">
+              Loading profile for this table…
+            </p>
+          )}
         </div>
 
         {/* Sticky Footer */}
         <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-4 flex items-center justify-between">
-          <Button
-            variant="ghost"
-            onClick={() => navigate(`/projects/${id}/select`)}
-          >
+          <Button variant="ghost" onClick={() => navigate(`/projects/${id}/select`)}>
             Back to Select
           </Button>
           <Button
