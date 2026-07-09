@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
@@ -38,6 +39,7 @@ function runModeDisplay(mode: string): { label: string; variant: 'pass' | 'warni
 }
 
 export function RunHistoryPage() {
+  const navigate = useNavigate();
   const { displayMode, backendReachable } = useAppMode();
   const { data: reportData } = useReport();
 
@@ -109,7 +111,12 @@ export function RunHistoryPage() {
             </thead>
             <tbody>
               {runs.map((run) => (
-                <tr key={run.run_id} className="border-b border-[#252637] last:border-b-0">
+                <tr
+                  key={run.run_id}
+                  className="border-b border-[#252637] last:border-b-0 cursor-pointer hover:bg-[#1a1b28] transition-colors"
+                  onClick={() => navigate(`/projects/shared/report/quality?runId=${encodeURIComponent(run.run_id)}`)}
+                  title={`Open report for ${run.run_id}`}
+                >
                   <td className="px-4 py-3 font-mono text-[#f1f5f9]">{run.run_id}</td>
                   <td className="px-4 py-3">
                     {(() => {

@@ -97,7 +97,7 @@ function CsvPanel({ projectId }: { projectId: string }) {
     setUploading(true);
     setMismatch(null);
     try {
-      const report = await uploadDatasetCsv(file);
+      const report = await uploadDatasetCsv(file, projectId);
       // Navigate keyed by the returned run_id. useReport() fetches
       // /reports/{run_id}, so a reload re-fetches the UPLOAD report (never the
       // demo). We intentionally do NOT prime the 'latest' cache — the demo's

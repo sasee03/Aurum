@@ -9,15 +9,31 @@ import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { useAppMode } from '@/context/AppModeContext';
 import { useReport } from '@/hooks/useReport';
+import { getProject } from '@/lib/aurumApi';
 import { formatBrl } from '@/utils/reportFormat';
+import { useQuery } from '@tanstack/react-query';
 
 export function ProjectDashboardPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const { displayMode, isResolved } = useAppMode();
+
+  // Fetch the project to get its last_run_id, then load that specific report
+  const projectQuery = useQuery({
+    queryKey: ['aurum', 'project', id],
+    queryFn: () => getProject(id!),
+    enabled: Boolean(id),
+    staleTime: 30_000,
+  });
+
+  const lastRunId = projectQuery.data?.last_run_id ?? undefined;
+
+  // Navigate with the run_id in the URL so useReport() picks it up correctly
+  // For the dashboard itself, we pass it directly to useReport via searchParams trick —
+  // instead we use the runId override pattern by navigating to quality report
   const { data, isLoading } = useReport();
 
-  if (!isResolved || isLoading) {
+  if (!isResolved || isLoading || projectQuery.isLoading) {
     return (
       <div className="p-6">
         <LoadingSkeleton count={4} className="h-16" />
@@ -26,6 +42,13 @@ export function ProjectDashboardPage() {
   }
 
   const report = data?.report;
+
+  // If the project has a last_run_id and we're not already showing that report,
+  // redirect straight to the quality report page which handles ?runId= correctly.
+  if (lastRunId && report?.run_id !== lastRunId) {
+    navigate(`/projects/${id}/report/quality?runId=${encodeURIComponent(lastRunId)}`, { replace: true });
+    return null;
+  }
 
   if (!report) {
     return (
@@ -93,13 +116,23 @@ export function ProjectDashboardPage() {
         <Button variant="ghost" onClick={() => navigate('/')}>
           Home
         </Button>
-        <Button
-          variant="primary"
-          rightIcon={<ArrowRight size={16} />}
-          onClick={() => navigate(`/projects/${id}/validate/execution`)}
-        >
-          Run / View Execution
-        </Button>
+        {lastRunId ? (
+          <Button
+            variant="primary"
+            rightIcon={<ArrowRight size={16} />}
+            onClick={() => navigate(`/projects/${id}/report/quality?runId=${encodeURIComponent(lastRunId)}`)}
+          >
+            View Last Report
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            rightIcon={<ArrowRight size={16} />}
+            onClick={() => navigate(`/projects/${id}/validate/execution`)}
+          >
+            Run / View Execution
+          </Button>
+        )}
       </div>
     </div>
   );
