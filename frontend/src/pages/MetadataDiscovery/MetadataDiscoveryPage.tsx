@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
@@ -8,6 +8,7 @@ import { ProgressMetric } from '@/components/common/ProgressMetric';
 import { Heatmap } from '@/components/common/Heatmap';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
+import { withRunIdQuery } from '@/hooks/useReport';
 import { getMetadataTables, getMetadataTable } from '@/lib/aurumApi';
 import { cn } from '@/utils/cn';
 
@@ -90,6 +91,8 @@ function toTableProfile(raw: Record<string, unknown>): TableProfile {
 export function MetadataDiscoveryPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const runId = searchParams.get('runId') ?? undefined;
 
   const [tableNames, setTableNames] = useState<{ name: string; schema: string }[]>([]);
   const [profiles, setProfiles] = useState<Map<string, TableProfile>>(new Map());
@@ -151,7 +154,7 @@ export function MetadataDiscoveryPage() {
   if (loading) {
     return (
       <div className="flex h-full flex-col overflow-hidden animate-fade-in">
-        <ProjectSubNav />
+        <ProjectSubNav runId={runId} />
         <div className="p-6">
           <LoadingSkeleton count={4} className="h-16" />
         </div>
@@ -162,7 +165,7 @@ export function MetadataDiscoveryPage() {
   if (error) {
     return (
       <div className="flex h-full flex-col overflow-hidden animate-fade-in">
-        <ProjectSubNav />
+        <ProjectSubNav runId={runId} />
         <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
           <AlertTriangle size={32} className="text-[#f59e0b]" />
           <p className="text-sm text-[#94a3b8]">{error}</p>
@@ -177,7 +180,7 @@ export function MetadataDiscoveryPage() {
   if (tableNames.length === 0) {
     return (
       <div className="flex h-full flex-col overflow-hidden animate-fade-in">
-        <ProjectSubNav />
+        <ProjectSubNav runId={runId} />
         <div className="flex flex-1 items-center justify-center text-[#6b7280]">
           No tables found in the connected database.
         </div>
@@ -187,8 +190,8 @@ export function MetadataDiscoveryPage() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
-      <ProjectSubNav />
-      <PageAssistant page="validation" />
+      <ProjectSubNav runId={runId} />
+      <PageAssistant page="validation" runId={runId} />
 
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Page Header */}
@@ -289,13 +292,18 @@ export function MetadataDiscoveryPage() {
 
         {/* Sticky Footer */}
         <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-4 flex items-center justify-between">
-          <Button variant="ghost" onClick={() => navigate(`/projects/${id}/select`)}>
+          <Button
+            variant="ghost"
+            onClick={() => navigate(withRunIdQuery(`/projects/${id}/select`, runId))}
+          >
             Back to Select
           </Button>
           <Button
             variant="primary"
             rightIcon={<ArrowRight size={16} />}
-            onClick={() => navigate(`/projects/${id}/validate/config`)}
+            onClick={() =>
+              navigate(withRunIdQuery(`/projects/${id}/validate/config`, runId))
+            }
           >
             Configure Pipeline
           </Button>

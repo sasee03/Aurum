@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.app_state.store import create_project, get_project, list_projects
 
@@ -17,11 +17,19 @@ class ProjectCreate(BaseModel):
     description: str = Field(default="", max_length=2000)
     environment: Literal["Development", "QA", "Production"] = "Development"
 
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Project name cannot be blank.")
+        return cleaned
+
 
 @router.post("/projects", status_code=status.HTTP_201_CREATED)
 def create_project_endpoint(body: ProjectCreate) -> dict:
     project = create_project(
-        name=body.name.strip(),
+        name=body.name,
         description=body.description.strip(),
         environment=body.environment,
     )

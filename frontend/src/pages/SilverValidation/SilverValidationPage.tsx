@@ -11,6 +11,7 @@ import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { useAppMode } from '@/context/AppModeContext';
 import { useReport, withRunIdQuery } from '@/hooks/useReport';
+import { layerStatusPresentation } from '@/components/common/LayerStatusRing';
 import { countChecksByDisplay } from '@/utils/reportFormat';
 
 export function SilverValidationPage() {
@@ -38,7 +39,7 @@ export function SilverValidationPage() {
           <h2 className="text-xl font-bold text-[#f1f5f9]">Silver Validation</h2>
           <DataSourceBadge mode={displayMode} />
           {report && (
-            <Badge variant={report.layer_status.silver === 'FAIL' ? 'failed' : 'pass'}>
+            <Badge variant={layerStatusPresentation(report.layer_status.silver).badge}>
               Layer {report.layer_status.silver}
             </Badge>
           )}

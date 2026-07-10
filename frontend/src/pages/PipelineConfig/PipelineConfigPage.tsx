@@ -4,6 +4,7 @@ import { PlayCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { PipelineStepper } from '@/components/common/PipelineStepper';
+import { withRunIdQuery } from '@/hooks/useReport';
 import pipelineRulesJson from '@/mocks/pipelineRules.json';
 import type { PipelineRule } from '@/types';
 
@@ -73,14 +74,16 @@ export function PipelineConfigPage() {
         <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-4 flex items-center justify-end gap-3">
           <Button
             variant="ghost"
-            onClick={() => navigate(`/projects/${id}/connect`)}
+            onClick={() => navigate(withRunIdQuery(`/projects/${id}/connect`, runId))}
           >
             Back to Connect
           </Button>
           <Button
             variant="primary"
             rightIcon={<PlayCircle size={16} />}
-            onClick={() => navigate(`/projects/${id}/validate/execution${runId ? `?runId=${encodeURIComponent(runId)}` : ''}`)}
+            onClick={() =>
+              navigate(withRunIdQuery(`/projects/${id}/validate/execution`, runId))
+            }
           >
             Start Validation
           </Button>

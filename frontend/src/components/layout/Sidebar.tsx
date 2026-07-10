@@ -19,12 +19,12 @@ interface NavItem {
   to: string;
 }
 
-const navItems: NavItem[] = [
+const navItems: (NavItem & { planned?: boolean })[] = [
   { label: 'Dashboard', icon: LayoutDashboard, to: '/' },
   { label: 'Projects', icon: FolderOpen, to: '/projects/new' },
   { label: 'History', icon: History, to: '/history' },
   { label: 'Custom Checks', icon: BarChart2, to: '/custom-checks' },
-  { label: 'Audit', icon: Settings, to: '/settings/audit' },
+  { label: 'Audit', icon: Settings, to: '/settings/audit', planned: true },
 ];
 
 function systemStatusLabel(mode: ReturnType<typeof useAppMode>['mode'], databaseOk: boolean) {
@@ -65,7 +65,7 @@ export function Sidebar() {
       </div>
 
       <nav className="flex flex-col gap-1 p-2 flex-1" aria-label="Site navigation">
-        {navItems.map(({ label, icon: Icon, to }) => (
+        {navItems.map(({ label, icon: Icon, to, planned }) => (
           <NavLink
             key={label}
             to={to}
@@ -76,14 +76,24 @@ export function Sidebar() {
                 isActive
                   ? 'bg-[#6366f1]/10 text-[#6366f1] shadow-[inset_2px_0_0_#6366f1]'
                   : 'text-[#6b7280] hover:bg-[#1a1b28] hover:text-[#94a3b8]',
-                collapsed && 'justify-center px-0 w-10 mx-auto'
+                collapsed && 'justify-center px-0 w-10 mx-auto',
+                planned && !isActive && 'opacity-70',
               )
             }
-            aria-label={collapsed ? label : undefined}
-            title={collapsed ? label : undefined}
+            aria-label={collapsed ? (planned ? `${label} (coming soon)` : label) : undefined}
+            title={collapsed ? (planned ? `${label} — coming soon` : label) : planned ? 'Coming soon' : undefined}
           >
             <Icon size={18} className="flex-shrink-0" />
-            {!collapsed && <span className="truncate">{label}</span>}
+            {!collapsed && (
+              <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                <span className="truncate">{label}</span>
+                {planned && (
+                  <span className="shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#6b7280] bg-[#1a1b28] border border-[#252637]">
+                    Soon
+                  </span>
+                )}
+              </span>
+            )}
           </NavLink>
         ))}
       </nav>

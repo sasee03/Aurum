@@ -10,6 +10,7 @@ import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { useAppMode } from '@/context/AppModeContext';
 import { useReport, withRunIdQuery } from '@/hooks/useReport';
+import { layerStatusPresentation } from '@/components/common/LayerStatusRing';
 import { countChecksByDisplay, formatBrl } from '@/utils/reportFormat';
 
 export function GoldValidationPage() {
@@ -36,7 +37,7 @@ export function GoldValidationPage() {
           <h2 className="text-xl font-bold text-[#f1f5f9]">Gold Validation</h2>
           <DataSourceBadge mode={displayMode} />
           {report && (
-            <Badge variant={report.layer_status.gold === 'IMPACTED' ? 'failed' : 'pass'}>
+            <Badge variant={layerStatusPresentation(report.layer_status.gold).badge}>
               Layer {report.layer_status.gold}
             </Badge>
           )}

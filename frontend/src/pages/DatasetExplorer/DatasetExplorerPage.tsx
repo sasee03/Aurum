@@ -1,10 +1,11 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ChevronRight, ChevronDown, ArrowRight, CheckSquare, Square, Eye, AlertTriangle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
 import { SearchBar } from '@/components/common/SearchBar';
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
+import { withRunIdQuery } from '@/hooks/useReport';
 import { cn } from '@/utils/cn';
 import { getMetadataTables, getMetadataTable } from '@/lib/aurumApi';
 import tablesJson from '@/mocks/tables.json';
@@ -161,6 +162,8 @@ function TableRowCard({
 export function DatasetExplorerPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const runId = searchParams.get('runId') ?? undefined;
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
@@ -277,7 +280,7 @@ export function DatasetExplorerPage() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in">
-      <ProjectSubNav />
+      <ProjectSubNav runId={runId} />
 
       <div className="flex flex-1 overflow-hidden">
         <aside
@@ -405,7 +408,7 @@ export function DatasetExplorerPage() {
                 variant="primary"
                 size="sm"
                 rightIcon={<ArrowRight size={14} />}
-                onClick={() => navigate(`/projects/${id}/metadata`)}
+                onClick={() => navigate(withRunIdQuery(`/projects/${id}/metadata`, runId))}
                 className="flex-shrink-0"
               >
                 Continue

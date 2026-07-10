@@ -126,7 +126,6 @@ export function LayerStatusRing({ layer, status, mode = 'trust', className }: La
         </div>
       </div>
       <p className="mt-3 text-sm font-semibold capitalize text-[#f1f5f9]">{layer}</p>
-      <p className="text-[10px] text-[#6b7280]">layer_status.{layer}</p>
     </div>
   );
 }

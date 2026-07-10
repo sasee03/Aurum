@@ -9,9 +9,15 @@ import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { useAppMode } from '@/context/AppModeContext';
 import { useReport } from '@/hooks/useReport';
+import { layerStatusPresentation } from '@/components/common/LayerStatusRing';
 import { getProject } from '@/lib/aurumApi';
 import { formatBrl } from '@/utils/reportFormat';
 import { useQuery } from '@tanstack/react-query';
+
+function friendlyDatasetLabel(dataset: string): string {
+  if (/olist/i.test(dataset)) return 'Sample e-commerce dataset';
+  return dataset;
+}
 
 export function ProjectDashboardPage() {
   const navigate = useNavigate();
@@ -86,11 +92,12 @@ export function ProjectDashboardPage() {
           </Badge>
         </div>
         <p className="text-sm text-[#6b7280]">
-          Validation report ready — {report.dataset}. Results are deterministic; the Assistant explains findings only.
+          Validation report ready — {friendlyDatasetLabel(report.dataset)}. Results are
+          deterministic; the Assistant explains findings only.
         </p>
 
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-          <MetricCard label="Dataset" value={report.dataset} />
+          <MetricCard label="Dataset" value={friendlyDatasetLabel(report.dataset)} />
           <MetricCard label="Trust Score" value={`${report.trust_score}/100`} subValue="Deterministic" />
           <MetricCard
             label="Est. Loss"
@@ -99,13 +106,9 @@ export function ProjectDashboardPage() {
         </div>
 
         <div className="flex gap-2">
-          <Badge variant={ls.bronze === 'PASS' ? 'pass' : 'failed'}>Bronze {ls.bronze}</Badge>
-          <Badge variant={ls.silver === 'FAIL' ? 'failed' : ls.silver === 'PASS' ? 'pass' : 'warning'}>
-            Silver {ls.silver}
-          </Badge>
-          <Badge variant={ls.gold === 'IMPACTED' ? 'failed' : ls.gold === 'PASS' ? 'pass' : 'warning'}>
-            Gold {ls.gold}
-          </Badge>
+          <Badge variant={layerStatusPresentation(ls.bronze).badge}>Bronze {ls.bronze}</Badge>
+          <Badge variant={layerStatusPresentation(ls.silver).badge}>Silver {ls.silver}</Badge>
+          <Badge variant={layerStatusPresentation(ls.gold).badge}>Gold {ls.gold}</Badge>
         </div>
 
         <p className="text-sm text-[#94a3b8]">{report.root_cause?.summary}</p>

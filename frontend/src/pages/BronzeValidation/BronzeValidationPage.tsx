@@ -9,6 +9,7 @@ import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { useAppMode } from '@/context/AppModeContext';
 import { useReport, withRunIdQuery } from '@/hooks/useReport';
+import { layerStatusPresentation } from '@/components/common/LayerStatusRing';
 import { countChecksByDisplay } from '@/utils/reportFormat';
 
 export function BronzeValidationPage() {
@@ -34,7 +35,7 @@ export function BronzeValidationPage() {
           <h2 className="text-xl font-bold text-[#f1f5f9]">Bronze Validation</h2>
           <DataSourceBadge mode={displayMode} />
           {report && (
-            <Badge variant={report.layer_status.bronze === 'PASS' ? 'pass' : 'failed'}>
+            <Badge variant={layerStatusPresentation(report.layer_status.bronze).badge}>
               Layer {report.layer_status.bronze}
             </Badge>
           )}

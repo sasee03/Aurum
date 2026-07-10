@@ -57,7 +57,7 @@ export function RunHistoryPage() {
   const report = reportData?.report;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden animate-fade-in relative p-6 space-y-4">
+    <div className="min-h-full p-6 space-y-4 animate-fade-in relative">
       <PageAssistant page="history" runId={report?.run_id} />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -66,8 +66,8 @@ export function RunHistoryPage() {
       </div>
 
       <p className="text-sm text-[#6b7280]">
-        Persisted validation runs from SQLite app state via GET /runs. Sparse data is expected until
-        live runs are recorded.
+        Recent validation runs from this workspace. Sparse data is expected until live runs are
+        recorded.
       </p>
 
       {!backendReachable ? (

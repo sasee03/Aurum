@@ -36,18 +36,26 @@ function ConnectorCard({
   selected: boolean;
   onSelect: () => void;
 }) {
+  const isPreview = connector.type === 'preview';
   return (
     <button
       type="button"
       onClick={onSelect}
       aria-pressed={selected}
+      title={isPreview ? `${connector.name} — coming soon` : undefined}
       className={cn(
         'relative flex flex-col items-center justify-center gap-2 rounded-xl border p-5 text-center transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[#6366f1]',
         selected
           ? 'border-[#6366f1] bg-[#6366f1]/10 shadow-[0_0_12px_rgba(99,102,241,0.15)]'
           : 'border-[#252637] bg-[#13141e] hover:border-[#6366f1]/30 hover:bg-[#1a1b28]',
+        isPreview && !selected && 'opacity-70',
       )}
     >
+      {isPreview && (
+        <span className="absolute right-1.5 top-1.5 rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#6b7280] bg-[#1a1b28] border border-[#252637]">
+          Soon
+        </span>
+      )}
       <div
         className={cn(
           'flex h-10 w-10 items-center justify-center rounded-lg text-sm font-bold transition-colors',
@@ -197,14 +205,19 @@ function CsvPanel({ projectId }: { projectId: string }) {
       </label>
 
       <div className="flex items-center gap-2 pt-2 border-t border-[#252637]">
-        <Button
-          variant="secondary"
-          size="sm"
-          leftIcon={<Eye size={14} />}
-          onClick={() => toast('Column preview coming soon', { icon: '👁' })}
+        <button
+          type="button"
+          title="Column preview coming soon"
+          aria-label="Preview File — coming soon"
+          onClick={() =>
+            toast('Column preview coming soon — upload and validate to continue.', {
+              icon: 'ℹ️',
+            })
+          }
+          className="flex items-center gap-1.5 rounded-lg border border-[#252637] bg-[#13141e] px-3 py-1.5 text-xs font-semibold text-[#6b7280] opacity-50 cursor-not-allowed"
         >
-          Preview File
-        </Button>
+          <Eye size={14} /> Preview File
+        </button>
         <Button
           variant="primary"
           size="sm"
@@ -454,7 +467,10 @@ function PostgresPanel({ projectId }: { projectId: string }) {
           </span>
         )}
         {status === 'connected' && connectionId && (
-          <span className="text-xs text-[#6b7280]">Session {connectionId}</span>
+          <span className="text-xs text-[#6b7280]">
+            Connected — connection ID for Custom Checks:{' '}
+            <span className="font-mono text-[#94a3b8]">{connectionId}</span>
+          </span>
         )}
       </div>
 
@@ -541,9 +557,14 @@ function PostgresPanel({ projectId }: { projectId: string }) {
 function PreviewConnectorPanel({ connector }: { connector: Connector }) {
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="secondary">Coming soon</Badge>
+        <span className="text-xs text-[#6b7280]">{connector.name}</span>
+      </div>
       <p className="text-sm text-[#94a3b8]">{connector.description}</p>
       <p className="text-sm text-[#6b7280]">
-        Connection configuration for {connector.name} is not available in the current build.
+        Connection setup for {connector.name} is not available yet. Use CSV upload or
+        PostgreSQL for live validation in this build.
       </p>
     </div>
   );
