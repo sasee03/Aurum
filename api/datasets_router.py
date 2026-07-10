@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 
 import api.main as api_main
-from src.app_state.store import save_validation_report, save_validation_run
+from src.app_state.store import get_project, save_validation_report, save_validation_run
 from src.csv_ingest import (
     RAW_ORDERS_COLUMNS,
     CsvSchemaMismatch,
@@ -76,6 +76,12 @@ async def upload_dataset(
                 "expected_columns": list(RAW_ORDERS_COLUMNS),
                 "missing_columns": [],
             },
+        )
+
+    if project_id and get_project(project_id) is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": "Project not found", "project_id": project_id},
         )
 
     try:

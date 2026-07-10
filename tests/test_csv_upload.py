@@ -300,6 +300,28 @@ def test_upload_mismatched_csv_honest_rejection(client):
     assert api_main._last_report == sentinel
 
 
+def test_upload_nonexistent_project_id_honest_rejection(client):
+    sentinel = {"run_id": "sentinel_missing_project", "final_verdict": "SENTINEL"}
+    api_main._last_report = sentinel
+    runs_before, reports_before = _sqlite_validation_counts()
+
+    response = client.post(
+        "/datasets/upload",
+        files={"file": ("orders.csv", io.BytesIO(_csv_bytes()), "text/csv")},
+        data={"project_id": "project_does_not_exist"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": "Project not found",
+        "project_id": "project_does_not_exist",
+    }
+    runs_after, reports_after = _sqlite_validation_counts()
+    assert runs_after == runs_before
+    assert reports_after == reports_before
+    assert api_main._last_report == sentinel
+
+
 def test_upload_refused_when_db_unreachable(client, monkeypatch):
     def fail_connect(*args, **kwargs):
         raise OSError("connection refused")
