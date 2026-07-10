@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import io
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
 import api.main as api_main
+from src.app_state.store import create_project, save_data_connection
 from src.custom_checks import (
     evaluate_check_on_frame,
     execute_custom_check,
     execute_custom_check_against_frame,
 )
+from src.postgres_connector import UserPostgresTarget, store_session_connection
 from src.run_demo import run_validation
+from tests.builders import make_rows, to_df
 
 
 @pytest.fixture
@@ -513,6 +517,92 @@ def test_connector_run_expired_session_honest_skipped(client, monkeypatch):
     body = response.json()
     assert body["status"] == "SKIPPED"
     assert "expired" in body["message"].lower() or "unknown" in body["message"].lower()
+
+
+def test_run_with_file_different_csv_shows_identity_disclaimer(client, monkeypatch):
+    """Real upload run_id + different re-attached CSV: disclaimer, not rejection."""
+    sample = _check(rule_type="row_count_condition", operator=">", value="0")
+    monkeypatch.setattr("api.aurum_assistant.router.load_custom_checks", lambda: [sample])
+
+    upload_csv = to_df(make_rows(10)).to_csv(index=False).encode("utf-8")
+    different_csv = to_df(make_rows(5, start=100)).to_csv(index=False).encode("utf-8")
+
+    upload = client.post(
+        "/datasets/upload",
+        files={"file": ("upload_a.csv", io.BytesIO(upload_csv), "text/csv")},
+    )
+    assert upload.status_code == 200, upload.text
+    run_id = upload.json()["run_id"]
+
+    response = client.post(
+        "/custom-checks/run-with-file",
+        data={"check_id": "custom_silver_001", "run_id": run_id},
+        files={"file": ("upload_b.csv", io.BytesIO(different_csv), "text/csv")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] in ("PASS", "FAIL")
+    assert body["observed_value"] == 5
+    assert "file identity is not verified" in body["scope_note"].lower()
+    assert run_id in body["data_source"]
+
+
+def test_connector_fresh_session_reauth_succeeds(client, monkeypatch):
+    """Fresh connection_id with persisted metadata re-runs check against connector run."""
+    sample = _check(rule_type="row_count_condition", operator=">", value="0")
+    monkeypatch.setattr("api.aurum_assistant.router.load_custom_checks", lambda: [sample])
+
+    frame = to_df(make_rows(10))
+    project = create_project("Connector reauth test")
+    session = store_session_connection(
+        UserPostgresTarget("localhost", 5433, "aurum", "aurum", "aurum"),
+        project_id=project["id"],
+    )
+    save_data_connection(
+        connection_id=session.connection_id,
+        project_id=project["id"],
+        name="kiro-reauth",
+        host="localhost",
+        port=5433,
+        database_name="aurum",
+        username="aurum",
+    )
+
+    with patch("api.connectors_router.load_and_validate_user_table", return_value=frame):
+        validated = client.post(
+            "/connectors/postgres/validate",
+            json={
+                "connection_id": session.connection_id,
+                "schema": "public",
+                "table": "raw_orders",
+                "project_id": project["id"],
+            },
+        )
+    assert validated.status_code == 200, validated.text
+    connector_run_id = validated.json()["run_id"]
+
+    fresh_session = store_session_connection(
+        UserPostgresTarget("localhost", 5433, "aurum", "aurum", "aurum"),
+        project_id=project["id"],
+    )
+    with patch("src.postgres_connector.load_and_validate_user_table", return_value=frame):
+        with patch(
+            "src.custom_checks.build_layer_frame_from_raw",
+            lambda raw, layer: pd.DataFrame({"x": list(range(len(raw)))}),
+        ):
+            response = client.post(
+                "/custom-checks/run",
+                json={
+                    "check_id": "custom_silver_001",
+                    "run_id": connector_run_id,
+                    "connection_id": fresh_session.connection_id,
+                },
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "PASS"
+    assert body["observed_value"] == 10
 
 
 def test_execute_against_frame_sets_real_data_source():
