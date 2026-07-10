@@ -24,7 +24,7 @@ const navItems: (NavItem & { planned?: boolean })[] = [
   { label: 'Projects', icon: FolderOpen, to: '/projects/new' },
   { label: 'History', icon: History, to: '/history' },
   { label: 'Custom Checks', icon: BarChart2, to: '/custom-checks' },
-  { label: 'Audit', icon: Settings, to: '/settings/audit', planned: true },
+  { label: 'Audit', icon: Settings, to: '/settings/audit' },
 ];
 
 function systemStatusLabel(mode: ReturnType<typeof useAppMode>['mode'], databaseOk: boolean) {
