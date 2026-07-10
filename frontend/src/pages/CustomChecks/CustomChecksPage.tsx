@@ -40,6 +40,21 @@ type RunScope =
   | { type: 'upload'; run: ValidationRunSummary }
   | { type: 'connector'; run: ValidationRunSummary };
 
+function formatRunOptionLabel(run: ValidationRunSummary): string {
+  const date = run.started_at ? run.started_at.slice(0, 10) : 'unknown date';
+  const score = run.trust_score != null ? ` (score ${run.trust_score})` : '';
+  if (run.mode === 'upload') return `Uploaded file — ${date}${score}`;
+  if (run.mode === 'connector') return `Database connection — ${date}${score}`;
+  return `Validation — ${date}${score}`;
+}
+
+function formatRunDataSource(run: ValidationRunSummary): string {
+  const date = run.started_at ? run.started_at.slice(0, 10) : 'unknown date';
+  if (run.mode === 'upload') return `Uploaded file (${date})`;
+  if (run.mode === 'connector') return `Database connection (${date})`;
+  return `Validation (${date})`;
+}
+
 export function CustomChecksPage() {
   const { displayMode, backendReachable } = useAppMode();
   const [form, setForm] = useState(EMPTY_FORM);
@@ -121,7 +136,7 @@ export function CustomChecksPage() {
               'Re-select the original CSV file to run this check against the upload data.',
             observed_value: null,
             expected_condition: '',
-            data_source: `Uploaded file (run ${scope.run.run_id})`,
+            data_source: formatRunDataSource(scope.run),
             scope_note:
               'File identity is not verified — this checks whatever file you attach, ' +
               'not necessarily the original upload. Ensure you\'re re-uploading the same ' +
@@ -141,7 +156,7 @@ export function CustomChecksPage() {
               'then enter the session connection ID below.',
             observed_value: null,
             expected_condition: '',
-            data_source: `Connector run ${scope.run.run_id}`,
+            data_source: formatRunDataSource(scope.run),
             scope_note: 'Connector passwords are not persisted. Re-authenticate to continue.',
           });
           return;
@@ -317,12 +332,10 @@ export function CustomChecksPage() {
               }}
               disabled={serviceUnavailable}
             >
-              <option value="demo">Olist demo session (default)</option>
+              <option value="demo">Sample dataset (default)</option>
               {runs.map((r) => (
                 <option key={r.run_id} value={r.run_id}>
-                  [{r.mode}] {r.run_id} —{' '}
-                  {r.started_at ? r.started_at.slice(0, 10) : ''}
-                  {r.trust_score != null ? ` (score ${r.trust_score})` : ''}
+                  {formatRunOptionLabel(r)}
                 </option>
               ))}
             </select>
@@ -332,7 +345,7 @@ export function CustomChecksPage() {
           {scope.type === 'upload' && (
             <div className="rounded-lg border border-[#252637] bg-[#0f172a] px-4 py-3 space-y-2">
               <p className="text-xs text-[#bfdbfe]">
-                <strong>Upload run selected.</strong> Re-attach the original CSV to run checks
+                <strong>Uploaded file selected.</strong> Re-attach the original CSV to run checks
                 against it. The file is processed in-memory and not saved again. File identity
                 is not verified — attach the same file used in the original run.
               </p>
@@ -353,9 +366,9 @@ export function CustomChecksPage() {
           {scope.type === 'connector' && (
             <div className="rounded-lg border border-[#252637] bg-[#0f172a] px-4 py-3 space-y-2">
               <p className="text-xs text-[#bfdbfe]">
-                <strong>Connector run selected.</strong> To re-run checks against this data,
+                <strong>Database connection selected.</strong> To re-run checks against this data,
                 go to the <span className="font-semibold">Connectors</span> page, test the
-                connection (password required), and paste the resulting connection ID here.
+                connection (password required), and paste the connection ID shown there.
                 Passwords are never stored.
               </p>
               <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
@@ -367,7 +380,7 @@ export function CustomChecksPage() {
                   onChange={(e) => {
                     setConnectorSessionId(e.target.value || null);
                   }}
-                  placeholder="conn_abc123def456"
+                  placeholder="Paste connection ID from Connectors"
                 />
               </label>
             </div>

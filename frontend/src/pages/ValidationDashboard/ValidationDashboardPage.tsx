@@ -95,9 +95,19 @@ export function ValidationDashboardPage() {
         { stage: 'Gold', status: 'QUEUED' },
       ];
 
+  function persistedRunNotice(): string {
+    if (runIdParam?.startsWith('upload_')) {
+      return 'Your uploaded file has already been validated. Continue to see the results — your data will not be replaced with a sample dataset.';
+    }
+    if (runIdParam?.startsWith('connector_')) {
+      return 'Your connected data has already been validated. Continue to see the results — your data will not be replaced with a sample dataset.';
+    }
+    return 'Your data has already been validated. Continue to see the results — your data will not be replaced with a sample dataset.';
+  }
+
   async function handleRun() {
     // Upload/connector validation already produced a full report — never call
-    // POST /runs here (that always re-runs the Olist demo and overwrites context).
+    // POST /runs here (that always re-runs the sample dataset and overwrites context).
     if (viewingPersistedRun && runIdParam) {
       setCompletedRunId(runIdParam);
       setFinished(true);
@@ -106,16 +116,16 @@ export function ValidationDashboardPage() {
           id: '1',
           timestamp: new Date().toISOString(),
           level: 'INFO',
-          message: `Using existing ${runIdParam} report — validation already completed at upload/connector time.`,
+          message: 'Your data was already validated when you uploaded or connected it.',
         },
         {
           id: '2',
           timestamp: new Date().toISOString(),
           level: 'INFO',
-          message:
-            'POST /runs was not called (that endpoint always re-runs the Olist demo). Proceed to layer results.',
+          message: 'Loading your existing results — your data will not be replaced.',
         },
       ]);
+      navigate(resultsPath);
       return;
     }
 
@@ -128,7 +138,7 @@ export function ValidationDashboardPage() {
         id: '1',
         timestamp: new Date().toISOString(),
         level: 'RUN',
-        message: 'POST /runs — starting Olist demo validation…',
+        message: 'Starting validation on the sample dataset…',
       },
     ]);
     try {
@@ -146,7 +156,7 @@ export function ValidationDashboardPage() {
           id: '3',
           timestamp: new Date().toISOString(),
           level: 'INFO',
-          message: `Run ${result.report.run_id} complete. First failed: ${result.report.first_failed_layer ?? 'none'}`,
+          message: `Validation complete. First issue layer: ${result.report.first_failed_layer ?? 'none'}`,
         },
       ]);
       setFinished(true);
@@ -189,20 +199,13 @@ export function ValidationDashboardPage() {
       <div className="px-6 py-6 border-b border-[#252637] flex flex-wrap items-center gap-3">
         <h2 className="text-xl font-bold text-[#f1f5f9]">Validation Execution</h2>
         <DataSourceBadge mode={displayMode} />
-        {activeRunId && (
-          <Badge variant="secondary" className="font-mono text-[10px]">
-            {activeRunId}
-          </Badge>
-        )}
       </div>
 
       <div className="flex-1 overflow-y-auto scrollbar-thin p-6 flex flex-col gap-6">
 
         {viewingPersistedRun && (
           <p className="text-sm text-[#94a3b8] rounded-lg border border-[#252637] bg-[#13141e] px-4 py-3 max-w-3xl mx-auto text-center">
-            This run already has a validation report from upload/connector. Continuing uses{' '}
-            <span className="font-mono text-[#bfdbfe]">{runIdParam}</span> — it will not
-            re-run the Olist demo.
+            {persistedRunNotice()}
           </p>
         )}
 
@@ -224,7 +227,7 @@ export function ValidationDashboardPage() {
             {running
               ? 'Running validation…'
               : viewingPersistedRun
-                ? 'Continue with this run'
+                ? 'Continue to results'
                 : 'Run Validation'}
           </Button>
         </div>

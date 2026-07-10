@@ -37,11 +37,6 @@ export function SilverValidationPage() {
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Silver Validation</h2>
           <DataSourceBadge mode={displayMode} />
-          {activeRunId && (
-            <Badge variant="secondary" className="font-mono text-[10px]">
-              {activeRunId}
-            </Badge>
-          )}
           {report && (
             <Badge variant={report.layer_status.silver === 'FAIL' ? 'failed' : 'pass'}>
               Layer {report.layer_status.silver}
@@ -49,7 +44,7 @@ export function SilverValidationPage() {
           )}
         </div>
         <p className="mt-1 text-sm text-[#6b7280]">
-          Transformation checks — first_failed_layer: {report?.first_failed_layer ?? '—'}
+          Transformation and enrichment checks on your dataset
         </p>
         <div className="flex gap-2 mt-4">
           <Badge variant="pass">{pass} PASS</Badge>

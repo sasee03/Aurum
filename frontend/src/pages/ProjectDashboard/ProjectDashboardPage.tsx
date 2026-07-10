@@ -86,12 +86,11 @@ export function ProjectDashboardPage() {
           </Badge>
         </div>
         <p className="text-sm text-[#6b7280]">
-          Olist demo-ready report — {report.dataset}. Engine decides deterministically; Assistant explains only.
+          Validation report ready — {report.dataset}. Results are deterministic; the Assistant explains findings only.
         </p>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           <MetricCard label="Dataset" value={report.dataset} />
-          <MetricCard label="Run ID" value={report.run_id} />
           <MetricCard label="Trust Score" value={`${report.trust_score}/100`} subValue="Deterministic" />
           <MetricCard
             label="Est. Loss"

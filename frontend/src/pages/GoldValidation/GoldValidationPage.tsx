@@ -35,11 +35,6 @@ export function GoldValidationPage() {
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Gold Validation</h2>
           <DataSourceBadge mode={displayMode} />
-          {activeRunId && (
-            <Badge variant="secondary" className="font-mono text-[10px]">
-              {activeRunId}
-            </Badge>
-          )}
           {report && (
             <Badge variant={report.layer_status.gold === 'IMPACTED' ? 'failed' : 'pass'}>
               Layer {report.layer_status.gold}

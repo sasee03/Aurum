@@ -54,7 +54,7 @@ export function LandingPage() {
       navigate(`/projects/${savedProjects[0].id}/dashboard`);
       return;
     }
-    toast('No saved projects yet — opening the verified Olist demo walkthrough.', { icon: 'ℹ️' });
+    toast('No saved projects yet — opening the sample dataset walkthrough.', { icon: 'ℹ️' });
     navigate(`/projects/${OLIST_DEMO_PROJECT_ID}/dashboard`);
   }
 
@@ -122,13 +122,13 @@ export function LandingPage() {
             className="text-xs text-[#6366f1] hover:text-[#4f46e5] transition-colors focus:outline-none focus:underline"
             onClick={() => navigate(`/projects/${OLIST_DEMO_PROJECT_ID}/dashboard`)}
           >
-            Open Olist verified demo
+            Try the sample dataset
           </button>
         </div>
 
         {projectsError && (
           <p className="mb-4 text-sm text-[#94a3b8] rounded-lg border border-[#252637] bg-[#13141e] px-4 py-3">
-            Could not load saved projects from the API. The Olist demo walkthrough is still available.
+            Could not load saved projects from the API. The sample dataset walkthrough is still available.
           </p>
         )}
 
@@ -148,7 +148,7 @@ export function LandingPage() {
         ) : (
           <EmptyState
             title="No Saved Projects Yet"
-            description="Create a project to begin onboarding. The verified Olist demo remains available via the link above."
+            description="Create a project to begin onboarding. The sample dataset walkthrough remains available via the link above."
             actionLabel="Create Project"
             onAction={() => navigate('/projects/new')}
           />

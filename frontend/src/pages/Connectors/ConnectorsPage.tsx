@@ -136,7 +136,7 @@ function CsvPanel({ projectId }: { projectId: string }) {
               </>
             )}
           </span>
-          <span className="text-[11px] text-[#4b5563]">CSV files only — Olist raw_orders shape</span>
+          <span className="text-[11px] text-[#4b5563]">CSV files only — must match the expected orders format</span>
           <input
             ref={fileInputRef}
             id="csv-upload"
@@ -216,8 +216,8 @@ function CsvPanel({ projectId }: { projectId: string }) {
       </div>
 
       <p className="text-xs text-[#6b7280] italic">
-        Upload must match the Olist raw_orders schema. Mismatched files are rejected — demo data is
-        never substituted.
+        Your file must match the expected column layout. Mismatched files are rejected — your
+        data is never swapped for a sample dataset.
       </p>
 
       <Button
@@ -226,7 +226,7 @@ function CsvPanel({ projectId }: { projectId: string }) {
         rightIcon={<ArrowRight size={16} />}
         onClick={() => navigate(`/projects/${projectId}/select`)}
       >
-        Continue with demo walkthrough
+        Try the sample dataset instead
       </Button>
     </div>
   );
