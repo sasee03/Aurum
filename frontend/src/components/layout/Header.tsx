@@ -1,5 +1,6 @@
 import { useLocation } from 'react-router-dom';
-import { Bell, User } from 'lucide-react';
+import { RecentRunsMenu } from '@/components/layout/RecentRunsMenu';
+import { StatusMenu } from '@/components/layout/StatusMenu';
 
 const routeLabels: Record<string, string> = {
   '/': 'Dashboard',
@@ -9,6 +10,7 @@ const routeLabels: Record<string, string> = {
   '/documentation': 'Documentation',
   '/reports': 'Reports',
   '/settings': 'Settings',
+  '/custom-checks': 'Custom Checks',
 };
 
 function getPageTitle(pathname: string): string {
@@ -29,18 +31,8 @@ export function Header() {
     >
       <h1 className="text-sm font-semibold text-[#f1f5f9]">{title}</h1>
       <div className="flex items-center gap-2">
-        <button
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-[#6b7280] hover:bg-[#1a1b28] hover:text-[#f1f5f9] transition-colors focus:outline-none focus:ring-2 focus:ring-[#6366f1]"
-          aria-label="Notifications"
-        >
-          <Bell size={16} />
-        </button>
-        <button
-          className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#252637] bg-[#1a1b28] text-[#94a3b8] hover:text-[#f1f5f9] transition-colors focus:outline-none focus:ring-2 focus:ring-[#6366f1]"
-          aria-label="User profile"
-        >
-          <User size={16} />
-        </button>
+        <RecentRunsMenu />
+        <StatusMenu />
       </div>
     </header>
   );
