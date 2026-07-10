@@ -1,5 +1,7 @@
 /** Shared friendly labels for validation run modes — keep UI copy consistent. */
 
+import type { ValidationRunSummary } from '@/lib/aurumApi';
+
 export function runSourceLabel(mode: string): string {
   switch (mode) {
     case 'upload':
@@ -13,6 +15,41 @@ export function runSourceLabel(mode: string): string {
     default:
       return 'Validation';
   }
+}
+
+export function getRunDisplayName(run: Pick<
+  ValidationRunSummary,
+  'mode' | 'display_name' | 'source_schema' | 'source_table' | 'started_at'
+>): string {
+  const stored = run.display_name?.trim();
+  if (stored) return stored;
+
+  if (run.mode === 'demo') return 'Sample dataset';
+
+  if (run.mode === 'connector') {
+    const schema = run.source_schema?.trim();
+    const table = run.source_table?.trim();
+    if (schema && table) return `${schema}.${table}`;
+    const date = run.started_at?.slice(0, 10) ?? 'unknown date';
+    return `Database connection (${date})`;
+  }
+
+  if (run.mode === 'upload') {
+    const date = run.started_at?.slice(0, 10) ?? 'unknown date';
+    return `Uploaded file (${date})`;
+  }
+
+  const date = run.started_at?.slice(0, 10) ?? 'unknown date';
+  return `Validation (${date})`;
+}
+
+/** Dropdown / list label — name plus optional trust score. */
+export function formatRunOptionLabel(
+  run: Pick<ValidationRunSummary, 'mode' | 'display_name' | 'source_schema' | 'source_table' | 'started_at' | 'trust_score'>,
+): string {
+  const name = getRunDisplayName(run);
+  const score = run.trust_score != null ? ` (score ${run.trust_score})` : '';
+  return `${name}${score}`;
 }
 
 export function formatRelativeOrDate(iso: string | null | undefined): string {

@@ -259,6 +259,10 @@ def test_upload_matching_csv_returns_report(client):
     assert "checks" in report
     assert len(report["checks"]["bronze"]) >= 1
 
+    runs = client.get("/runs").json()["runs"]
+    match = next(r for r in runs if r["run_id"] == report["run_id"])
+    assert match["display_name"] == "orders.csv"
+
 
 def test_upload_accepts_alphanumeric_customer_id_identifier(client):
     response = client.post(

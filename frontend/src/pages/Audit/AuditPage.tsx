@@ -6,7 +6,7 @@ import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { useAppMode } from '@/context/AppModeContext';
 import { fetchRuns, type ValidationRunSummary } from '@/lib/aurumApi';
-import { formatRelativeOrDate, runSourceLabel } from '@/utils/runLabels';
+import { formatRelativeOrDate, getRunDisplayName, runSourceLabel } from '@/utils/runLabels';
 import { cn } from '@/utils/cn';
 
 function verdictVariant(verdict: string | null): 'pass' | 'warning' | 'failed' | 'secondary' {
@@ -76,8 +76,8 @@ export function AuditPage() {
             <thead>
               <tr className="border-b border-[#252637] bg-[#0d0e14] text-left text-xs uppercase tracking-widest text-[#6b7280]">
                 <th className="px-4 py-2 font-semibold">When</th>
-                <th className="px-4 py-2 font-semibold">Run ID</th>
-                <th className="px-4 py-2 font-semibold">Source</th>
+                <th className="px-4 py-2 font-semibold">Run</th>
+                <th className="px-4 py-2 font-semibold">Type</th>
                 <th className="px-4 py-2 font-semibold">Verdict</th>
                 <th className="px-4 py-2 font-semibold">Trust score</th>
               </tr>
@@ -90,13 +90,16 @@ export function AuditPage() {
                     'border-b border-[#252637] last:border-b-0 cursor-pointer hover:bg-[#1a1b28] transition-colors',
                   )}
                   onClick={() => navigate(openReportPath(run))}
-                  title={`Open quality report for ${run.run_id}`}
+                  title={`Open quality report for ${getRunDisplayName(run)}`}
                 >
                   <td className="px-4 py-3 text-[#94a3b8]">
                     {formatRelativeOrDate(run.finished_at || run.started_at)}
                   </td>
-                  <td className="px-4 py-3 font-mono text-xs text-[#f1f5f9]">{run.run_id}</td>
-                  <td className="px-4 py-3 text-[#f1f5f9]">{runSourceLabel(run.mode)}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-[#f1f5f9]">{getRunDisplayName(run)}</div>
+                    <div className="mt-0.5 font-mono text-[10px] text-[#6b7280]">{run.run_id}</div>
+                  </td>
+                  <td className="px-4 py-3 text-[#94a3b8]">{runSourceLabel(run.mode)}</td>
                   <td className="px-4 py-3">
                     {run.final_verdict ? (
                       <Badge variant={verdictVariant(run.final_verdict)}>

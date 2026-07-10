@@ -158,7 +158,13 @@ def test_list_validation_runs_from_sqlite_only(app_state_db):
 
 
 def test_get_runs_endpoint(app_state_db):
-    save_validation_run("api_run_001", status="completed", mode="live")
+    save_validation_run(
+        "api_run_001",
+        status="completed",
+        mode="live",
+        started_at="2026-01-01T00:00:00+00:00",
+        finished_at="2026-01-01T00:00:05+00:00",
+    )
     save_validation_report(
         "api_run_001",
         {"run_id": "api_run_001", "trust_score": 85, "final_verdict": "WARNING"},
@@ -172,3 +178,33 @@ def test_get_runs_endpoint(app_state_db):
         assert len(body["runs"]) == 1
         assert body["runs"][0]["run_id"] == "api_run_001"
         assert body["runs"][0]["trust_score"] == 85
+        assert body["runs"][0]["display_name"] == "Validation (2026-01-01)"
+
+
+def test_resolve_run_display_name_upload_connector_demo():
+    from src.app_state.store import resolve_run_display_name
+
+    assert (
+        resolve_run_display_name(
+            mode="upload",
+            display_name="sales_test.csv",
+            started_at="2026-07-10T12:00:00+00:00",
+        )
+        == "sales_test.csv"
+    )
+    assert (
+        resolve_run_display_name(
+            mode="upload",
+            started_at="2026-07-10T12:00:00+00:00",
+        )
+        == "Uploaded file (2026-07-10)"
+    )
+    assert (
+        resolve_run_display_name(
+            mode="connector",
+            source_schema="public",
+            source_table="raw_orders",
+        )
+        == "public.raw_orders"
+    )
+    assert resolve_run_display_name(mode="demo") == "Sample dataset"

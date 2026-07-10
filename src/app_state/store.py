@@ -14,6 +14,34 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def resolve_run_display_name(
+    *,
+    mode: str,
+    display_name: Optional[str] = None,
+    source_schema: Optional[str] = None,
+    source_table: Optional[str] = None,
+    started_at: Optional[str] = None,
+) -> str:
+    """Human-readable run label for GET /runs and UI surfaces."""
+    stored = (display_name or "").strip()
+    if stored:
+        return stored
+    if mode == "demo":
+        return "Sample dataset"
+    if mode == "connector":
+        schema = (source_schema or "").strip()
+        table = (source_table or "").strip()
+        if schema and table:
+            return f"{schema}.{table}"
+        date = (started_at or "")[:10] or "unknown date"
+        return f"Database connection ({date})"
+    if mode == "upload":
+        date = (started_at or "")[:10] or "unknown date"
+        return f"Uploaded file ({date})"
+    date = (started_at or "")[:10] or "unknown date"
+    return f"Validation ({date})"
+
+
 def _row_to_project(row) -> dict[str, Any]:
     return {
         "id": row["id"],
@@ -75,6 +103,7 @@ def save_validation_run(
     error_message: Optional[str] = None,
     source_schema: Optional[str] = None,
     source_table: Optional[str] = None,
+    display_name: Optional[str] = None,
 ) -> None:
     started = started_at or _utc_now()
     finished = finished_at or _utc_now()
@@ -84,8 +113,8 @@ def save_validation_run(
             INSERT OR REPLACE INTO validation_runs (
                 run_id, project_id, connection_id, status, mode,
                 started_at, finished_at, error_message,
-                source_schema, source_table
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_schema, source_table, display_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -98,6 +127,7 @@ def save_validation_run(
                 error_message,
                 source_schema,
                 source_table,
+                display_name,
             ),
         )
         if project_id:
@@ -116,7 +146,7 @@ def get_validation_run(run_id: str) -> Optional[dict[str, Any]]:
             SELECT
                 run_id, project_id, connection_id, status, mode,
                 started_at, finished_at, error_message,
-                source_schema, source_table
+                source_schema, source_table, display_name
             FROM validation_runs
             WHERE run_id = ?
             """,
@@ -135,6 +165,13 @@ def get_validation_run(run_id: str) -> Optional[dict[str, Any]]:
         "error_message": row["error_message"],
         "source_schema": row["source_schema"],
         "source_table": row["source_table"],
+        "display_name": resolve_run_display_name(
+            mode=row["mode"],
+            display_name=row["display_name"],
+            source_schema=row["source_schema"],
+            source_table=row["source_table"],
+            started_at=row["started_at"],
+        ),
     }
 
 
@@ -179,6 +216,7 @@ def list_validation_runs() -> list[dict[str, Any]]:
                 r.error_message,
                 r.source_schema,
                 r.source_table,
+                r.display_name,
                 rep.report_json
             FROM validation_runs r
             LEFT JOIN validation_reports rep ON rep.run_id = r.run_id
@@ -206,6 +244,13 @@ def list_validation_runs() -> list[dict[str, Any]]:
                 "error_message": row["error_message"],
                 "source_schema": row["source_schema"],
                 "source_table": row["source_table"],
+                "display_name": resolve_run_display_name(
+                    mode=row["mode"],
+                    display_name=row["display_name"],
+                    source_schema=row["source_schema"],
+                    source_table=row["source_table"],
+                    started_at=row["started_at"],
+                ),
                 "trust_score": trust_score,
                 "final_verdict": final_verdict,
             }

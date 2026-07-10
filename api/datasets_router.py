@@ -106,6 +106,7 @@ async def upload_dataset(
         status="completed",
         mode="upload",
         project_id=project_id or None,
+        display_name=file.filename,
     )
     save_validation_report(persisted_run_id, report)
     return report

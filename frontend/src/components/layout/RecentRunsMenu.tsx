@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Bell } from 'lucide-react';
 import { useAppMode } from '@/context/AppModeContext';
 import { fetchRuns, type ValidationRunSummary } from '@/lib/aurumApi';
+import { getRunDisplayName } from '@/utils/runLabels';
 import { cn } from '@/utils/cn';
 
 const LAST_SEEN_KEY = 'aurum.notifications.lastSeen';
@@ -207,10 +208,12 @@ export function RecentRunsMenu() {
                       onClick={() => openRun(run)}
                     >
                       <span className="text-sm font-medium text-[#f1f5f9]">
-                        {runEventLabel(run.mode)}
+                        {getRunDisplayName(run)}
                       </span>
                       <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[#94a3b8]">
                         <span>
+                          {runEventLabel(run.mode)}
+                          {' · '}
                           {run.final_verdict ?? run.status}
                           {run.trust_score != null ? ` · ${run.trust_score}/100` : ''}
                         </span>

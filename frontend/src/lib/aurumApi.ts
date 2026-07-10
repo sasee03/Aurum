@@ -84,6 +84,10 @@ export interface ValidationRunSummary {
   error_message: string | null;
   trust_score: number | null;
   final_verdict: string | null;
+  source_schema: string | null;
+  source_table: string | null;
+  /** Human-readable name — filename, schema.table, or resolved fallback. */
+  display_name: string | null;
 }
 
 export async function fetchRuns(): Promise<{ runs: ValidationRunSummary[] }> {

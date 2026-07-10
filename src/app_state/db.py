@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS validation_runs (
     error_message TEXT,
     source_schema TEXT,
     source_table TEXT,
+    display_name TEXT,
     FOREIGN KEY (project_id) REFERENCES projects(id),
     FOREIGN KEY (connection_id) REFERENCES data_connections(id)
 );
@@ -80,6 +81,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # Migrate older DBs created before source_schema/source_table existed.
     _ensure_column(conn, "validation_runs", "source_schema", "source_schema TEXT")
     _ensure_column(conn, "validation_runs", "source_table", "source_table TEXT")
+    _ensure_column(conn, "validation_runs", "display_name", "display_name TEXT")
     conn.commit()
 
 

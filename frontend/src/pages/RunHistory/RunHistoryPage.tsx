@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/Badge';
 import { useAppMode } from '@/context/AppModeContext';
 import { useReport } from '@/hooks/useReport';
 import { fetchRuns } from '@/lib/aurumApi';
+import { getRunDisplayName } from '@/utils/runLabels';
 import { cn } from '@/utils/cn';
 
 function formatTimestamp(value: string | null | undefined): string {
@@ -102,7 +103,7 @@ export function RunHistoryPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[#252637] bg-[#0d0e14] text-left text-xs uppercase tracking-widest text-[#6b7280]">
-                <th className="px-4 py-2 font-semibold">Run ID</th>
+                <th className="px-4 py-2 font-semibold">Run</th>
                 <th className="px-4 py-2 font-semibold">Mode</th>
                 <th className="px-4 py-2 font-semibold">Status</th>
                 <th className="px-4 py-2 font-semibold">Started</th>
@@ -117,9 +118,12 @@ export function RunHistoryPage() {
                   key={run.run_id}
                   className="border-b border-[#252637] last:border-b-0 cursor-pointer hover:bg-[#1a1b28] transition-colors"
                   onClick={() => navigate(`/projects/shared/report/quality?runId=${encodeURIComponent(run.run_id)}`)}
-                  title={`Open report for ${run.run_id}`}
+                  title={`Open report for ${getRunDisplayName(run)}`}
                 >
-                  <td className="px-4 py-3 font-mono text-[#f1f5f9]">{run.run_id}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-[#f1f5f9]">{getRunDisplayName(run)}</div>
+                    <div className="mt-0.5 font-mono text-[10px] text-[#6b7280]">{run.run_id}</div>
+                  </td>
                   <td className="px-4 py-3">
                     {(() => {
                       const { label, variant } = runModeDisplay(run.mode);
