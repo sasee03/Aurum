@@ -180,7 +180,7 @@ export function CustomChecksPage() {
   const sqlSelected = form.rule_type === 'custom_sql_demo';
 
   return (
-    <div className="flex h-full flex-col overflow-hidden animate-fade-in relative p-6 space-y-6">
+    <div className="min-h-full p-6 space-y-6 animate-fade-in relative">
       <PageAssistant page="custom_checks" layer="silver" />
 
       <div>
