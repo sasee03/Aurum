@@ -6,6 +6,7 @@ import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
+import { LayerStatusRing, layerStatusPresentation } from '@/components/common/LayerStatusRing';
 import { useAppMode } from '@/context/AppModeContext';
 import { useReport, withRunIdQuery } from '@/hooks/useReport';
 import { cn } from '@/utils/cn';
@@ -25,16 +26,6 @@ function gaugeColor(score: number): string {
   if (score < 70) return '#ef4444';
   if (score < 100) return '#f59e0b';
   return '#22c55e';
-}
-
-function layerRingStyle(status: string): { stroke: string; badge: 'pass' | 'warning' | 'failed' | 'default' } {
-  const u = status.toUpperCase();
-  if (u === 'PASS') return { stroke: '#22c55e', badge: 'pass' };
-  if (u === 'WARN') return { stroke: '#f59e0b', badge: 'warning' };
-  if (u === 'FAIL') return { stroke: '#ef4444', badge: 'failed' };
-  if (u === 'IMPACTED') return { stroke: '#f97316', badge: 'failed' };
-  if (u === 'SKIPPED') return { stroke: '#6b7280', badge: 'default' };
-  return { stroke: '#6b7280', badge: 'default' };
 }
 
 interface TrustScoreGaugeProps {
@@ -84,57 +75,6 @@ function TrustScoreGauge({ score }: TrustScoreGaugeProps) {
         </div>
       </div>
       <p className="mt-3 text-xs text-[#6b7280]">Engine-computed trust_score</p>
-    </div>
-  );
-}
-
-interface LayerStatusRingProps {
-  layer: string;
-  status: string;
-}
-
-/**
- * Status-derived ring — full circle colored by layer_status verbatim.
- * No per-layer numeric score; status label is the data.
- */
-function LayerStatusRing({ layer, status }: LayerStatusRingProps) {
-  const radius = 52;
-  const stroke = 8;
-  const normalizedRadius = radius - stroke / 2;
-  const circumference = 2 * Math.PI * normalizedRadius;
-  const { stroke: color, badge } = layerRingStyle(status);
-  const dashed = status.toUpperCase() === 'SKIPPED';
-
-  return (
-    <div className="flex flex-col items-center rounded-xl border border-[#252637] bg-[#13141e] px-5 py-4">
-      <div className="relative">
-        <svg width={radius * 2} height={radius * 2} className="-rotate-90">
-          <circle
-            cx={radius}
-            cy={radius}
-            r={normalizedRadius}
-            fill="none"
-            stroke="#1a1b28"
-            strokeWidth={stroke}
-          />
-          <circle
-            cx={radius}
-            cy={radius}
-            r={normalizedRadius}
-            fill="none"
-            stroke={color}
-            strokeWidth={stroke}
-            strokeLinecap="round"
-            strokeDasharray={dashed ? `${circumference * 0.12} ${circumference * 0.08}` : circumference}
-            strokeDashoffset={0}
-          />
-        </svg>
-        <div className="absolute inset-0 flex items-center justify-center">
-          <Badge variant={badge}>{status}</Badge>
-        </div>
-      </div>
-      <p className="mt-3 text-sm font-semibold capitalize text-[#f1f5f9]">{layer}</p>
-      <p className="text-[10px] text-[#6b7280]">layer_status.{layer}</p>
     </div>
   );
 }
@@ -220,7 +160,7 @@ export function TrustScoringPage() {
                     {TRUST_WEIGHTS.map(({ status, delta }) => (
                       <tr key={status} className="border-b border-[#252637] last:border-b-0">
                         <td className="px-4 py-2.5">
-                          <Badge variant={layerRingStyle(status).badge}>{status}</Badge>
+                          <Badge variant={layerStatusPresentation(status).badge}>{status}</Badge>
                         </td>
                         <td
                           className={cn(

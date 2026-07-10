@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Check, RefreshCw, CircleDashed, ArrowRight, Play } from 'lucide-react';
+import { ArrowRight, Play } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
-import { Badge } from '@/components/ui/Badge';
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { LogConsole } from '@/components/common/LogConsole';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
+import { LayerStatusRing, layerStatusPresentation, type LayerStatus } from '@/components/common/LayerStatusRing';
 import { useAppMode } from '@/context/AppModeContext';
 import {
   isPersistedUserRunId,
@@ -15,45 +15,10 @@ import {
   useRunValidation,
   withRunIdQuery,
 } from '@/hooks/useReport';
-import { layerStageStatus } from '@/utils/reportFormat';
 import { cn } from '@/utils/cn';
 import type { ExecutionLog } from '@/types';
 
 type StageName = 'Bronze' | 'Silver' | 'Gold';
-type StageStatus = 'QUEUED' | 'RUNNING' | 'SUCCESS' | 'FAILED';
-
-function getStatusConfig(status: StageStatus) {
-  switch (status) {
-    case 'SUCCESS':
-      return {
-        icon: <Check size={20} className="text-[#22c55e]" />,
-        ring: 'border-[#22c55e] text-[#22c55e]',
-        badge: 'pass' as const,
-        line: 'bg-[#22c55e]',
-      };
-    case 'RUNNING':
-      return {
-        icon: <RefreshCw size={20} className="text-[#3b82f6] animate-spin" />,
-        ring: 'border-[#3b82f6] text-[#3b82f6]',
-        badge: 'primary' as const,
-        line: 'bg-[#3b82f6]',
-      };
-    case 'FAILED':
-      return {
-        icon: <Check size={20} className="text-[#ef4444]" />,
-        ring: 'border-[#ef4444] text-[#ef4444]',
-        badge: 'failed' as const,
-        line: 'bg-[#ef4444]',
-      };
-    default:
-      return {
-        icon: <CircleDashed size={20} className="text-[#4b5563]" />,
-        ring: 'border-[#252637] text-[#4b5563]',
-        badge: 'secondary' as const,
-        line: 'bg-[#1a1b28]',
-      };
-  }
-}
 
 export function ValidationDashboardPage() {
   const navigate = useNavigate();
@@ -74,19 +39,19 @@ export function ValidationDashboardPage() {
   // Prefer the URL/active run — never let a stale "latest" report override an upload/connector id.
   const activeRunId = completedRunId ?? runIdParam ?? report?.run_id;
 
-  const stages: { stage: StageName; status: StageStatus }[] = report
+  const stages: { stage: StageName; status: LayerStatus }[] = report
     ? [
         {
           stage: 'Bronze',
-          status: running && !finished ? 'RUNNING' : layerStageStatus(report.layer_status.bronze),
+          status: running && !finished ? 'RUNNING' : report.layer_status.bronze,
         },
         {
           stage: 'Silver',
-          status: running && !finished ? 'QUEUED' : layerStageStatus(report.layer_status.silver),
+          status: running && !finished ? 'QUEUED' : report.layer_status.silver,
         },
         {
           stage: 'Gold',
-          status: running && !finished ? 'QUEUED' : layerStageStatus(report.layer_status.gold),
+          status: running && !finished ? 'QUEUED' : report.layer_status.gold,
         },
       ]
     : [
@@ -235,25 +200,10 @@ export function ValidationDashboardPage() {
         <div className="flex items-center justify-center py-10 bg-[#1a1b28]/30 rounded-xl border border-[#252637]">
           <div className="flex items-center justify-center w-full max-w-4xl px-8">
             {stages.map((stage, index) => {
-              const config = getStatusConfig(stage.status);
+              const config = layerStatusPresentation(stage.status);
               return (
                 <div key={stage.stage} className="flex items-center flex-1 last:flex-none relative w-full">
-                  <div className="flex flex-col items-center gap-3 relative z-10">
-                    <div
-                      className={cn(
-                        'flex items-center justify-center w-16 h-16 rounded-3xl border-2 bg-[#0d0e14] transition-colors duration-500',
-                        config.ring,
-                      )}
-                    >
-                      {config.icon}
-                    </div>
-                    <div className="flex flex-col items-center gap-1.5">
-                      <span className="text-sm font-bold text-[#f1f5f9]">{stage.stage}</span>
-                      <Badge variant={config.badge} className="px-3">
-                        {stage.status}
-                      </Badge>
-                    </div>
-                  </div>
+                  <LayerStatusRing layer={stage.stage} status={stage.status} mode="execution" />
                   {index < stages.length - 1 && (
                     <div
                       className={cn(
