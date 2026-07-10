@@ -18,6 +18,8 @@ import { RunHistoryPage } from '@/pages/RunHistory/RunHistoryPage';
 import { CustomChecksPage } from '@/pages/CustomChecks/CustomChecksPage';
 import { DocumentationPage } from '@/pages/Documentation/DocumentationPage';
 import { PlannedFeaturePage } from '@/pages/Planned/PlannedFeaturePage';
+import { RemediationPage } from '@/pages/Remediation/RemediationPage';
+import { AuditPage } from '@/pages/Audit/AuditPage';
 
 const router = createBrowserRouter([
   {
@@ -68,25 +70,8 @@ const router = createBrowserRouter([
           />
         ),
       },
-      {
-        path: 'projects/:id/remediate',
-        element: (
-          <PlannedFeaturePage
-            title="Remediation Center"
-            detail="Review quarantined records and apply fixes. Suggested remediation actions for the current run are available in the quality report."
-            assistantPage="failure"
-          />
-        ),
-      },
-      {
-        path: 'settings/audit',
-        element: (
-          <PlannedFeaturePage
-            title="Audit & Governance"
-            detail="Review who ran what and when. Validation history is available through Run History and the Aurum Assistant."
-          />
-        ),
-      },
+      { path: 'projects/:id/remediate', element: <RemediationPage /> },
+      { path: 'settings/audit', element: <AuditPage /> },
     ],
   },
 ]);
