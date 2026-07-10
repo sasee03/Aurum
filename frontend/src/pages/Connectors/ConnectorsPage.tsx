@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { cn } from '@/utils/cn';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
+import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { useAppMode } from '@/context/AppModeContext';
 import {
   CsvUploadError,
@@ -559,7 +560,9 @@ export function ConnectorsPage() {
   const selectedConnector = connectors.find((c) => c.id === selected);
 
   return (
-    <div className="min-h-full px-6 py-8 animate-fade-in">
+    <div className="flex h-full flex-col overflow-hidden animate-fade-in">
+      <ProjectSubNav />
+      <div className="flex-1 overflow-y-auto scrollbar-thin min-h-0 px-6 py-8">
       {/* Page Header */}
       <div className="mb-8">
         <div className="flex flex-wrap items-center gap-3">
@@ -612,6 +615,7 @@ export function ConnectorsPage() {
             </div>
           </div>
         )}
+      </div>
       </div>
     </div>
   );

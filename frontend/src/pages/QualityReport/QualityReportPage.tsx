@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
+  ArrowRight,
   ChevronDown,
   ChevronRight,
   Download,
@@ -12,14 +13,17 @@ import {
 import { toast } from 'react-hot-toast';
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
+import { FlowBackButton } from '@/components/common/FlowBackButton';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
+import { Button } from '@/components/ui/Button';
 import { VerdictBadge } from '@/components/ui/Badge';
 import { useAppMode } from '@/context/AppModeContext';
-import { useReport } from '@/hooks/useReport';
+import { useReport, withRunIdQuery } from '@/hooks/useReport';
 import { REPORT_KEYS, type AurumReport } from '@/types/report';
 import { fetchReportByRunId } from '@/lib/aurumApi';
 import { formatBrl } from '@/utils/reportFormat';
+import { getFlowBackTarget } from '@/utils/flowNavigation';
 import { cn } from '@/utils/cn';
 
 /** Colour a verdict/status string consistently with the rest of the app. */
@@ -72,7 +76,9 @@ function ReportRow({ label, children }: RowProps) {
 }
 
 export function QualityReportPage() {
-  const { id: _id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const { displayMode } = useAppMode();
   const { data, isLoading } = useReport();
   const [jsonOpen, setJsonOpen] = useState(false);
@@ -80,7 +86,10 @@ export function QualityReportPage() {
   const [byIdLoaded, setByIdLoaded] = useState(false);
   const [byIdUnavailable, setByIdUnavailable] = useState(false);
   const report = data?.report;
+  const runIdParam = searchParams.get('runId') ?? undefined;
+  const activeRunId = runIdParam ?? report?.run_id;
   const reportBadgeMode = data?.source === 'user_upload' ? 'user_upload' : displayMode;
+  const back = getFlowBackTarget(`/projects/${id}/report/quality`, id, activeRunId);
 
   async function loadByRunId() {
     if (!report?.run_id) return;
@@ -107,8 +116,8 @@ export function QualityReportPage() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
-      <ProjectSubNav runId={report?.run_id} />
-      <PageAssistant page="validation" runId={report?.run_id} />
+      <ProjectSubNav runId={activeRunId} />
+      <PageAssistant page="validation" runId={activeRunId} />
 
       <div className="px-6 py-6 border-b border-[#252637] flex flex-wrap items-center gap-3">
         <h2 className="text-xl font-bold text-[#f1f5f9]">Quality Report</h2>
@@ -316,6 +325,19 @@ export function QualityReportPage() {
             dashboard.
           </p>
         )}
+      </div>
+
+      <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-4 flex items-center justify-between">
+        {back ? <FlowBackButton path={back.path} label={back.label} /> : <span />}
+        <Button
+          variant="primary"
+          rightIcon={<ArrowRight size={16} />}
+          onClick={() =>
+            navigate(withRunIdQuery(`/projects/${id}/remediate`, activeRunId))
+          }
+        >
+          Continue to Remediate
+        </Button>
       </div>
     </div>
   );

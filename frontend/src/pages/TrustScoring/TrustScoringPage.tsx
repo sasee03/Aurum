@@ -7,8 +7,10 @@ import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { LayerStatusRing, layerStatusPresentation } from '@/components/common/LayerStatusRing';
+import { FlowBackButton } from '@/components/common/FlowBackButton';
 import { useAppMode } from '@/context/AppModeContext';
 import { useReport, withRunIdQuery } from '@/hooks/useReport';
+import { getFlowBackTarget } from '@/utils/flowNavigation';
 import { cn } from '@/utils/cn';
 
 /** Deterministic weights from src/engines/trust_engine.py — read-only display. */
@@ -89,6 +91,7 @@ export function TrustScoringPage() {
   const report = data?.report;
   const activeRunId = runId ?? report?.run_id;
   const coverage = report?.coverage;
+  const back = getFlowBackTarget(`/projects/${id}/report/trust`, id, activeRunId);
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
@@ -217,7 +220,8 @@ export function TrustScoringPage() {
         )}
       </div>
 
-      <div className="border-t border-[#252637] px-6 py-4 flex justify-end">
+      <div className="border-t border-[#252637] px-6 py-4 flex items-center justify-between">
+        {back ? <FlowBackButton path={back.path} label={back.label} /> : <span />}
         <Button
           variant="primary"
           rightIcon={<ArrowRight size={16} />}

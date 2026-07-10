@@ -8,6 +8,7 @@ import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { LayerStatusRing, layerStatusPresentation, type LayerStatus } from '@/components/common/LayerStatusRing';
+import { FlowBackButton } from '@/components/common/FlowBackButton';
 import { useAppMode } from '@/context/AppModeContext';
 import {
   isPersistedUserRunId,
@@ -15,6 +16,7 @@ import {
   useRunValidation,
   withRunIdQuery,
 } from '@/hooks/useReport';
+import { getFlowBackTarget } from '@/utils/flowNavigation';
 import { cn } from '@/utils/cn';
 import type { ExecutionLog } from '@/types';
 
@@ -155,6 +157,7 @@ export function ValidationDashboardPage() {
     `/projects/${id}/validate/bronze`,
     activeRunId,
   );
+  const back = getFlowBackTarget(`/projects/${id}/validate/execution`, id, activeRunId);
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
@@ -223,7 +226,8 @@ export function ValidationDashboardPage() {
         </div>
       </div>
 
-      <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-4 flex justify-end">
+      <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-4 flex items-center justify-between">
+        {back ? <FlowBackButton path={back.path} label={back.label} /> : <span />}
         <Button
           variant="primary"
           rightIcon={<ArrowRight size={16} />}

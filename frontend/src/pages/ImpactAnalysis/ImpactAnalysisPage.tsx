@@ -4,11 +4,13 @@ import { Button } from '@/components/ui/Button';
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { MetricCard } from '@/components/cards/MetricCard';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
+import { FlowBackButton } from '@/components/common/FlowBackButton';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { useAppMode } from '@/context/AppModeContext';
 import { useReport, withRunIdQuery } from '@/hooks/useReport';
 import { formatBrl } from '@/utils/reportFormat';
+import { getFlowBackTarget } from '@/utils/flowNavigation';
 
 export function ImpactAnalysisPage() {
   const navigate = useNavigate();
@@ -20,6 +22,7 @@ export function ImpactAnalysisPage() {
   const report = data?.report;
   const activeRunId = runId ?? report?.run_id;
   const impact = report?.business_impact;
+  const back = getFlowBackTarget(`/projects/${id}/report/impact`, id, activeRunId);
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
@@ -55,7 +58,8 @@ export function ImpactAnalysisPage() {
         )}
       </div>
 
-      <div className="border-t border-[#252637] px-6 py-4 flex justify-end">
+      <div className="border-t border-[#252637] px-6 py-4 flex items-center justify-between">
+        {back ? <FlowBackButton path={back.path} label={back.label} /> : <span />}
         <Button
           variant="primary"
           rightIcon={<ArrowRight size={16} />}
