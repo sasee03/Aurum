@@ -14,6 +14,7 @@ import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { Button } from '@/components/ui/Button';
 import { useAppMode } from '@/context/AppModeContext';
 import { CUSTOM_CHECKS_UNAVAILABLE } from '@/utils/apiErrors';
+import { cn } from '@/utils/cn';
 
 const RULE_TYPES = [
   'not_null',
@@ -64,6 +65,7 @@ export function CustomChecksPage() {
   const [runningId, setRunningId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [serviceUnavailable, setServiceUnavailable] = useState(false);
+  const [formErrors, setFormErrors] = useState<{ check_name?: string; column?: string }>({});
 
   // Run-scope selector state.
   const [selectedRunId, setSelectedRunId] = useState<string>('demo');
@@ -107,10 +109,28 @@ export function CustomChecksPage() {
     load();
   }, [load]);
 
+  const columnRequired = form.rule_type !== 'row_count_condition';
+
   const save = async () => {
     setMessage(null);
+    const errors: { check_name?: string; column?: string } = {};
+    if (!form.check_name.trim()) {
+      errors.check_name = 'Enter a check name.';
+    }
+    if (columnRequired && !form.column.trim()) {
+      errors.column = 'Enter a column name for this rule type.';
+    }
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      return;
+    }
+    setFormErrors({});
     try {
-      const saved = await createCustomCheck(form);
+      const saved = await createCustomCheck({
+        ...form,
+        check_name: form.check_name.trim(),
+        column: form.column.trim(),
+      });
       setMessage(`Saved ${saved.check_id}`);
       setServiceUnavailable(false);
       await load();
@@ -224,18 +244,36 @@ export function CustomChecksPage() {
         <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
           Check name
           <input
-            className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
+            className={cn(
+              'rounded-lg border bg-[#13141e] px-3 py-2 text-[#f1f5f9]',
+              formErrors.check_name ? 'border-[#ef4444]' : 'border-[#252637]',
+            )}
             value={form.check_name}
-            onChange={(e) => setForm({ ...form, check_name: e.target.value })}
+            onChange={(e) => {
+              setForm({ ...form, check_name: e.target.value });
+              if (formErrors.check_name) {
+                setFormErrors((prev) => ({ ...prev, check_name: undefined }));
+              }
+            }}
             disabled={serviceUnavailable}
+            aria-invalid={Boolean(formErrors.check_name)}
           />
+          {formErrors.check_name && (
+            <span className="text-[#f87171]">{formErrors.check_name}</span>
+          )}
         </label>
         <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
           Rule type
           <select
             className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
             value={form.rule_type}
-            onChange={(e) => setForm({ ...form, rule_type: e.target.value })}
+            onChange={(e) => {
+              const next = e.target.value;
+              setForm({ ...form, rule_type: next });
+              if (next === 'row_count_condition' && formErrors.column) {
+                setFormErrors((prev) => ({ ...prev, column: undefined }));
+              }
+            }}
             disabled={serviceUnavailable}
           >
             {RULE_TYPES.map((rt) => (
@@ -261,12 +299,24 @@ export function CustomChecksPage() {
         <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
           Column
           <input
-            className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
+            className={cn(
+              'rounded-lg border bg-[#13141e] px-3 py-2 text-[#f1f5f9]',
+              formErrors.column ? 'border-[#ef4444]' : 'border-[#252637]',
+            )}
             value={form.column}
-            onChange={(e) => setForm({ ...form, column: e.target.value })}
+            onChange={(e) => {
+              setForm({ ...form, column: e.target.value });
+              if (formErrors.column) {
+                setFormErrors((prev) => ({ ...prev, column: undefined }));
+              }
+            }}
             placeholder="e.g. customer_id (unused for row_count_condition)"
             disabled={serviceUnavailable || form.rule_type === 'row_count_condition'}
+            aria-invalid={Boolean(formErrors.column)}
           />
+          {formErrors.column && (
+            <span className="text-[#f87171]">{formErrors.column}</span>
+          )}
         </label>
         <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
           Operator
