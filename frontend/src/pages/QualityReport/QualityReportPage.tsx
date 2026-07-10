@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
@@ -59,6 +59,33 @@ function downloadReportJson(report: AurumReport) {
   URL.revokeObjectURL(url);
 }
 
+const PLANNED_EXPORT_BUTTON_CLASS =
+  'flex items-center gap-1.5 rounded-lg border border-[#252637] bg-[#13141e] px-3 py-1.5 text-xs font-semibold text-[#6b7280] opacity-50 cursor-not-allowed';
+
+function showPlannedExportToast(kind: string) {
+  toast(`${kind} export coming soon — use JSON export for now.`, { icon: 'ℹ️' });
+}
+
+interface PlannedExportButtonProps {
+  icon: ReactNode;
+  label: string;
+  kind: string;
+}
+
+function PlannedExportButton({ icon, label, kind }: PlannedExportButtonProps) {
+  return (
+    <button
+      type="button"
+      title={`${kind} export coming soon`}
+      aria-label={`${label} — coming soon`}
+      onClick={() => showPlannedExportToast(kind)}
+      className={PLANNED_EXPORT_BUTTON_CLASS}
+    >
+      {icon} {label}
+    </button>
+  );
+}
+
 interface RowProps {
   label: string;
   children: React.ReactNode;
@@ -103,10 +130,6 @@ export function QualityReportPage() {
     }
   }
 
-  function previewExport(kind: string) {
-    toast(`${kind} export is planned — use JSON export for now.`, { icon: 'ℹ️' });
-  }
-
   const affectedOrders = report ? getAffectedOrders(report) : null;
   // suggested_action is a single deterministic string; split on newlines only
   // (do not fabricate multiple steps that the engine did not emit).
@@ -133,27 +156,9 @@ export function QualityReportPage() {
             >
               <Download size={14} /> JSON
             </button>
-            <button
-              type="button"
-              onClick={() => previewExport('PDF')}
-              className="flex items-center gap-1.5 rounded-lg border border-[#252637] bg-[#13141e] px-3 py-1.5 text-xs font-semibold text-[#94a3b8] hover:bg-[#1a1b28]"
-            >
-              <FileText size={14} /> PDF
-            </button>
-            <button
-              type="button"
-              onClick={() => previewExport('Excel')}
-              className="flex items-center gap-1.5 rounded-lg border border-[#252637] bg-[#13141e] px-3 py-1.5 text-xs font-semibold text-[#94a3b8] hover:bg-[#1a1b28]"
-            >
-              <FileSpreadsheet size={14} /> Excel
-            </button>
-            <button
-              type="button"
-              onClick={() => previewExport('Share')}
-              className="flex items-center gap-1.5 rounded-lg border border-[#252637] bg-[#13141e] px-3 py-1.5 text-xs font-semibold text-[#94a3b8] hover:bg-[#1a1b28]"
-            >
-              <Share2 size={14} /> Share
-            </button>
+            <PlannedExportButton icon={<FileText size={14} />} label="PDF" kind="PDF" />
+            <PlannedExportButton icon={<FileSpreadsheet size={14} />} label="Excel" kind="Excel" />
+            <PlannedExportButton icon={<Share2 size={14} />} label="Share" kind="Share" />
           </div>
         )}
       </div>
