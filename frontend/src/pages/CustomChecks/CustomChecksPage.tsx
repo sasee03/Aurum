@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   createCustomCheck,
   fetchRuns,
@@ -11,10 +12,36 @@ import {
 } from '@/lib/aurumApi';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
+import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+import { OLIST_DEMO_PROJECT_ID } from '@/components/cards/ProjectCard';
 import { useAppMode } from '@/context/AppModeContext';
 import { CUSTOM_CHECKS_UNAVAILABLE } from '@/utils/apiErrors';
+import { formatRunOptionLabel, getRunDisplayName } from '@/utils/runLabels';
 import { cn } from '@/utils/cn';
+
+function layerBadgeVariant(layer: string): 'warning' | 'secondary' | 'primary' | 'default' {
+  const l = layer.toLowerCase();
+  if (l === 'bronze') return 'warning';
+  if (l === 'silver') return 'secondary';
+  if (l === 'gold') return 'primary';
+  return 'default';
+}
+
+function checkDisplayName(check: CustomCheck): string {
+  const name = check.check_name?.trim();
+  if (name) return name;
+  return check.check_id || 'Untitled check';
+}
+
+function resultStatusVariant(status: string): 'pass' | 'failed' | 'warning' | 'secondary' {
+  const u = status.toUpperCase();
+  if (u === 'PASS') return 'pass';
+  if (u === 'FAIL' || u === 'FAILED') return 'failed';
+  if (u === 'SKIPPED') return 'secondary';
+  return 'warning';
+}
 
 const RULE_TYPES = [
   'not_null',
@@ -41,22 +68,12 @@ type RunScope =
   | { type: 'upload'; run: ValidationRunSummary }
   | { type: 'connector'; run: ValidationRunSummary };
 
-function formatRunOptionLabel(run: ValidationRunSummary): string {
-  const date = run.started_at ? run.started_at.slice(0, 10) : 'unknown date';
-  const score = run.trust_score != null ? ` (score ${run.trust_score})` : '';
-  if (run.mode === 'upload') return `Uploaded file — ${date}${score}`;
-  if (run.mode === 'connector') return `Database connection — ${date}${score}`;
-  return `Validation — ${date}${score}`;
-}
-
 function formatRunDataSource(run: ValidationRunSummary): string {
-  const date = run.started_at ? run.started_at.slice(0, 10) : 'unknown date';
-  if (run.mode === 'upload') return `Uploaded file (${date})`;
-  if (run.mode === 'connector') return `Database connection (${date})`;
-  return `Validation (${date})`;
+  return getRunDisplayName(run);
 }
 
 export function CustomChecksPage() {
+  const navigate = useNavigate();
   const { displayMode, backendReachable } = useAppMode();
   const [form, setForm] = useState(EMPTY_FORM);
   const [checks, setChecks] = useState<CustomCheck[]>([]);
@@ -367,7 +384,7 @@ export function CustomChecksPage() {
 
       {/* ── Run scope selector ── */}
       {checks.length > 0 && (
-        <div className="space-y-3 max-w-4xl">
+        <div className="space-y-4 max-w-4xl">
           <h3 className="text-sm font-semibold text-[#f1f5f9]">Test data source</h3>
           <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
             Run to test against
@@ -394,10 +411,11 @@ export function CustomChecksPage() {
           {/* Upload run: re-attach file */}
           {scope.type === 'upload' && (
             <div className="rounded-lg border border-[#252637] bg-[#0f172a] px-4 py-3 space-y-2">
-              <p className="text-xs text-[#bfdbfe]">
-                <strong>Uploaded file selected.</strong> Re-attach the original CSV to run checks
-                against it. The file is processed in-memory and not saved again. File identity
-                is not verified — attach the same file used in the original run.
+              <p className="text-xs leading-relaxed text-[#bfdbfe]">
+                <strong>This run requires your original file.</strong> Choose it below to test
+                against real upload data before you click <span className="font-semibold">Test Check</span>.
+                The file is processed in-memory and not saved again. File identity is not verified —
+                attach the same file used in the original run.
               </p>
               <input
                 ref={fileInputRef}
@@ -415,12 +433,22 @@ export function CustomChecksPage() {
           {/* Connector run: session ID input */}
           {scope.type === 'connector' && (
             <div className="rounded-lg border border-[#252637] bg-[#0f172a] px-4 py-3 space-y-2">
-              <p className="text-xs text-[#bfdbfe]">
-                <strong>Database connection selected.</strong> To re-run checks against this data,
-                go to the <span className="font-semibold">Connectors</span> page, test the
-                connection (password required), and paste the connection ID shown there.
-                Passwords are never stored.
+              <p className="text-xs leading-relaxed text-[#bfdbfe]">
+                <strong>This run requires an active database session.</strong> Test the connection
+                on the Connectors page, then paste the session ID here before you click{' '}
+                <span className="font-semibold">Test Check</span>. Passwords are never stored.
               </p>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() =>
+                  navigate(
+                    `/projects/${scope.run.project_id ?? OLIST_DEMO_PROJECT_ID}/connect?source=postgresql`,
+                  )
+                }
+              >
+                Open Connectors
+              </Button>
               <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
                 Connection ID (from Connectors page)
                 <input
@@ -440,50 +468,97 @@ export function CustomChecksPage() {
 
       {/* ── Saved checks list ── */}
       {checks.length > 0 && (
-        <div className="space-y-2">
+        <div className="space-y-4 max-w-4xl">
           <h3 className="text-sm font-semibold text-[#f1f5f9]">Saved checks</h3>
-          {checks.map((c) => (
-            <div
-              key={c.check_id}
-              className="flex items-center justify-between rounded-lg border border-[#252637] px-4 py-2 text-sm"
-            >
-              <span>
-                {c.check_id} — {c.check_name} ({c.layer} / {c.rule_type})
-              </span>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => c.check_id && testCheck(c.check_id)}
-                disabled={serviceUnavailable || runningId === c.check_id}
-              >
-                {runningId === c.check_id ? 'Running…' : 'Test Check'}
-              </Button>
-            </div>
-          ))}
+          <div className="flex flex-col gap-4">
+            {checks.map((c) => (
+              <Card key={c.check_id} className="p-0 overflow-hidden">
+                <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="text-sm font-semibold text-[#f1f5f9]">
+                        {checkDisplayName(c)}
+                      </h4>
+                      <Badge variant={layerBadgeVariant(c.layer)}>{c.layer}</Badge>
+                    </div>
+                    <p className="text-xs text-[#6b7280]">
+                      {c.rule_type.replace(/_/g, ' ')}
+                      {c.check_id ? (
+                        <>
+                          <span className="mx-1.5 text-[#4b5563]">·</span>
+                          <span className="font-mono text-[#94a3b8]">{c.check_id}</span>
+                        </>
+                      ) : null}
+                    </p>
+                    {c.description?.trim() ? (
+                      <p className="text-xs leading-relaxed text-[#94a3b8]">{c.description}</p>
+                    ) : null}
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="shrink-0 self-start sm:self-center"
+                    onClick={() => c.check_id && testCheck(c.check_id)}
+                    disabled={serviceUnavailable || runningId === c.check_id}
+                  >
+                    {runningId === c.check_id ? 'Running…' : 'Test Check'}
+                  </Button>
+                </div>
+              </Card>
+            ))}
+          </div>
         </div>
       )}
 
       {/* ── Result panel ── */}
       {result && (
-        <div className="rounded-lg border border-[#252637] bg-[#13141e] p-4 space-y-2 max-w-4xl">
-          <p className="text-sm font-semibold text-[#f1f5f9]">Latest Test Check Result</p>
-          <p className="text-sm text-[#f1f5f9]">
-            <strong>{result.status}</strong> — {result.message}
+        <Card className="max-w-4xl space-y-4">
+          <p className="text-[11px] font-semibold uppercase tracking-widest text-[#6b7280]">
+            Latest Test Check Result
           </p>
-          <p className="text-xs text-[#94a3b8]">
-            observed: {String(result.observed_value)} · expected: {result.expected_condition}
-          </p>
-          {result.data_source && (
-            <p className="text-xs rounded border border-[#334155] bg-[#0f172a] px-2 py-1 text-[#bfdbfe]">
-              <strong>Data source:</strong> {result.data_source}
-            </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge variant={resultStatusVariant(result.status)} className="text-xs">
+              {result.status}
+            </Badge>
+            <p className="text-sm font-medium text-[#f1f5f9]">{result.message}</p>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-[#6b7280]">
+                Observed
+              </span>
+              <span className="break-all text-sm text-[#f1f5f9]">
+                {String(result.observed_value)}
+              </span>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-[#6b7280]">
+                Expected
+              </span>
+              <span className="break-all text-sm text-[#f1f5f9]">
+                {result.expected_condition}
+              </span>
+            </div>
+          </div>
+          {(result.data_source || result.scope_note) && (
+            <div className="space-y-2 border-t border-[#252637] pt-4">
+              {result.data_source && (
+                <p className="text-xs leading-relaxed text-[#94a3b8]">
+                  <span className="font-semibold text-[#bfdbfe]">Data source</span>
+                  <span className="mx-1.5 text-[#4b5563]">·</span>
+                  {result.data_source}
+                </p>
+              )}
+              {result.scope_note && (
+                <p className="text-xs leading-relaxed text-[#94a3b8]">
+                  <span className="font-semibold text-[#fbbf24]">Scope note</span>
+                  <span className="mx-1.5 text-[#4b5563]">·</span>
+                  {result.scope_note}
+                </p>
+              )}
+            </div>
           )}
-          {result.scope_note && (
-            <p className="text-xs rounded border border-[#3f3a1f] bg-[#1a1810] px-2 py-1 text-[#fbbf24]">
-              <strong>Scope note:</strong> {result.scope_note}
-            </p>
-          )}
-        </div>
+        </Card>
       )}
     </div>
   );

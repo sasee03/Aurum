@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { CheckCircle2, ArrowRight, Upload, Eye } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
@@ -575,8 +575,13 @@ function PreviewConnectorPanel({ connector }: { connector: Connector }) {
 // ────────────────────────────────────────────
 export function ConnectorsPage() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const { displayMode } = useAppMode();
-  const [selected, setSelected] = useState<string | null>(null);
+  const requestedSource = searchParams.get('source');
+  const [selected, setSelected] = useState<string | null>(() => {
+    if (requestedSource === 'csv' || requestedSource === 'postgresql') return requestedSource;
+    return null;
+  });
 
   const selectedConnector = connectors.find((c) => c.id === selected);
 
@@ -591,8 +596,28 @@ export function ConnectorsPage() {
           <DataSourceBadge mode={displayMode} />
         </div>
         <p className="mt-1 text-sm text-[#6b7280]">
-          Select a system to configure your connection.
+          Upload a CSV or connect a live database table for validation.
         </p>
+      </div>
+
+      <div className="mb-6 rounded-xl border border-[#6366f1]/40 bg-[#6366f1]/10 p-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-4">
+            <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg bg-[#6366f1] text-white">
+              <Upload size={20} />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-[#f1f5f9]">Upload CSV</h3>
+              <p className="mt-1 max-w-2xl text-sm text-[#94a3b8]">
+                Start a validation from a local file. Aurum checks the uploaded CSV directly and
+                keeps the file out of persistent storage.
+              </p>
+            </div>
+          </div>
+          <Button variant="primary" onClick={() => setSelected('csv')}>
+            Upload CSV
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-col lg:flex-row gap-6">

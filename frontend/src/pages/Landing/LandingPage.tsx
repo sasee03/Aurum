@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Plus, FolderOpen, Clock, FileText, Zap } from 'lucide-react';
+import { Plus, FolderOpen, Clock, FileText, Zap, Upload } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
 import { ProjectCard, OLIST_DEMO_PROJECT_ID } from '@/components/cards/ProjectCard';
@@ -58,6 +58,16 @@ export function LandingPage() {
     navigate(`/projects/${OLIST_DEMO_PROJECT_ID}/dashboard`);
   }
 
+  function startUploadFlow() {
+    const projectId = savedProjects[0]?.id ?? OLIST_DEMO_PROJECT_ID;
+    if (savedProjects.length === 0) {
+      toast('Opening the sample project upload flow. You can create a named project later.', {
+        icon: 'ℹ️',
+      });
+    }
+    navigate(`/projects/${projectId}/connect?source=csv`);
+  }
+
   return (
     <div className="min-h-full flex flex-col">
       <section className="flex flex-col items-center justify-center px-6 py-16 md:py-24 text-center animate-fade-in">
@@ -80,6 +90,14 @@ export function LandingPage() {
         <div className="flex flex-wrap items-center justify-center gap-3">
           <Button
             variant="primary"
+            size="lg"
+            leftIcon={<Upload size={16} />}
+            onClick={startUploadFlow}
+          >
+            Upload Data
+          </Button>
+          <Button
+            variant="secondary"
             size="lg"
             leftIcon={<Plus size={16} />}
             onClick={() => navigate('/projects/new')}

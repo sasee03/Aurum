@@ -276,6 +276,7 @@ export function DatasetExplorerPage() {
   }
 
   const selectedTables = allTables.filter((t) => selectedIds.has(t.id));
+  const hasAnyTables = allTables.length > 0;
   const hasResults = filteredTables.length > 0;
 
   return (
@@ -368,6 +369,33 @@ export function DatasetExplorerPage() {
                   onPreview={() => handlePreview(table)}
                 />
               ))
+            ) : !hasAnyTables ? (
+              <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
+                <div className="max-w-xl rounded-xl border border-[#252637] bg-[#13141e] p-6">
+                  <AlertTriangle size={28} className="mx-auto mb-4 text-[#f59e0b]" />
+                  <h3 className="text-base font-semibold text-[#f1f5f9]">
+                    No tables found in the public schema
+                  </h3>
+                  <p className="mt-3 text-sm leading-relaxed text-[#94a3b8]">
+                    If you've uploaded a CSV or validated a connected table, that data lives in a
+                    temporary session and won't appear here. Check Run History for those results.
+                    To explore a live table, connect to your database via Connectors and ensure it
+                    has permanent tables in a visible schema.
+                  </p>
+                  <div className="mt-5 flex flex-wrap justify-center gap-3">
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => navigate(`/projects/${id}/connect?source=postgresql`)}
+                    >
+                      Open Connectors
+                    </Button>
+                    <Button variant="secondary" size="sm" onClick={() => navigate('/history')}>
+                      Run History
+                    </Button>
+                  </div>
+                </div>
+              </div>
             ) : (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <p className="text-sm text-[#6b7280]">No tables match "{search}"</p>
