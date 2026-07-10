@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowRight, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge, VerdictBadge } from '@/components/ui/Badge';
@@ -7,7 +7,7 @@ import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { useAppMode } from '@/context/AppModeContext';
-import { useReport } from '@/hooks/useReport';
+import { useReport, withRunIdQuery } from '@/hooks/useReport';
 import { cn } from '@/utils/cn';
 
 /** Deterministic weights from src/engines/trust_engine.py — read-only display. */
@@ -142,15 +142,18 @@ function LayerStatusRing({ layer, status }: LayerStatusRingProps) {
 export function TrustScoringPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const runId = searchParams.get('runId') ?? undefined;
   const { displayMode } = useAppMode();
   const { data, isLoading } = useReport();
   const report = data?.report;
+  const activeRunId = runId ?? report?.run_id;
   const coverage = report?.coverage;
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
-      <ProjectSubNav runId={report?.run_id} />
-      <PageAssistant page="dashboard" runId={report?.run_id} />
+      <ProjectSubNav runId={activeRunId} />
+      <PageAssistant page="dashboard" runId={activeRunId} />
 
       <div className="px-6 py-6 border-b border-[#252637] flex flex-wrap items-center gap-3">
         <h2 className="text-xl font-bold text-[#f1f5f9]">Trust Scoring</h2>
@@ -278,7 +281,9 @@ export function TrustScoringPage() {
         <Button
           variant="primary"
           rightIcon={<ArrowRight size={16} />}
-          onClick={() => navigate(`/projects/${id}/report/quality`)}
+          onClick={() =>
+            navigate(withRunIdQuery(`/projects/${id}/report/quality`, activeRunId))
+          }
         >
           Quality Report
         </Button>

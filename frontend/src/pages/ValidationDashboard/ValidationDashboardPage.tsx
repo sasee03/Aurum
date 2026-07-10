@@ -9,7 +9,12 @@ import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { useAppMode } from '@/context/AppModeContext';
-import { useReport, useRunValidation } from '@/hooks/useReport';
+import {
+  isPersistedUserRunId,
+  useReport,
+  useRunValidation,
+  withRunIdQuery,
+} from '@/hooks/useReport';
 import { layerStageStatus } from '@/utils/reportFormat';
 import { cn } from '@/utils/cn';
 import type { ExecutionLog } from '@/types';
@@ -55,6 +60,7 @@ export function ValidationDashboardPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const runIdParam = searchParams.get('runId') ?? undefined;
+  const viewingPersistedRun = isPersistedUserRunId(runIdParam);
   const { displayMode, canRunValidation, isResolved } = useAppMode();
   const { data, isLoading } = useReport();
   const runValidation = useRunValidation();
@@ -65,6 +71,8 @@ export function ValidationDashboardPage() {
 
   const report = data?.report;
   const snapshotMode = !canRunValidation;
+  // Prefer the URL/active run — never let a stale "latest" report override an upload/connector id.
+  const activeRunId = completedRunId ?? runIdParam ?? report?.run_id;
 
   const stages: { stage: StageName; status: StageStatus }[] = report
     ? [
@@ -88,6 +96,29 @@ export function ValidationDashboardPage() {
       ];
 
   async function handleRun() {
+    // Upload/connector validation already produced a full report — never call
+    // POST /runs here (that always re-runs the Olist demo and overwrites context).
+    if (viewingPersistedRun && runIdParam) {
+      setCompletedRunId(runIdParam);
+      setFinished(true);
+      setLogs([
+        {
+          id: '1',
+          timestamp: new Date().toISOString(),
+          level: 'INFO',
+          message: `Using existing ${runIdParam} report — validation already completed at upload/connector time.`,
+        },
+        {
+          id: '2',
+          timestamp: new Date().toISOString(),
+          level: 'INFO',
+          message:
+            'POST /runs was not called (that endpoint always re-runs the Olist demo). Proceed to layer results.',
+        },
+      ]);
+      return;
+    }
+
     if (!canRunValidation) return;
 
     setRunning(true);
@@ -97,7 +128,7 @@ export function ValidationDashboardPage() {
         id: '1',
         timestamp: new Date().toISOString(),
         level: 'RUN',
-        message: 'POST /runs — starting validation…',
+        message: 'POST /runs — starting Olist demo validation…',
       },
     ]);
     try {
@@ -142,39 +173,59 @@ export function ValidationDashboardPage() {
     );
   }
 
-  // Results are viewable when there is a report (snapshot or after a live run)
-  const canViewResults = Boolean(report) || finished;
+  // Results are viewable when there is a report (snapshot, upload, or after a live run)
+  const canViewResults = Boolean(report) || finished || viewingPersistedRun;
 
-  const resultsPath = completedRunId
-    ? `/projects/${id}/validate/bronze?runId=${encodeURIComponent(completedRunId)}`
-    : `/projects/${id}/validate/bronze`;
+  const resultsPath = withRunIdQuery(
+    `/projects/${id}/validate/bronze`,
+    activeRunId,
+  );
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
-      <ProjectSubNav runId={completedRunId ?? report?.run_id} isRunning={running} />
-      <PageAssistant page="validation" runId={completedRunId ?? report?.run_id} />
+      <ProjectSubNav runId={activeRunId} isRunning={running} />
+      <PageAssistant page="validation" runId={activeRunId} />
 
       <div className="px-6 py-6 border-b border-[#252637] flex flex-wrap items-center gap-3">
         <h2 className="text-xl font-bold text-[#f1f5f9]">Validation Execution</h2>
         <DataSourceBadge mode={displayMode} />
-        {(completedRunId ?? report?.run_id) && (
+        {activeRunId && (
           <Badge variant="secondary" className="font-mono text-[10px]">
-            {completedRunId ?? report?.run_id}
+            {activeRunId}
           </Badge>
         )}
       </div>
 
       <div className="flex-1 overflow-y-auto scrollbar-thin p-6 flex flex-col gap-6">
 
+        {viewingPersistedRun && (
+          <p className="text-sm text-[#94a3b8] rounded-lg border border-[#252637] bg-[#13141e] px-4 py-3 max-w-3xl mx-auto text-center">
+            This run already has a validation report from upload/connector. Continuing uses{' '}
+            <span className="font-mono text-[#bfdbfe]">{runIdParam}</span> — it will not
+            re-run the Olist demo.
+          </p>
+        )}
+
         <div className="flex justify-center">
           <Button
             variant="primary"
             leftIcon={<Play size={16} />}
-            onClick={canRunValidation ? handleRun : undefined}
-            disabled={!canRunValidation || running}
-            title={snapshotMode ? 'Start PostgreSQL and check /health to enable live validation' : undefined}
+            onClick={viewingPersistedRun || canRunValidation ? handleRun : undefined}
+            disabled={
+              running ||
+              (!viewingPersistedRun && !canRunValidation)
+            }
+            title={
+              snapshotMode && !viewingPersistedRun
+                ? 'Start PostgreSQL and check /health to enable live validation'
+                : undefined
+            }
           >
-            {running ? 'Running validation…' : 'Run Validation'}
+            {running
+              ? 'Running validation…'
+              : viewingPersistedRun
+                ? 'Continue with this run'
+                : 'Run Validation'}
           </Button>
         </div>
 

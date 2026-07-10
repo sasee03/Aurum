@@ -25,6 +25,27 @@ function isUploadRunId(runId: string): boolean {
   return runId.startsWith('upload_');
 }
 
+/** A run_id from live Postgres connector validation. */
+function isConnectorRunId(runId: string): boolean {
+  return runId.startsWith('connector_');
+}
+
+/**
+ * True when the run already has a persisted report from upload/connector —
+ * do NOT call POST /runs (that always re-runs the Olist demo).
+ */
+export function isPersistedUserRunId(runId: string | undefined | null): boolean {
+  if (!runId) return false;
+  return isUploadRunId(runId) || isConnectorRunId(runId);
+}
+
+/** Append ?runId= when navigating within a specific run's validate/report flow. */
+export function withRunIdQuery(path: string, runId: string | undefined | null): string {
+  if (!runId) return path;
+  const sep = path.includes('?') ? '&' : '?';
+  return `${path}${sep}runId=${encodeURIComponent(runId)}`;
+}
+
 async function loadReportByRunId(
   runId: string,
   displayMode: DataSourceMode,
@@ -35,7 +56,7 @@ async function loadReportByRunId(
   // to the demo snapshot here — showing demo data under an upload run_id would
   // be the wrong-data bug this path exists to prevent.
   const report = await fetchReportByRunId(runId);
-  const source: ReportSource = isUploadRunId(runId)
+  const source: ReportSource = isUploadRunId(runId) || isConnectorRunId(runId)
     ? 'user_upload'
     : displayMode === 'live'
       ? 'live'

@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -8,28 +8,36 @@ import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { useAppMode } from '@/context/AppModeContext';
-import { useReport } from '@/hooks/useReport';
+import { useReport, withRunIdQuery } from '@/hooks/useReport';
 import { countChecksByDisplay } from '@/utils/reportFormat';
 
 export function BronzeValidationPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const runId = searchParams.get('runId') ?? undefined;
   const { displayMode } = useAppMode();
   const { data, isLoading } = useReport();
 
   const report = data?.report;
+  const activeRunId = runId ?? report?.run_id;
   const checks = report?.checks.bronze ?? [];
   const { pass, warning, fail } = countChecksByDisplay(checks);
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
-      <ProjectSubNav runId={report?.run_id} />
-      <PageAssistant page="bronze" layer="bronze" runId={report?.run_id} />
+      <ProjectSubNav runId={activeRunId} />
+      <PageAssistant page="bronze" layer="bronze" runId={activeRunId} />
 
       <div className="px-6 py-6 border-b border-[#252637]">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Bronze Validation</h2>
           <DataSourceBadge mode={displayMode} />
+          {activeRunId && (
+            <Badge variant="secondary" className="font-mono text-[10px]">
+              {activeRunId}
+            </Badge>
+          )}
           {report && (
             <Badge variant={report.layer_status.bronze === 'PASS' ? 'pass' : 'failed'}>
               Layer {report.layer_status.bronze}
@@ -37,7 +45,7 @@ export function BronzeValidationPage() {
           )}
         </div>
         <p className="mt-1 text-sm text-[#6b7280]">
-          Raw ingestion checks from GET /reports/latest → checks.bronze
+          Raw ingestion checks from the active run report → checks.bronze
         </p>
         <div className="flex gap-2 mt-4">
           <Badge variant="pass">{pass} PASS</Badge>
@@ -55,13 +63,20 @@ export function BronzeValidationPage() {
       </div>
 
       <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-4 flex items-center justify-between">
-        <Button variant="ghost" onClick={() => navigate(`/projects/${id}/validate/execution`)}>
+        <Button
+          variant="ghost"
+          onClick={() =>
+            navigate(withRunIdQuery(`/projects/${id}/validate/execution`, activeRunId))
+          }
+        >
           Back to Dashboard
         </Button>
         <Button
           variant="primary"
           rightIcon={<ArrowRight size={16} />}
-          onClick={() => navigate(`/projects/${id}/validate/silver`)}
+          onClick={() =>
+            navigate(withRunIdQuery(`/projects/${id}/validate/silver`, activeRunId))
+          }
         >
           Proceed to Silver Validation
         </Button>

@@ -1,7 +1,7 @@
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { cn } from '@/utils/cn';
-import { PlayCircle } from 'lucide-react';
-import { Badge, StatusBadge } from '@/components/ui/Badge';
+import { Badge } from '@/components/ui/Badge';
+import { isPersistedUserRunId, withRunIdQuery } from '@/hooks/useReport';
 
 interface ProjectSubNavProps {
   runId?: string;
@@ -12,23 +12,25 @@ export function ProjectSubNav({ runId, isRunning }: ProjectSubNavProps = {}) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { id } = useParams<{ id: string }>();
-  
-  // Preserve an uploaded run's id on the Report link so staying within the
-  // report step keeps showing the UPLOAD report (reload-safe). The demo path
-  // (no upload run) keeps using /reports/latest.
-  const reportQuery = runId && runId.startsWith('upload_')
-    ? `?runId=${encodeURIComponent(runId)}`
-    : '';
+
+  // Keep upload/connector run ids on Validate + Report so the flow never falls
+  // back to GET /reports/latest (demo) mid-navigation.
+  const keepRun = isPersistedUserRunId(runId);
+  const validatePath = keepRun
+    ? withRunIdQuery(`/projects/${id}/validate/config`, runId)
+    : `/projects/${id}/validate/config`;
+  const reportPath = keepRun
+    ? withRunIdQuery(`/projects/${id}/report/quality`, runId)
+    : `/projects/${id}/report/quality`;
 
   const steps = [
     { label: 'Connect', path: `/projects/${id}/connect` },
     { label: 'Explore Datasets', path: `/projects/${id}/select` },
-    { label: 'Validate', path: `/projects/${id}/validate/config` },
-    { label: 'Report', path: `/projects/${id}/report/quality${reportQuery}` },
+    { label: 'Validate', path: validatePath },
+    { label: 'Report', path: reportPath },
     { label: 'Remediate', path: `/projects/${id}/remediate` },
   ];
 
-  // Determine active step based on URL path
   let activeLabel = '';
   if (pathname.includes('/connect')) activeLabel = 'Connect';
   else if (pathname.includes('/select') || pathname.includes('/metadata')) activeLabel = 'Explore Datasets';
@@ -36,8 +38,6 @@ export function ProjectSubNav({ runId, isRunning }: ProjectSubNavProps = {}) {
   else if (pathname.includes('/report') || pathname.includes('/impact') || pathname.includes('/trust')) activeLabel = 'Report';
   else if (pathname.includes('/remediate')) activeLabel = 'Remediate';
 
-  // For the validation dashboard, there is a specific header state "Run #4127 Running"
-  // Let's just mock a run badge if we are in validate execution pages
   const isExecuting = isRunning ?? pathname.includes('/validate/execution');
 
   return (
