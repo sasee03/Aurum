@@ -278,6 +278,38 @@ def test_validate_success_persists_connector_mode(client):
     assert matched["mode"] == "connector"
 
 
+def test_connector_validation_bounds_optional_narrative_wait(client):
+    session = store_session_connection(
+        UserPostgresTarget(
+            host="localhost",
+            port=5433,
+            database="aurum",
+            username="aurum",
+            password="aurum",
+        )
+    )
+    frame = _olist_frame(8)
+
+    with patch(
+        "api.connectors_router.load_and_validate_user_table",
+        return_value=frame,
+    ), patch(
+        "api.connectors_router.attach_trust_narrative",
+        side_effect=lambda report, **_: report,
+    ) as attach_narrative:
+        response = client.post(
+            "/connectors/postgres/validate",
+            json={
+                "connection_id": session.connection_id,
+                "schema": "public",
+                "table": "raw_orders",
+            },
+        )
+
+    assert response.status_code == 200
+    assert attach_narrative.call_args.kwargs["timeout_seconds"] == 15
+
+
 def test_validate_returns_exactly_17_key_report(client):
     """Connector validate must return the 17-key contract — source coords stay on the run row."""
     from tests.test_api import EXPECTED_REPORT_KEYS

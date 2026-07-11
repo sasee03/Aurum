@@ -43,7 +43,14 @@ class TrustScoringEngine:
         else:
             return TRUSTED, "LOW"
 
-    def generate_trust_narrative(self, score: int, business_impact: dict, root_cause: dict) -> str:
+    def generate_trust_narrative(
+        self,
+        score: int,
+        business_impact: dict,
+        root_cause: dict,
+        *,
+        timeout_seconds: float = 180,
+    ) -> str:
         """Use Ollama LLM to explain the trust score to a business stakeholder."""
         import requests
         import json
@@ -65,7 +72,7 @@ class TrustScoringEngine:
                     "prompt": prompt,
                     "stream": False
                 },
-                timeout=180
+                timeout=timeout_seconds
             )
             response.raise_for_status()
             return response.json().get("response", "Could not generate narrative.")

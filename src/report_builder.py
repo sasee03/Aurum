@@ -127,12 +127,17 @@ def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
     }
 
 
-def attach_trust_narrative(report: dict) -> dict:
+def attach_trust_narrative(
+    report: dict,
+    *,
+    timeout_seconds: float = 180,
+) -> dict:
     """Post-build seam: Ollama narration only, after deterministic verdict is fixed."""
     report["trust_narrative"] = trust_engine.generate_trust_narrative(
         score=report.get("trust_score", 0),
         business_impact=report.get("business_impact", {}),
         root_cause=report.get("root_cause", {}),
+        timeout_seconds=timeout_seconds,
     )
     return report
 

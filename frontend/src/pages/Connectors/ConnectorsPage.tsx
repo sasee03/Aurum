@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { CheckCircle2, ArrowRight, Upload, Eye } from 'lucide-react';
+import { CheckCircle2, ArrowRight, Upload, Eye, LoaderCircle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -535,6 +535,29 @@ function PostgresPanel({ projectId }: { projectId: string }) {
             </div>
           )}
 
+          {validating && (
+            <div
+              className="flex items-start gap-3 rounded-md border border-[#92400e] bg-[#451a03]/40 p-3"
+              role="status"
+              aria-live="polite"
+            >
+              <LoaderCircle
+                size={18}
+                className="mt-0.5 shrink-0 animate-spin text-[#f59e0b]"
+                aria-hidden="true"
+              />
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-[#fbbf24]">
+                  Validating large dataset
+                </p>
+                <p className="text-xs leading-5 text-[#fcd34d]">
+                  Large tables can take a few minutes. Keep this page open while Aurum loads the
+                  data and runs Bronze, Silver, and Gold checks.
+                </p>
+              </div>
+            </div>
+          )}
+
           <Button
             variant="primary"
             className="w-full"
@@ -543,7 +566,7 @@ function PostgresPanel({ projectId }: { projectId: string }) {
             rightIcon={<ArrowRight size={16} />}
             onClick={handleValidate}
           >
-            Validate this table
+            {validating ? 'Validation in progress' : 'Validate this table'}
           </Button>
         </div>
       )}

@@ -9,6 +9,7 @@ import { ApiError, API_UNAVAILABLE } from '@/utils/apiErrors';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 const FETCH_TIMEOUT_MS = 8_000;
+const CONNECTOR_VALIDATION_TIMEOUT_MS = 5 * 60_000;
 
 export interface HealthResponse {
   status: 'ok' | 'degraded';
@@ -377,7 +378,7 @@ export async function validatePostgresTable(payload: {
   const res = await fetchWithTimeout('/connectors/postgres/validate', {
     method: 'POST',
     body: JSON.stringify(payload),
-  }, 60_000);
+  }, CONNECTOR_VALIDATION_TIMEOUT_MS);
   const body = await res.json();
   if (res.status === 422 && body?.schema_match === false) {
     throw new CsvUploadError(body as CsvUploadMismatch);

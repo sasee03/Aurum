@@ -35,6 +35,8 @@ from src.report_builder import attach_trust_narrative
 
 router = APIRouter(tags=["connectors"])
 
+CONNECTOR_NARRATIVE_TIMEOUT_SECONDS = 15
+
 
 class PostgresTestRequest(BaseModel):
     host: str = Field(..., min_length=1)
@@ -206,7 +208,10 @@ def validate_postgres_table(body: PostgresValidateRequest) -> dict:
         return _schema_mismatch_response(exc)
 
     run_id = f"connector_{uuid.uuid4().hex[:12]}"
-    report = attach_trust_narrative(run_validation_from_raw_orders(frame, run_id=run_id))
+    report = attach_trust_narrative(
+        run_validation_from_raw_orders(frame, run_id=run_id),
+        timeout_seconds=CONNECTOR_NARRATIVE_TIMEOUT_SECONDS,
+    )
     # Source coordinates live on validation_runs — never inside the 17-key report.
     source_schema = body.schema_name.strip()
     source_table = body.table.strip()
