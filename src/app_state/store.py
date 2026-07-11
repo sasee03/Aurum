@@ -7,11 +7,17 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from src.report_safety import load_report_text
+
 from .db import get_connection
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _load_report_json(raw: Optional[str], *, source: str) -> Optional[dict[str, Any]]:
+    return load_report_text(raw, source=source)
 
 
 def resolve_run_display_name(
@@ -197,7 +203,7 @@ def get_report_by_run_id(run_id: str) -> Optional[dict[str, Any]]:
         ).fetchone()
     if row is None:
         return None
-    return json.loads(row["report_json"])
+    return _load_report_json(row["report_json"], source=f"SQLite report {run_id!r}")
 
 
 def list_validation_runs() -> list[dict[str, Any]]:
@@ -228,8 +234,11 @@ def list_validation_runs() -> list[dict[str, Any]]:
     for row in rows:
         trust_score = None
         final_verdict = None
-        if row["report_json"]:
-            report = json.loads(row["report_json"])
+        report = _load_report_json(
+            row["report_json"],
+            source=f"SQLite report {row['run_id']!r}",
+        )
+        if report is not None:
             trust_score = report.get("trust_score")
             final_verdict = report.get("final_verdict")
         runs.append(

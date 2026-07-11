@@ -304,6 +304,38 @@ def test_upload_mismatched_csv_honest_rejection(client):
     assert api_main._last_report == sentinel
 
 
+def test_upload_post_parse_failure_returns_clean_error(client, monkeypatch):
+    sentinel = {"run_id": "sentinel_post_parse", "final_verdict": "SENTINEL"}
+    api_main._last_report = sentinel
+    monkeypatch.setattr(
+        "api.datasets_router.api_main._database_reachable", lambda: True
+    )
+
+    def fail_after_parse(*args, **kwargs):
+        raise RuntimeError("engine unavailable after parse")
+
+    monkeypatch.setattr(
+        "api.datasets_router.run_validation_from_raw_orders", fail_after_parse
+    )
+    runs_before, reports_before = _sqlite_validation_counts()
+
+    response = client.post(
+        "/datasets/upload",
+        files={"file": ("orders.csv", io.BytesIO(_csv_bytes()), "text/csv")},
+    )
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error"] == "upload_validation_failed"
+    assert "parsed successfully" in body["message"]
+    assert "detail" not in body
+    assert "engine unavailable after parse" not in str(body)
+    runs_after, reports_after = _sqlite_validation_counts()
+    assert runs_after == runs_before
+    assert reports_after == reports_before
+    assert api_main._last_report == sentinel
+
+
 def test_upload_nonexistent_project_id_honest_rejection(client):
     sentinel = {"run_id": "sentinel_missing_project", "final_verdict": "SENTINEL"}
     api_main._last_report = sentinel

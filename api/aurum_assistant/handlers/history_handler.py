@@ -5,8 +5,11 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from api.aurum_assistant.context import (
+    as_dict,
     fallback_response,
     format_response,
+    _coerce_int,
+    list_of_dicts,
     load_history_records,
     load_latest_report,
     load_report_for_run,
@@ -43,18 +46,19 @@ def handle(
     current_silver = None
     current_verdict = None
     if report:
-        checks = report.get("checks", {})
-        bronze_checks = checks.get("bronze", [])
-        silver_checks = checks.get("silver", [])
+        checks = as_dict(report.get("checks"))
+        bronze_checks = list_of_dicts(checks.get("bronze"))
+        silver_checks = list_of_dicts(checks.get("silver"))
         for c in bronze_checks:
             if c.get("check_id") == "B1":
                 current_bronze = c.get("observed")
                 break
         for c in silver_checks:
-            if c.get("check_id") == "S1" and isinstance(c.get("extra"), dict):
-                current_silver = c["extra"].get("silver")
+            extra = as_dict(c.get("extra"))
+            if c.get("check_id") == "S1" and extra:
+                current_silver = extra.get("silver")
                 if current_bronze is None:
-                    current_bronze = c["extra"].get("bronze")
+                    current_bronze = extra.get("bronze")
                 break
         current_verdict = report.get("final_verdict")
 
@@ -64,7 +68,9 @@ def handle(
     ]
 
     if current_bronze and current_silver:
-        current_ret = _retention_pct(int(current_bronze), int(current_silver))
+        current_ret = _retention_pct(
+            _coerce_int(current_bronze), _coerce_int(current_silver)
+        )
         parts.append(
             f"In the current run, Silver retained only around {current_ret:.0f}%, "
             f"which is much lower than expected."
@@ -74,7 +80,8 @@ def handle(
                 "This indicates abnormal record loss during Bronze-to-Silver transformation."
             )
     elif report:
-        root = report.get("root_cause", {}).get("summary", "")
+        root_cause = as_dict(report.get("root_cause"))
+        root = root_cause.get("summary", "")
         parts.append(f"Current run: {root}")
 
     if current_verdict:

@@ -43,6 +43,45 @@ def _check(**overrides):
     return base
 
 
+def test_corrupt_custom_checks_json_returns_honest_error(client, tmp_path, monkeypatch):
+    corrupt_file = tmp_path / "custom_checks.json"
+    corrupt_file.write_text('{"oops": ', encoding="utf-8")
+    monkeypatch.setattr("api.aurum_assistant.context.CUSTOM_CHECKS_PATH", corrupt_file)
+
+    response = client.get("/custom-checks")
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["error"] == "custom_checks_invalid"
+    assert "not valid json" in detail["reason"].lower()
+
+
+def test_wrong_shape_custom_checks_json_returns_honest_error(client, tmp_path, monkeypatch):
+    checks_file = tmp_path / "custom_checks.json"
+    checks_file.write_text('{"oops": true}', encoding="utf-8")
+    monkeypatch.setattr("api.aurum_assistant.context.CUSTOM_CHECKS_PATH", checks_file)
+
+    response = client.get("/custom-checks")
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["error"] == "custom_checks_invalid"
+    assert "list of checks" in detail["reason"]
+
+
+def test_custom_checks_json_filters_non_object_entries(tmp_path, monkeypatch):
+    checks_file = tmp_path / "custom_checks.json"
+    checks_file.write_text(
+        '[{"check_id": "custom_silver_001", "layer": "silver"}, "bad", 7, []]',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("api.aurum_assistant.context.CUSTOM_CHECKS_PATH", checks_file)
+
+    from api.aurum_assistant.context import load_custom_checks
+
+    assert load_custom_checks() == [
+        {"check_id": "custom_silver_001", "layer": "silver"}
+    ]
+
+
 def test_not_null_pass_and_fail():
     pass_df = pd.DataFrame({"customer_id": ["A", "B", "C"]})
     fail_df = pd.DataFrame({"customer_id": ["A", None, "  "]})

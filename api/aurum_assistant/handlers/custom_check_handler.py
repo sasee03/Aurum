@@ -74,7 +74,9 @@ def handle(
     defaults = _layer_defaults()
     template = defaults.get(target_layer, defaults["silver"])
     existing = load_custom_checks()
-    layer_checks = [c for c in existing if c.get("layer") == target_layer]
+    layer_checks = [
+        c for c in existing if isinstance(c, dict) and c.get("layer") == target_layer
+    ]
 
     answer = (
         f"I can help you add a custom {target_layer.capitalize()} validation check. "
@@ -114,6 +116,8 @@ def next_check_id(layer: str, checks: list[dict]) -> str:
     prefix = f"custom_{layer}_"
     nums = []
     for c in checks:
+        if not isinstance(c, dict):
+            continue
         cid = c.get("check_id", "")
         m = re.match(rf"{re.escape(prefix)}(\d+)$", cid)
         if m:

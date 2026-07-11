@@ -46,6 +46,13 @@ def _olist_frame(n: int = 5) -> pd.DataFrame:
     return to_df(make_rows(n))
 
 
+def _sqlite_validation_counts() -> tuple[int, int]:
+    with get_connection() as conn:
+        runs = conn.execute("SELECT COUNT(*) FROM validation_runs").fetchone()[0]
+        reports = conn.execute("SELECT COUNT(*) FROM validation_reports").fetchone()[0]
+    return int(runs), int(reports)
+
+
 def test_classify_wrong_password():
     assert "Authentication failed" in classify_connect_error(
         Exception("password authentication failed for user \"aurum\"")
@@ -276,6 +283,52 @@ def test_validate_success_persists_connector_mode(client):
     assert runs.status_code == 200
     matched = next(r for r in runs.json()["runs"] if r["run_id"] == report["run_id"])
     assert matched["mode"] == "connector"
+
+
+def test_validate_post_parse_failure_returns_clean_error(client, monkeypatch):
+    session = store_session_connection(
+        UserPostgresTarget(
+            host="localhost",
+            port=5433,
+            database="aurum",
+            username="aurum",
+            password="aurum",
+        )
+    )
+    monkeypatch.setattr(
+        "api.connectors_router.api_main._database_reachable", lambda: True
+    )
+    monkeypatch.setattr(
+        "api.connectors_router.load_and_validate_user_table",
+        lambda *args, **kwargs: _olist_frame(5),
+    )
+
+    def fail_after_parse(*args, **kwargs):
+        raise RuntimeError("connector engine unavailable after parse")
+
+    monkeypatch.setattr(
+        "api.connectors_router.run_validation_from_raw_orders", fail_after_parse
+    )
+    runs_before, reports_before = _sqlite_validation_counts()
+
+    response = client.post(
+        "/connectors/postgres/validate",
+        json={
+            "connection_id": session.connection_id,
+            "schema": "public",
+            "table": "raw_orders",
+        },
+    )
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error"] == "connector_validation_failed"
+    assert "matched the expected schema" in body["message"]
+    assert "detail" not in body
+    assert "connector engine unavailable after parse" not in str(body)
+    runs_after, reports_after = _sqlite_validation_counts()
+    assert runs_after == runs_before
+    assert reports_after == reports_before
 
 
 def test_connector_validation_bounds_optional_narrative_wait(client):

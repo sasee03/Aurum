@@ -12,7 +12,7 @@ Run it (port 8000 avoids clashing with Streamlit's 8501):
 
 from __future__ import annotations
 
-import json
+import logging
 from typing import Optional
 
 import psycopg
@@ -31,6 +31,7 @@ from src.metadata_discovery import (
 from src.report_builder import REPORT_PATH
 from src.run_demo import run_validation
 from src.report_builder import attach_trust_narrative
+from src.report_safety import ReportLoadError, load_report_file, validate_report_shape
 from src.app_state.store import (
     get_report_by_run_id,
     list_validation_runs,
@@ -68,6 +69,16 @@ app.add_middleware(
 # the primary "latest" source; we fall back to the on-disk report.json that the
 # demo script produces so `latest` still works right after `python src/run_demo.py`.
 _last_report: Optional[dict] = None
+logger = logging.getLogger(__name__)
+
+
+def _report_load_detail(exc: ReportLoadError) -> dict:
+    return {
+        "error": "report_load_failed",
+        "message": "This report could not be loaded because the stored report data is invalid.",
+        "source": exc.source,
+        "reason": exc.reason,
+    }
 
 
 class RunRequest(BaseModel):
@@ -76,10 +87,8 @@ class RunRequest(BaseModel):
 
 def _load_latest_report() -> Optional[dict]:
     if _last_report is not None:
-        return _last_report
-    if REPORT_PATH.exists():
-        return json.loads(REPORT_PATH.read_text(encoding="utf-8"))
-    return None
+        return validate_report_shape(_last_report, source="in-memory latest report")
+    return load_report_file(REPORT_PATH, source=str(REPORT_PATH))
 
 
 def _database_reachable() -> bool:
@@ -128,7 +137,14 @@ def health(response: Response) -> dict:
 @app.get("/runs")
 def list_runs() -> dict:
     """List validation runs from SQLite app state only (sparse-but-real)."""
-    return {"runs": list_validation_runs()}
+    try:
+        return {"runs": list_validation_runs()}
+    except ReportLoadError as exc:
+        logger.warning("Invalid report while listing runs: %s: %s", exc.source, exc.reason)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_report_load_detail(exc),
+        ) from None
 
 
 @app.post("/runs")
@@ -170,7 +186,14 @@ def trigger_run(request: Optional[RunRequest] = None) -> dict:
 @app.get("/reports/latest")
 def latest_report() -> dict:
     """Return the most recent report (in-memory cache, else on-disk report.json)."""
-    report = _load_latest_report()
+    try:
+        report = _load_latest_report()
+    except ReportLoadError as exc:
+        logger.warning("Invalid latest report: %s: %s", exc.source, exc.reason)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_report_load_detail(exc),
+        ) from None
     if report is None:
         raise HTTPException(
             status_code=404,
@@ -182,11 +205,25 @@ def latest_report() -> dict:
 @app.get("/reports/{run_id}")
 def report_by_id(run_id: str) -> dict:
     """Fetch a report by id from SQLite app state, else latest in-memory/disk."""
-    stored = get_report_by_run_id(run_id)
+    try:
+        stored = get_report_by_run_id(run_id)
+    except ReportLoadError as exc:
+        logger.warning("Invalid stored report: %s: %s", exc.source, exc.reason)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_report_load_detail(exc),
+        ) from None
     if stored is not None:
         return stored
 
-    report = _load_latest_report()
+    try:
+        report = _load_latest_report()
+    except ReportLoadError as exc:
+        logger.warning("Invalid fallback report: %s: %s", exc.source, exc.reason)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_report_load_detail(exc),
+        ) from None
     if report is None:
         raise HTTPException(
             status_code=404,

@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from api.aurum_assistant.context import fallback_response, format_response, load_latest_report, load_report_for_run
+from api.aurum_assistant.context import (
+    _coerce_float,
+    as_dict,
+    fallback_response,
+    format_response,
+    load_latest_report,
+    load_report_for_run,
+)
 
 
 def handle(
@@ -21,9 +28,9 @@ def handle(
             ["Run validation pipeline"],
         )
 
-    layer_status = report.get("layer_status", {})
-    root_cause = report.get("root_cause", {})
-    business_impact = report.get("business_impact", {})
+    layer_status = as_dict(report.get("layer_status"))
+    root_cause = as_dict(report.get("root_cause"))
+    business_impact = as_dict(report.get("business_impact"))
     suggested_action = report.get("suggested_action", "")
     final_verdict = report.get("final_verdict", "NOT TRUSTED")
 
@@ -60,7 +67,7 @@ def handle(
         impact_text,
     ])
     if loss is not None:
-        body_lines.append(f"Estimated revenue gap: {loss:,.2f}.")
+        body_lines.append(f"Estimated revenue gap: {_coerce_float(loss):,.2f}.")
     body_lines.extend([
         "",
         "Recommended action:",

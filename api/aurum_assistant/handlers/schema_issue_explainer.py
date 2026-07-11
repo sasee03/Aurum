@@ -6,7 +6,9 @@ from typing import Any, Optional
 
 from api.aurum_assistant.context import (
     DEMO_PK_ISSUE,
+    as_dict,
     format_response,
+    list_of_dicts,
     load_latest_report,
     load_report_for_run,
 )
@@ -14,14 +16,14 @@ from api.aurum_assistant.context import (
 
 def _find_pk_checks(report: dict) -> list[dict]:
     found: list[dict] = []
-    for layer_checks in report.get("checks", {}).values():
-        for check in layer_checks:
+    for layer_checks in as_dict(report.get("checks")).values():
+        for check in list_of_dicts(layer_checks):
             name = (check.get("check_name") or "").lower()
             cid = (check.get("check_id") or "").upper()
             if "primary key" in name or "duplicate" in name or "UNIQ-PK" in cid or "B8" == cid:
                 found.append(check)
-    for layer_checks in report.get("detection_layers", {}).values():
-        for check in layer_checks:
+    for layer_checks in as_dict(report.get("detection_layers")).values():
+        for check in list_of_dicts(layer_checks):
             name = (check.get("check_name") or "").lower()
             cid = (check.get("check_id") or "").upper()
             if "primary key" in name or "UNIQ-PK" in cid:
@@ -84,8 +86,8 @@ def handle_datetime(
     report = load_report_for_run(run_id)
     time_checks: list[dict] = []
     if report:
-        for layer_checks in report.get("checks", {}).values():
-            for check in layer_checks:
+        for layer_checks in as_dict(report.get("checks")).values():
+            for check in list_of_dicts(layer_checks):
                 name = (check.get("check_name") or "").lower()
                 cid = (check.get("check_id") or "").upper()
                 if any(k in name for k in ("fresh", "time", "date")) or "TIME" in cid:

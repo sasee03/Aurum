@@ -67,10 +67,16 @@ def _stream_llm(prompt: str, mock_fallback: str = "") -> None:
             print(f"\n[Mock Fallback]: {mock_fallback}")
 
 def _load_report() -> dict:
+    from src.report_safety import ReportLoadError, load_report_file
+
     if not REPORT_PATH.exists():
         print(f"[Error] No report found at {REPORT_PATH}. Run 'python src/run_demo.py' first.")
         return {}
-    return json.loads(REPORT_PATH.read_text(encoding="utf-8"))
+    try:
+        return load_report_file(REPORT_PATH, source=str(REPORT_PATH)) or {}
+    except ReportLoadError as exc:
+        print(f"[Error] Report could not be loaded: {exc.reason}.")
+        return {}
 
 def handle_root_cause() -> None:
     """Capability 1: Root Cause Analysis (SQL Tracing)"""

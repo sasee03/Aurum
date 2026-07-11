@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from api.aurum_assistant.context import fallback_response, format_response, load_latest_report, load_report_for_run
+from api.aurum_assistant.context import (
+    as_dict,
+    _coerce_float,
+    fallback_response,
+    format_response,
+    list_of_dicts,
+    load_latest_report,
+    load_report_for_run,
+)
 
 
 def _layer_from_context(page: str, layer: Optional[str]) -> Optional[str]:
@@ -16,7 +24,8 @@ def _layer_from_context(page: str, layer: Optional[str]) -> Optional[str]:
 
 
 def _failed_checks_for_layer(report: dict, layer: str) -> list[dict]:
-    checks = report.get("checks", {}).get(layer, [])
+    checks = as_dict(report.get("checks")).get(layer, [])
+    checks = list_of_dicts(checks)
     return [c for c in checks if c.get("status") in ("FAIL", "WARN", "IMPACTED")]
 
 
@@ -35,13 +44,13 @@ def handle(
         )
 
     target_layer = _layer_from_context(page, layer)
-    layer_status = report.get("layer_status", {})
+    layer_status = as_dict(report.get("layer_status"))
     final_verdict = report.get("final_verdict", "UNKNOWN")
-    root_cause = report.get("root_cause", {})
-    business_impact = report.get("business_impact", {})
+    root_cause = as_dict(report.get("root_cause"))
+    business_impact = as_dict(report.get("business_impact"))
     suggested_action = report.get("suggested_action", "")
     first_failed = report.get("first_failed_layer")
-    coverage = report.get("coverage", {})
+    coverage = as_dict(report.get("coverage"))
     verdict_caveat = coverage.get("verdict_caveat", "")
 
     ctx = context or {}
@@ -98,9 +107,10 @@ def handle(
     if business_impact and business_impact.get("status") != "NOT_AVAILABLE":
         loss = business_impact.get("estimated_loss")
         if loss is not None:
+            loss_value = _coerce_float(loss)
             parts.append(
-                f"Business impact: estimated loss of {loss:,.2f} "
-                f"({business_impact.get('loss_percent', 0):.1f}% gap)."
+                f"Business impact: estimated loss of {loss_value:,.2f} "
+                f"({_coerce_float(business_impact.get('loss_percent', 0)):.1f}% gap)."
             )
 
     if gold_status := layer_status.get("gold"):

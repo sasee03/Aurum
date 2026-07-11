@@ -6,7 +6,7 @@ from collections import defaultdict
 from functools import lru_cache
 from typing import Any, Optional
 
-from api.aurum_assistant.context import format_response, load_sample_orders
+from api.aurum_assistant.context import _coerce_float, format_response, load_sample_orders
 from src.config_loader import AurumDatasetConfig, load_dataset_config
 
 
@@ -38,9 +38,15 @@ def _compute_top_states(
     price_col = cfg.columns.unit_price
     totals: dict[str, float] = defaultdict(float)
     for row in orders:
+        if not isinstance(row, dict):
+            continue
         state = row.get(label) or row.get(geo_col, "Unknown")
-        qty = float(row.get(qty_col, 0))
-        price = float(row.get(price_col, 0))
+        if not isinstance(state, str):
+            state = "Unknown"
+        qty = _coerce_float(row.get(qty_col), default=0.0)
+        price = _coerce_float(row.get(price_col), default=0.0)
+        if qty == 0.0 or price == 0.0:
+            continue
         totals[state] += qty * price
     ranked = sorted(totals.items(), key=lambda x: x[1], reverse=True)[:limit]
     return [{label: code, "revenue": round(r, 2)} for code, r in ranked]

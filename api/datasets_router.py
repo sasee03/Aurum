@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+import logging
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
@@ -20,6 +21,7 @@ from src.db_config import postgres_target_info
 from src.report_builder import attach_trust_narrative
 
 router = APIRouter(tags=["datasets"])
+logger = logging.getLogger(__name__)
 
 _READ_CHUNK_BYTES = 1024 * 1024
 
@@ -99,14 +101,29 @@ async def upload_dataset(
         )
 
     run_id = f"upload_{uuid.uuid4().hex[:12]}"
-    report = attach_trust_narrative(run_validation_from_raw_orders(frame, run_id=run_id))
-    persisted_run_id = report.get("run_id", run_id)
-    save_validation_run(
-        persisted_run_id,
-        status="completed",
-        mode="upload",
-        project_id=project_id or None,
-        display_name=file.filename,
-    )
-    save_validation_report(persisted_run_id, report)
+    try:
+        report = attach_trust_narrative(
+            run_validation_from_raw_orders(frame, run_id=run_id)
+        )
+        persisted_run_id = report.get("run_id", run_id)
+        save_validation_run(
+            persisted_run_id,
+            status="completed",
+            mode="upload",
+            project_id=project_id or None,
+            display_name=file.filename,
+        )
+        save_validation_report(persisted_run_id, report)
+    except Exception:  # noqa: BLE001
+        logger.exception("CSV upload parsed but validation execution failed")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "error": "upload_validation_failed",
+                "message": (
+                    "CSV upload parsed successfully, but Aurum could not complete "
+                    "validation. No report was persisted for this upload."
+                ),
+            },
+        )
     return report

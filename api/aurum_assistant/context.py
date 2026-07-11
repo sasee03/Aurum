@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any, Optional, Union
 
 from src.config_loader import load_dataset_config
+from src.report_safety import ReportLoadError, load_report_file, validate_report_shape
 
 ROOT = Path(__file__).resolve().parents[2]
 REPORT_PATH = ROOT / "reports" / "report.json"
@@ -42,12 +44,55 @@ DEMO_PK_ISSUE = {
 DEMO_DATETIME_ISSUE = _demo_datetime_issue()
 
 
-def load_json_file(path: Path, default: Any = None) -> Any:
+class CustomCheckConfigError(Exception):
+    """Raised when the saved custom-check config exists but is invalid."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def load_json_file(
+    path: Path,
+    default: Any = None,
+    *,
+    expected_type: Optional[Any] = None,
+) -> Any:
     if not path.exists():
         return default
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
+        return default
+    if expected_type is not None and not isinstance(data, expected_type):
+        return default
+    return data
+
+
+def as_dict(value: Any) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def list_of_dicts(value: Any) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _coerce_float(value: Any, default: float = 0.0) -> float:
+    try:
+        result = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return default
+    if not math.isfinite(result):
+        return default
+    return result
+
+
+def _coerce_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (OverflowError, TypeError, ValueError):
         return default
 
 
@@ -57,10 +102,15 @@ def load_latest_report() -> Optional[dict]:
         import api.main as api_main
 
         if api_main._last_report is not None:
-            return api_main._last_report
+            return validate_report_shape(
+                api_main._last_report,
+                source="in-memory latest report",
+            )
+    except ReportLoadError:
+        raise
     except Exception:
         pass
-    return load_json_file(REPORT_PATH)
+    return load_report_file(REPORT_PATH, source=str(REPORT_PATH))
 
 
 def load_report_for_run(run_id: Optional[str]) -> Optional[dict]:
@@ -71,6 +121,8 @@ def load_report_for_run(run_id: Optional[str]) -> Optional[dict]:
             stored = get_report_by_run_id(run_id)
             if stored is not None:
                 return stored
+        except ReportLoadError:
+            raise
         except Exception:
             pass
     return load_latest_report()
@@ -80,18 +132,21 @@ def _row_counts_from_report(report: dict) -> tuple[int, int]:
     """Extract bronze/silver row counts from a validation report when present."""
     bronze_rows = 0
     silver_rows = 0
-    checks = report.get("checks", {})
-    for check in checks.get("bronze", []):
+    checks = as_dict(report.get("checks"))
+
+    bronze_checks = list_of_dicts(checks.get("bronze"))
+    for check in bronze_checks:
         if check.get("check_id") == "B1" and check.get("observed") is not None:
-            bronze_rows = int(check["observed"])
+            bronze_rows = _coerce_int(check["observed"])
             break
-    for check in checks.get("silver", []):
-        extra = check.get("extra")
-        if check.get("check_id") == "S1" and isinstance(extra, dict):
+    silver_checks = list_of_dicts(checks.get("silver"))
+    for check in silver_checks:
+        extra = as_dict(check.get("extra"))
+        if check.get("check_id") == "S1" and extra:
             if extra.get("silver") is not None:
-                silver_rows = int(extra["silver"])
+                silver_rows = _coerce_int(extra["silver"])
             if bronze_rows == 0 and extra.get("bronze") is not None:
-                bronze_rows = int(extra["bronze"])
+                bronze_rows = _coerce_int(extra["bronze"])
             break
     return bronze_rows, silver_rows
 
@@ -108,9 +163,11 @@ def load_history_records() -> list[dict]:
         gold_revenue = 0.0
         if report:
             bronze_rows, silver_rows = _row_counts_from_report(report)
-            impact = report.get("business_impact", {})
-            gold_revenue = float(
-                impact.get("actual_revenue") or impact.get("expected_revenue") or 0
+            impact = as_dict(report.get("business_impact"))
+            gold_revenue = _coerce_float(
+                impact.get("actual_revenue")
+                if impact.get("actual_revenue") is not None
+                else impact.get("expected_revenue")
             )
 
         drop_pct = 0.0
@@ -134,10 +191,15 @@ def load_history_records() -> list[dict]:
 
 
 def load_custom_checks() -> list[dict]:
-    checks = load_json_file(CUSTOM_CHECKS_PATH, default=None)
-    if checks is not None:
-        return checks
-    return []
+    if not CUSTOM_CHECKS_PATH.exists():
+        return []
+    try:
+        checks = json.loads(CUSTOM_CHECKS_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise CustomCheckConfigError("custom_checks.json is not valid JSON") from exc
+    if not isinstance(checks, list):
+        raise CustomCheckConfigError("custom_checks.json must contain a list of checks")
+    return list_of_dicts(checks)
 
 
 def save_custom_checks(checks: list[dict]) -> None:
@@ -148,9 +210,9 @@ def save_custom_checks(checks: list[dict]) -> None:
 
 
 def load_sample_orders() -> list[dict]:
-    orders = load_json_file(SAMPLE_ORDERS_PATH, default=None)
+    orders = load_json_file(SAMPLE_ORDERS_PATH, default=None, expected_type=list)
     if orders is not None:
-        return orders
+        return list_of_dicts(orders)
     return []
 
 

@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from api.aurum_assistant.context import fallback_response, format_response, load_latest_report, load_report_for_run
+from api.aurum_assistant.context import (
+    _coerce_float,
+    as_dict,
+    fallback_response,
+    format_response,
+    load_latest_report,
+    load_report_for_run,
+)
 
 
 def handle(
@@ -21,11 +28,11 @@ def handle(
             ["Run validation pipeline", "Check report.json availability"],
         )
 
-    layer_status = report.get("layer_status", {})
+    layer_status = as_dict(report.get("layer_status"))
     first_failed = report.get("first_failed_layer", "Unknown")
     severity = report.get("severity", "HIGH")
-    root_cause = report.get("root_cause", {})
-    business_impact = report.get("business_impact", {})
+    root_cause = as_dict(report.get("root_cause"))
+    business_impact = as_dict(report.get("business_impact"))
     suggested_action = report.get("suggested_action", "")
 
     failed_stage = first_failed or "Unknown stage"
@@ -43,7 +50,9 @@ def handle(
         root_summary,
     ]
     if loss is not None:
-        answer_parts.append(f"Business impact: estimated loss {loss:,.2f}.")
+        answer_parts.append(
+            f"Business impact: estimated loss {_coerce_float(loss):,.2f}."
+        )
     else:
         answer_parts.append(impact_detail)
     answer_parts.append("This should be reviewed by the data engineering team.")

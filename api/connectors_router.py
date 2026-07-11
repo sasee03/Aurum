@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -34,6 +35,7 @@ from src.postgres_connector import (
 from src.report_builder import attach_trust_narrative
 
 router = APIRouter(tags=["connectors"])
+logger = logging.getLogger(__name__)
 
 CONNECTOR_NARRATIVE_TIMEOUT_SECONDS = 15
 
@@ -208,27 +210,44 @@ def validate_postgres_table(body: PostgresValidateRequest) -> dict:
         return _schema_mismatch_response(exc)
 
     run_id = f"connector_{uuid.uuid4().hex[:12]}"
-    report = attach_trust_narrative(
-        run_validation_from_raw_orders(frame, run_id=run_id),
-        timeout_seconds=CONNECTOR_NARRATIVE_TIMEOUT_SECONDS,
-    )
-    # Source coordinates live on validation_runs — never inside the 17-key report.
     source_schema = body.schema_name.strip()
     source_table = body.table.strip()
-    persisted_run_id = report.get("run_id", run_id)
-    project_id = body.project_id or session.project_id
-    # Only attach connection_id when metadata was persisted (FK-safe).
-    connection_id_for_run = (
-        session.connection_id if get_data_connection(session.connection_id) else None
-    )
-    save_validation_run(
-        persisted_run_id,
-        status="completed",
-        mode="connector",
-        project_id=project_id if project_id and get_project(project_id) else None,
-        connection_id=connection_id_for_run,
-        source_schema=source_schema,
-        source_table=source_table,
-    )
-    save_validation_report(persisted_run_id, report)
+    try:
+        report = attach_trust_narrative(
+            run_validation_from_raw_orders(frame, run_id=run_id),
+            timeout_seconds=CONNECTOR_NARRATIVE_TIMEOUT_SECONDS,
+        )
+        # Source coordinates live on validation_runs — never inside the 17-key report.
+        persisted_run_id = report.get("run_id", run_id)
+        project_id = body.project_id or session.project_id
+        # Only attach connection_id when metadata was persisted (FK-safe).
+        connection_id_for_run = (
+            session.connection_id if get_data_connection(session.connection_id) else None
+        )
+        save_validation_run(
+            persisted_run_id,
+            status="completed",
+            mode="connector",
+            project_id=project_id if project_id and get_project(project_id) else None,
+            connection_id=connection_id_for_run,
+            source_schema=source_schema,
+            source_table=source_table,
+        )
+        save_validation_report(persisted_run_id, report)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "Connector table parsed but validation execution failed for %s.%s",
+            source_schema,
+            source_table,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "error": "connector_validation_failed",
+                "message": (
+                    "Connector data matched the expected schema, but Aurum could "
+                    "not complete validation. No report was persisted for this run."
+                ),
+            },
+        )
     return report

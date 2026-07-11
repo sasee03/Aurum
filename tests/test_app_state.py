@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.main as api_main
+from src.app_state.db import get_connection
 from src.app_state.store import (
     create_project,
     get_project,
@@ -50,6 +51,65 @@ def test_save_and_load_report_by_run_id(app_state_db):
 
     loaded = get_report_by_run_id("demo_run_001")
     assert loaded == report
+
+
+def test_corrupt_report_json_returns_honest_error(app_state_db):
+    from src.report_safety import ReportLoadError
+
+    save_validation_run("broken_report_run", status="completed", mode="live")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO validation_reports (run_id, report_json, created_at)
+            VALUES (?, ?, ?)
+            """,
+            ("broken_report_run", "{not valid json", "2026-01-01T00:00:00+00:00"),
+        )
+        conn.commit()
+
+    with pytest.raises(ReportLoadError):
+        get_report_by_run_id("broken_report_run")
+
+    with TestClient(api_main.app) as client:
+        response = client.get("/reports/broken_report_run")
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["error"] == "report_load_failed"
+    assert "invalid JSON" in detail["reason"]
+
+    with TestClient(api_main.app) as client:
+        runs_response = client.get("/runs")
+    assert runs_response.status_code == 422
+    assert runs_response.json()["detail"]["error"] == "report_load_failed"
+
+
+def test_wrong_shape_report_json_returns_honest_error(app_state_db):
+    save_validation_run("wrong_shape_report_run", status="completed", mode="live")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO validation_reports (run_id, report_json, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (
+                "wrong_shape_report_run",
+                json.dumps(
+                    {
+                        "run_id": "wrong_shape_report_run",
+                        "checks": {"silver": {"not": "a-list"}},
+                    }
+                ),
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+        conn.commit()
+
+    with TestClient(api_main.app) as client:
+        response = client.get("/reports/wrong_shape_report_run")
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["error"] == "report_load_failed"
+    assert "checks.silver" in detail["reason"]
 
 
 def test_projects_api_crud(app_state_db):

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional, Union
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from api.aurum_assistant.context import (
+    CustomCheckConfigError,
     load_custom_checks,
     save_custom_checks,
 )
@@ -31,8 +32,36 @@ from src.custom_checks import (
     execute_custom_check_against_frame,
     run_info_for_check,
 )
+from src.report_safety import ReportLoadError
 
 router = APIRouter(tags=["aurum-assistant"])
+
+
+def _custom_checks_load_error(exc: CustomCheckConfigError) -> dict:
+    return {
+        "error": "custom_checks_invalid",
+        "message": "This check configuration is invalid and could not be loaded.",
+        "reason": exc.reason,
+    }
+
+
+def _report_load_error(exc: ReportLoadError) -> dict:
+    return {
+        "error": "report_load_failed",
+        "message": "This report could not be loaded because the stored report data is invalid.",
+        "source": exc.source,
+        "reason": exc.reason,
+    }
+
+
+def _load_custom_checks_or_422() -> list[dict]:
+    try:
+        return load_custom_checks()
+    except CustomCheckConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_custom_checks_load_error(exc),
+        ) from None
 
 
 class ChatContext(BaseModel):
@@ -112,7 +141,18 @@ def _dispatch_intent(intent: str, request: ChatRequest) -> dict:
 @router.post("/aurum-assistant/chat")
 def aurum_assistant_chat(request: ChatRequest) -> dict:
     intent = detect_intent(request.question)
-    return _dispatch_intent(intent, request)
+    try:
+        return _dispatch_intent(intent, request)
+    except CustomCheckConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_custom_checks_load_error(exc),
+        ) from None
+    except ReportLoadError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_report_load_error(exc),
+        ) from None
 
 
 @router.post("/assistant/chat")
@@ -122,7 +162,7 @@ def assistant_chat_alias(request: ChatRequest) -> dict:
 
 @router.post("/custom-checks")
 def create_custom_check(body: CustomCheckCreate) -> dict:
-    checks = load_custom_checks()
+    checks = _load_custom_checks_or_422()
     check_id = next_check_id(body.layer, checks)
     record = {
         "check_id": check_id,
@@ -136,7 +176,7 @@ def create_custom_check(body: CustomCheckCreate) -> dict:
 
 @router.get("/custom-checks")
 def list_custom_checks() -> dict:
-    return {"checks": load_custom_checks()}
+    return {"checks": _load_custom_checks_or_422()}
 
 
 @router.post("/custom-checks/run")
@@ -152,8 +192,15 @@ def run_custom_check(body: CustomCheckRunRequest) -> dict:
     Results are additive only — never modify trust_score, final_verdict, or
     layer_status.
     """
-    checks = load_custom_checks()
-    matched = next((c for c in checks if c.get("check_id") == body.check_id), None)
+    checks = _load_custom_checks_or_422()
+    matched = next(
+        (
+            c
+            for c in checks
+            if isinstance(c, dict) and c.get("check_id") == body.check_id
+        ),
+        None,
+    )
     if matched is None:
         return {
             "check_id": body.check_id,
@@ -349,8 +396,11 @@ async def run_custom_check_with_file(
         "file used in the original run."
     )
 
-    checks = load_custom_checks()
-    matched = next((c for c in checks if c.get("check_id") == check_id), None)
+    checks = _load_custom_checks_or_422()
+    matched = next(
+        (c for c in checks if isinstance(c, dict) and c.get("check_id") == check_id),
+        None,
+    )
     if matched is None:
         return {
             "check_id": check_id,

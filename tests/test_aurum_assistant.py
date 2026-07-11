@@ -125,6 +125,24 @@ def test_top_states_revenue(client, sample_report):
     assert "demo" in body["answer"].lower()
 
 
+def test_top_states_revenue_skips_bad_numeric_rows(client, monkeypatch, sample_report):
+    api_main._last_report = sample_report
+    monkeypatch.setattr(
+        "api.aurum_assistant.handlers.sample_query_handler.load_sample_orders",
+        lambda: [
+            {"customer_state": "SP", "quantity": "3", "unit_price": "10.0"},
+            {"customer_state": "RJ", "quantity": "bad", "unit_price": "12.0"},
+            {"customer_state": "MG", "quantity": "4", "unit_price": "not-a-number"},
+        ],
+    )
+
+    response = _chat(client, "Show top 5 states by revenue", page="gold")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "sample_revenue_query"
+    assert body["data"]["table"][0]["revenue"] == 30.0
+
+
 def test_compare_with_history(client, sample_report):
     from src.app_state.store import save_validation_report, save_validation_run
 
@@ -197,6 +215,98 @@ def test_assistant_history_from_sqlite_not_bootstrap_csv():
     assert all(not r["run_id"].startswith("history_") for r in records)
 
 
+def test_history_explainer_handles_string_numbers(client):
+    from src.app_state.store import save_validation_report, save_validation_run
+
+    save_validation_run("history_string_numbers", status="completed", mode="live")
+    save_validation_report(
+        "history_string_numbers",
+        {
+            "run_id": "history_string_numbers",
+            "final_verdict": "NOT TRUSTED",
+            "trust_score": "40",
+            "checks": {
+                "bronze": [{"check_id": "B1", "observed": "100000", "status": "PASS"}],
+                "silver": [
+                    {
+                        "check_id": "S1",
+                        "status": "FAIL",
+                        "extra": {"bronze": "100000", "silver": "72000"},
+                    }
+                ],
+                "gold": [],
+                "cross_layer": [],
+            },
+        },
+    )
+
+    response = _chat(client, "Compare this run with history", page="history")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "history_explanation"
+    assert "historically" in body["answer"].lower()
+    assert "72" in body["answer"] or "retained" in body["answer"].lower()
+
+
+def test_assistant_chat_handles_malformed_persisted_numeric_report(client):
+    from src.app_state.store import save_validation_report, save_validation_run
+
+    run_id = "history_bad_numeric_shapes"
+    save_validation_run(run_id, status="completed", mode="live")
+    save_validation_report(
+        run_id,
+        {
+            "run_id": run_id,
+            "final_verdict": "NOT TRUSTED",
+            "trust_score": {"bad": "shape"},
+            "layer_status": {"bronze": "PASS", "silver": "FAIL", "gold": "IMPACTED"},
+            "root_cause": {"summary": "Persisted numeric fields are malformed."},
+            "business_impact": {
+                "actual_revenue": {"bad": "number"},
+                "expected_revenue": ["also", "bad"],
+                "estimated_loss": {"amount": "bad"},
+                "loss_percent": ["bad"],
+                "detail": "Persisted impact numbers are malformed.",
+            },
+            "checks": {
+                "bronze": ["not-a-check", {"check_id": "B1", "observed": []}],
+                "silver": [
+                    "not-a-check",
+                    {"check_id": "S1", "status": "FAIL", "extra": "wrong-shape"},
+                ],
+                "gold": [],
+            },
+        },
+    )
+
+    history_response = client.post(
+        "/aurum-assistant/chat",
+        json={
+            "page": "history",
+            "run_id": run_id,
+            "question": "Compare this run with history",
+            "context": {},
+        },
+    )
+    assert history_response.status_code == 200
+    assert history_response.json()["intent"] == "history_explanation"
+
+    validation_response = client.post(
+        "/aurum-assistant/chat",
+        json={
+            "page": "validation",
+            "run_id": run_id,
+            "layer": "silver",
+            "question": "Why did Silver fail?",
+            "context": {},
+        },
+    )
+    assert validation_response.status_code == 200
+    body = validation_response.json()
+    assert body["intent"] == "validation_explanation"
+    assert "0.0% gap" in body["answer"]
+
+
 def test_draft_stakeholder_email(client, sample_report):
     api_main._last_report = sample_report
     response = _chat(client, "Draft stakeholder email", page="failure")
@@ -215,6 +325,33 @@ def test_custom_check_builder(client, sample_report):
     body = response.json()
     assert body["intent"] == "custom_check_builder"
     assert "custom_check" in body["data"]
+
+
+def test_validation_explainer_handles_string_impact_values(client):
+    api_main._last_report = {
+        "run_id": "string_impact_report",
+        "layer_status": {"bronze": "PASS", "silver": "FAIL", "gold": "IMPACTED"},
+        "final_verdict": "NOT TRUSTED",
+        "severity": "HIGH",
+        "first_failed_layer": "Bronze → Silver",
+        "root_cause": {"summary": "Valid records were removed during Silver transformation."},
+        "business_impact": {
+            "expected_revenue": "100.0",
+            "actual_revenue": "50.0",
+            "estimated_loss": "50.0",
+            "loss_percent": "50.0",
+            "detail": "Revenue gap from dropped records.",
+        },
+        "suggested_action": "Fix Silver filter and rerun.",
+        "coverage": {},
+        "checks": {"bronze": [], "silver": [], "gold": [], "cross_layer": []},
+    }
+
+    response = _chat(client, "Why did Silver fail?", layer="silver")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "validation_explanation"
+    assert "50.0% gap" in body["answer"]
 
 
 def test_create_custom_check(client, tmp_path, monkeypatch):
@@ -291,9 +428,11 @@ def test_run_custom_check(client, monkeypatch):
 
 def test_fallback_missing_report(client):
     api_main._last_report = None
-    with patch("api.aurum_assistant.context.load_json_file", return_value=None):
-        with patch("api.aurum_assistant.handlers.validation_explainer.load_latest_report", return_value=None):
-            response = _chat(client, "Why did Silver fail?")
+    with patch(
+        "api.aurum_assistant.handlers.validation_explainer.load_report_for_run",
+        return_value=None,
+    ):
+        response = _chat(client, "Why did Silver fail?")
     assert response.status_code == 200
     body = response.json()
     assert body["confidence"] == "low"

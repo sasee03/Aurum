@@ -169,6 +169,46 @@ def test_report_by_id_wrong_run_id_returns_404(client):
     assert "not found" in wrong.json()["detail"].lower()
 
 
+def test_reports_latest_returns_honest_error_for_corrupt_report_json(client, monkeypatch, tmp_path):
+    corrupt_report = tmp_path / "report.json"
+    corrupt_report.write_text("{not valid json", encoding="utf-8")
+    monkeypatch.setattr(api_main, "REPORT_PATH", corrupt_report)
+    api_main._last_report = None
+
+    response = client.get("/reports/latest")
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["error"] == "report_load_failed"
+    assert "could not be loaded" in detail["message"].lower()
+    assert detail["reason"] == "invalid JSON syntax"
+
+
+def test_reports_latest_returns_honest_error_for_wrong_shape_report_json(client, monkeypatch, tmp_path):
+    wrong_shape_report = tmp_path / "report.json"
+    wrong_shape_report.write_text(
+        '{"run_id": "bad", "business_impact": ["not", "an", "object"]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(api_main, "REPORT_PATH", wrong_shape_report)
+    api_main._last_report = None
+
+    response = client.get("/reports/latest")
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["error"] == "report_load_failed"
+    assert "business_impact" in detail["reason"]
+
+
+def test_reports_latest_returns_honest_error_for_bad_in_memory_report(client):
+    api_main._last_report = {"run_id": "bad-memory", "checks": {"silver": {"not": "a-list"}}}
+
+    response = client.get("/reports/latest")
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["error"] == "report_load_failed"
+    assert "checks.silver" in detail["reason"]
+
+
 def test_post_runs_refused_when_db_unreachable(client, monkeypatch):
     """API-layer live guard: POST /runs must refuse (503) when the DB is down.
 
