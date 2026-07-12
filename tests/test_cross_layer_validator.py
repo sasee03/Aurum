@@ -50,7 +50,7 @@ def test_business_impact_computes_loss():
 def test_business_impact_treats_null_gold_revenue_as_zero():
     bronze = make_rows(10)
     gold = pd.DataFrame(
-        [{"total_revenue": None, "total_orders": 0,
+        [{"total_revenue": float("nan"), "total_orders": 0,
           "total_customers": 0, "average_order_value": 0.0}]
     )
     loader = loader_from(bronze_orders=to_df(bronze), gold_metrics=gold)

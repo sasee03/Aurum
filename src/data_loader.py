@@ -83,25 +83,6 @@ def _quote_ident(name: str) -> sql.Identifier:
 
 
 def _postgres_type(series: pd.Series) -> str:
-    known_numeric = {
-        "quantity",
-        "unit_price",
-        "customer_id",
-        "net_revenue",
-        "total_revenue",
-        "total_orders",
-        "total_customers",
-        "average_order_value",
-        "revenue",
-        "total_quantity",
-        "amount",
-        "bronze_count",
-        "silver_count",
-        "drop_pct",
-        "gold_revenue",
-    }
-    if series.name in known_numeric and series.dropna().empty:
-        return "double precision"
     if pd.api.types.is_integer_dtype(series):
         return "bigint"
     if pd.api.types.is_float_dtype(series):
@@ -110,6 +91,21 @@ def _postgres_type(series: pd.Series) -> str:
         return "boolean"
     if pd.api.types.is_datetime64_any_dtype(series):
         return "timestamp"
+    
+    clean = series.dropna()
+    if clean.empty:
+        return "text"
+        
+    inferred = pd.api.types.infer_dtype(clean)
+    if inferred in ("integer", "mixed-integer"):
+        return "bigint"
+    if inferred in ("floating", "mixed-integer-float", "decimal"):
+        return "double precision"
+    if inferred == "boolean":
+        return "boolean"
+    if inferred in ("datetime64", "datetime", "date"):
+        return "timestamp"
+        
     return "text"
 
 

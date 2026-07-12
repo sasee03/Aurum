@@ -66,3 +66,63 @@ def test_validate_bronze_stops_after_required_schema_failure():
     results = validate_bronze(loader)
     assert [result.check_id for result in results] == ["B1", "B2", "B3", "B4"]
     assert results[-1].status == FAIL
+
+
+def test_b7_dynamic_numeric_typing():
+    import pandas as pd
+    import yaml
+    from src.bronze_validator import b7_negative_values
+    from src.config_loader import _parse_raw_config
+    from src.data_loader import DataLoader
+
+    cfg_raw = yaml.safe_load('''
+    dataset:
+      name: Test
+      currency: USD
+      domain: retail
+      geography_label: market
+    tables:
+      bronze: bronze_orders
+      silver: silver_orders
+      gold: gold_metrics
+    columns:
+      primary_key: pk
+      order_id: ord
+      order_id_expression: "{order_id}"
+      product_id: pid
+      product_description: desc
+      customer_id: cid
+      timestamp: ts
+      quantity: units_custom
+      unit_price: price_custom
+      geography: geo
+      revenue: rev
+      line_item_key: [pk, pid, cid, ts]
+    metrics:
+      revenue_formula: "units_custom * price_custom"
+      order_id_expression: "{order_id}"
+      top_revenue_dimension: geo
+      top_revenue_label: geo
+      total_revenue_metric: total_revenue
+      total_orders_metric: total_orders
+      total_customers_metric: total_customers
+      average_order_value_metric: average_order_value
+      aggregate_revenue_metric: rev
+      total_quantity_metric: total_quantity
+    ''')
+    cfg = _parse_raw_config(cfg_raw, "test")
+
+    df = pd.DataFrame({
+        "units_custom": [1, -2, 3],
+        "price_custom": [10.0, 20.0, -5.5]
+    })
+    
+    loader = DataLoader(build=False)
+    try:
+        loader._materialize_frame("bronze_orders", df, temporary=False)
+        result = b7_negative_values(loader, cfg)
+        assert result.status == WARN
+        assert result.observed["negative_quantity"] == 1
+        assert result.observed["negative_unit_price"] == 1
+    finally:
+        loader.close()
