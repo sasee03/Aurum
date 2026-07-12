@@ -18,6 +18,7 @@ import psycopg
 from psycopg import sql
 
 from src.csv_ingest import MAX_UPLOAD_ROWS, CsvSchemaMismatch, validate_raw_orders_frame
+from src.config_loader import AurumDatasetConfig
 from src.db_config import db_connect_timeout
 from src.metadata_discovery import list_tables
 
@@ -284,6 +285,7 @@ def load_and_validate_user_table(
     session: SessionConnection,
     schema: str,
     table: str,
+    cfg: Optional[AurumDatasetConfig] = None,
 ) -> pd.DataFrame:
     """Connect → read table → apply the same Olist-shape validators as CSV upload."""
     try:
@@ -304,4 +306,4 @@ def load_and_validate_user_table(
             error=classify_connect_error(exc),
         ) from None
 
-    return validate_raw_orders_frame(frame)
+    return validate_raw_orders_frame(frame, cfg)

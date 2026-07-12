@@ -79,6 +79,18 @@ class ColumnsInfo:
     def resolve_line_item_key(self) -> tuple[str, str, str, str]:
         return self.line_item_key
 
+    def resolve_raw_required_columns(self) -> list[str]:
+        return [
+            self.primary_key,
+            self.product_id,
+            self.product_description,
+            self.quantity,
+            self.timestamp,
+            self.unit_price,
+            self.customer_id,
+            self.geography,
+        ]
+
 
 @dataclass(frozen=True)
 class MetricsInfo:

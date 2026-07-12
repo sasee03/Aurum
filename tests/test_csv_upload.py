@@ -420,3 +420,79 @@ def test_post_runs_demo_path_unchanged_after_upload_added(client):
     response = client.post("/runs", json={"run_id": GOLDEN_RUN_ID})
     assert response.status_code == 200
     assert _strip_volatile(response.json()) == _strip_volatile(baseline)
+
+
+def test_validate_raw_orders_frame_custom_config():
+    from src.csv_ingest import validate_raw_orders_frame
+    from src.config_loader import AurumDatasetConfig, DatasetInfo, TablesInfo, ColumnsInfo, MetricsInfo
+    import pandas as pd
+    import pytest
+    from src.csv_ingest import CsvSchemaMismatch
+
+    custom_cfg = AurumDatasetConfig(
+        dataset=DatasetInfo(name="Custom", currency="USD", domain="retail", geography_label="region"),
+        tables=TablesInfo(bronze="b", silver="s", gold="g"),
+        columns=ColumnsInfo(
+            primary_key="custom_id",
+            customer_id="cust_uuid",
+            timestamp="created_at",
+            quantity="qty",
+            unit_price="price",
+            geography="region",
+            revenue="rev",
+            product_id="prod_id",
+            product_description="desc",
+            order_id="custom_id",
+            order_id_expression="custom_id",
+            line_item_key=("custom_id", "prod_id", "cust_uuid", "created_at"),
+        ),
+        metrics=MetricsInfo(
+            revenue_formula="qty * price",
+            order_id_expression="custom_id",
+            top_revenue_dimension="region",
+            top_revenue_label="region",
+            total_revenue_metric="t_rev",
+            total_orders_metric="t_ord",
+            total_customers_metric="t_cust",
+            average_order_value_metric="aov",
+            aggregate_revenue_metric="a_rev",
+            total_quantity_metric="t_qty",
+        )
+    )
+
+    df_valid = pd.DataFrame({
+        "custom_id": ["INV-01"],
+        "prod_id": ["P01"],
+        "desc": ["Product 1"],
+        "qty": [10],
+        "created_at": ["2026-07-12"],
+        "price": [9.99],
+        "cust_uuid": ["CUST-01"],
+        "region": ["US"],
+    })
+
+    out = validate_raw_orders_frame(df_valid, custom_cfg)
+    assert list(out.columns) == [
+        "custom_id",
+        "prod_id",
+        "desc",
+        "qty",
+        "created_at",
+        "price",
+        "cust_uuid",
+        "region",
+    ]
+
+    df_invalid = pd.DataFrame({
+        "custom_id": ["INV-01"],
+        "prod_id": ["P01"],
+        "desc": ["Product 1"],
+        "qty": [10],
+        "created_at": ["2026-07-12"],
+        "price": [9.99],
+        "cust_uuid": ["CUST-01"],
+    })
+
+    with pytest.raises(CsvSchemaMismatch) as exc_info:
+        validate_raw_orders_frame(df_invalid, custom_cfg)
+    assert exc_info.value.missing_columns == ["region"]

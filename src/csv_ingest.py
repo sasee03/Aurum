@@ -10,6 +10,7 @@ import pandas as pd
 
 from src.data_loader import DataLoader
 from src.report_builder import build_report
+from src.config_loader import load_dataset_config, AurumDatasetConfig
 
 # Must match data/raw/raw_orders.csv header (Olist raw ingest shape).
 RAW_ORDERS_COLUMNS: tuple[str, ...] = (
@@ -40,10 +41,11 @@ class CsvSchemaMismatch(Exception):
         extra_columns: list[str] | None = None,
         *,
         error: str | None = None,
+        expected_columns: list[str] | None = None,
     ):
         self.missing_columns = missing_columns
         self.extra_columns = extra_columns or []
-        self.expected_columns = list(RAW_ORDERS_COLUMNS)
+        self.expected_columns = expected_columns if expected_columns is not None else list(RAW_ORDERS_COLUMNS)
         self.error = error or "This file doesn't match the expected schema."
         super().__init__(self.error)
 
@@ -54,102 +56,123 @@ def _format_byte_limit(limit: int) -> str:
     return f"{limit:,} bytes"
 
 
-def _schema_error(message: str) -> CsvSchemaMismatch:
-    return CsvSchemaMismatch(missing_columns=[], error=message)
+def _schema_error(message: str, expected_columns: list[str] | None = None) -> CsvSchemaMismatch:
+    return CsvSchemaMismatch(missing_columns=[], error=message, expected_columns=expected_columns)
 
 
-def validate_raw_orders_columns(columns: list[str]) -> None:
+def validate_raw_orders_columns(columns: list[str], cfg: AurumDatasetConfig) -> None:
     """Raise CsvSchemaMismatch if required columns are absent."""
     normalized = {col.strip() for col in columns}
-    missing = [col for col in RAW_ORDERS_COLUMNS if col not in normalized]
+    raw_cols = cfg.columns.resolve_raw_required_columns()
+    missing = [col for col in raw_cols if col not in normalized]
     if missing:
-        if not normalized.intersection(RAW_ORDERS_COLUMNS):
-            raise _schema_error("file is not a valid CSV")
-        raise CsvSchemaMismatch(missing_columns=missing)
+        if not normalized.intersection(raw_cols):
+            raise _schema_error("file is not a valid CSV", expected_columns=raw_cols)
+        raise CsvSchemaMismatch(missing_columns=missing, expected_columns=raw_cols)
 
 
-def validate_row_count(df: pd.DataFrame) -> None:
+def validate_row_count(df: pd.DataFrame, expected_columns: list[str] | None = None) -> None:
     """Raise CsvSchemaMismatch if the file has no data rows or exceeds the row cap."""
     if len(df) == 0:
-        raise _schema_error("file contains no data rows")
+        raise _schema_error("file contains no data rows", expected_columns=expected_columns)
     if len(df) > MAX_UPLOAD_ROWS:
         raise _schema_error(
-            f"file exceeds maximum of {MAX_UPLOAD_ROWS:,} data rows"
+            f"file exceeds maximum of {MAX_UPLOAD_ROWS:,} data rows",
+            expected_columns=expected_columns
         )
 
 
-def validate_required_non_null(df: pd.DataFrame) -> None:
+def validate_required_non_null(df: pd.DataFrame, cfg: AurumDatasetConfig) -> None:
     """Reject uploads with blank or null values in required columns (option a)."""
-    for column in RAW_ORDERS_COLUMNS:
+    raw_cols = cfg.columns.resolve_raw_required_columns()
+    for column in raw_cols:
         series = df[column]
         blank = series.isna() | series.astype(str).str.strip().eq("")
         if blank.any():
             count = int(blank.sum())
             raise _schema_error(
-                f"Required column '{column}' has {count} missing or blank value(s)"
+                f"Required column '{column}' has {count} missing or blank value(s)",
+                expected_columns=raw_cols
             )
 
 
-def validate_text_column(column: str, series: pd.Series) -> None:
+def validate_text_column(column: str, series: pd.Series, expected_columns: list[str] | None = None) -> None:
     """Raise CsvSchemaMismatch if a text column was inferred as numeric."""
     if pd.api.types.is_numeric_dtype(series):
-        raise _schema_error(f"{column} must be a text/string value, not numeric")
+        raise _schema_error(f"{column} must be a text/string value, not numeric", expected_columns=expected_columns)
 
 
-def validate_numeric_column(column: str, series: pd.Series) -> None:
+def validate_numeric_column(column: str, series: pd.Series, expected_columns: list[str] | None = None) -> None:
     """Raise CsvSchemaMismatch if a numeric column is not numeric."""
     if pd.api.types.is_numeric_dtype(series):
         return
     coerced = pd.to_numeric(series, errors="coerce")
     if series.notna().any() and coerced.isna().any():
-        raise _schema_error(f"{column} must be a numeric value")
+        raise _schema_error(f"{column} must be a numeric value", expected_columns=expected_columns)
 
 
-def validate_invoice_no_text(series: pd.Series) -> None:
+def validate_invoice_no_text(series: pd.Series, expected_columns: list[str] | None = None) -> None:
     """Raise CsvSchemaMismatch if invoice_no was inferred as numeric (Olist uses text ids)."""
-    validate_text_column("invoice_no", series)
+    validate_text_column("invoice_no", series, expected_columns=expected_columns)
 
 
-def validate_column_dtypes(df: pd.DataFrame) -> None:
+def validate_column_dtypes(df: pd.DataFrame, cfg: AurumDatasetConfig) -> None:
     """Validate text/numeric/date dtypes for all required columns."""
-    for column in TEXT_COLUMNS:
-        validate_text_column(column, df[column])
-    for column in NUMERIC_COLUMNS:
-        validate_numeric_column(column, df[column])
-    if pd.api.types.is_numeric_dtype(df["invoice_date"]):
-        raise _schema_error("invoice_date must be a date/text value, not numeric")
+    text_cols = [
+        cfg.columns.primary_key,
+        cfg.columns.product_id,
+        cfg.columns.product_description,
+        cfg.columns.geography,
+    ]
+    numeric_cols = [cfg.columns.quantity, cfg.columns.unit_price]
+    raw_cols = cfg.columns.resolve_raw_required_columns()
+    for column in text_cols:
+        validate_text_column(column, df[column], expected_columns=raw_cols)
+    for column in numeric_cols:
+        validate_numeric_column(column, df[column], expected_columns=raw_cols)
+    if pd.api.types.is_numeric_dtype(df[cfg.columns.timestamp]):
+        raise _schema_error(f"{cfg.columns.timestamp} must be a date/text value, not numeric", expected_columns=raw_cols)
 
 
-def validate_raw_orders_frame(df: pd.DataFrame) -> pd.DataFrame:
+def validate_raw_orders_frame(df: pd.DataFrame, cfg: Optional[AurumDatasetConfig] = None) -> pd.DataFrame:
     """Apply the same Olist-shape checks used for CSV uploads to an in-memory frame.
 
     Raises CsvSchemaMismatch on mismatch — never falls back to demo data.
     """
+    if cfg is None:
+        cfg = load_dataset_config()
+    raw_cols = cfg.columns.resolve_raw_required_columns()
     # Intentional broadening: accept case-insensitive/trimmed headers from CSV and connectors.
     renamed = {col: str(col).strip().lower() for col in df.columns}
     normalized = df.rename(columns=renamed)
-    validate_raw_orders_columns(list(normalized.columns))
-    validate_row_count(normalized)
-    out = normalized[list(RAW_ORDERS_COLUMNS)].copy()
-    validate_required_non_null(out)
-    validate_column_dtypes(out)
-    out["customer_id"] = out["customer_id"].astype(str)
+    validate_raw_orders_columns(list(normalized.columns), cfg)
+    validate_row_count(normalized, expected_columns=raw_cols)
+    out = normalized[raw_cols].copy()
+    validate_required_non_null(out, cfg)
+    validate_column_dtypes(out, cfg)
+    customer_col = cfg.columns.customer_id
+    out[customer_col] = out[customer_col].astype(str)
     return out
 
 
-def parse_raw_orders_csv(source: Union[str, Path, BinaryIO, bytes]) -> pd.DataFrame:
+def parse_raw_orders_csv(source: Union[str, Path, BinaryIO, bytes], cfg: Optional[AurumDatasetConfig] = None) -> pd.DataFrame:
     """Read a CSV and return a normalized raw_orders DataFrame.
 
     Raises CsvSchemaMismatch on shape mismatch — never falls back to demo data.
     """
+    if cfg is None:
+        cfg = load_dataset_config()
+    raw_cols = cfg.columns.resolve_raw_required_columns()
+
     raw_bytes: bytes | None = None
     if isinstance(source, bytes):
         raw_bytes = source
         if len(raw_bytes) == 0:
-            raise _schema_error("file is empty")
+            raise _schema_error("file is empty", expected_columns=raw_cols)
         if len(raw_bytes) > MAX_UPLOAD_BYTES:
             raise _schema_error(
-                f"file exceeds maximum size of {_format_byte_limit(MAX_UPLOAD_BYTES)}"
+                f"file exceeds maximum size of {_format_byte_limit(MAX_UPLOAD_BYTES)}",
+                expected_columns=raw_cols
             )
         buffer: BinaryIO = io.BytesIO(raw_bytes)
     else:
@@ -158,13 +181,13 @@ def parse_raw_orders_csv(source: Union[str, Path, BinaryIO, bytes]) -> pd.DataFr
     try:
         df = pd.read_csv(buffer)
     except pd.errors.EmptyDataError:
-        raise _schema_error("file is empty or not a valid CSV") from None
+        raise _schema_error("file is empty or not a valid CSV", expected_columns=raw_cols) from None
     except UnicodeDecodeError:
-        raise _schema_error("file is not a valid CSV") from None
+        raise _schema_error("file is not a valid CSV", expected_columns=raw_cols) from None
     except pd.errors.ParserError:
-        raise _schema_error("file is not a valid CSV") from None
+        raise _schema_error("file is not a valid CSV", expected_columns=raw_cols) from None
 
-    return validate_raw_orders_frame(df)
+    return validate_raw_orders_frame(df, cfg)
 
 
 def materialize_upload_pipeline(loader: DataLoader) -> None:
