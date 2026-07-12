@@ -27,8 +27,10 @@ import psycopg
 from psycopg import sql
 
 try:
+    from .config_loader import load_dataset_config
     from .db_config import db_connect_timeout, postgres_conninfo
 except ImportError:  # pragma: no cover - supports `python src/data_loader.py`
+    from config_loader import load_dataset_config
     from db_config import db_connect_timeout, postgres_conninfo
 
 DATA_DIR = Path("data")
@@ -343,19 +345,20 @@ class DataLoader:
 
     def _create_reconciliation_indexes(self) -> None:
         """Indexes for Silver anti-join checks S8/S10; additive, no result changes."""
+        line_item_key = ", ".join(load_dataset_config().columns.resolve_line_item_key())
         statements = [
-            """
+            f"""
             CREATE INDEX IF NOT EXISTS idx_bronze_valid_business_key
-            ON bronze_orders (invoice_no, stock_code, customer_id, invoice_date)
+            ON bronze_orders ({line_item_key})
             INCLUDE (quantity, unit_price)
             WHERE quantity > 0
               AND unit_price > 0
               AND invoice_no IS NOT NULL
               AND stock_code IS NOT NULL
             """,
-            """
+            f"""
             CREATE INDEX IF NOT EXISTS idx_silver_business_key
-            ON silver_orders (invoice_no, stock_code, customer_id, invoice_date)
+            ON silver_orders ({line_item_key})
             """,
         ]
         with self._pg_conn.cursor() as cur:

@@ -17,8 +17,19 @@ columns:
   unit_price: unit_price
   geography: country
   revenue: net_revenue
+  product_id: stock_code
+  product_description: description
+  order_id: invoice_no
+  order_id_expression: "REGEXP_REPLACE(invoice_no, '_[0-9]+$', '')"
+  line_item_key: [invoice_no, stock_code, customer_id, invoice_date]
 
 metrics:
   revenue_formula: "quantity * unit_price"
   top_revenue_dimension: country
   top_revenue_label: state
+  total_revenue_metric: total_revenue
+  total_orders_metric: total_orders
+  total_customers_metric: total_customers
+  average_order_value_metric: average_order_value
+  aggregate_revenue_metric: total_revenue
+  total_quantity_metric: total_quantity

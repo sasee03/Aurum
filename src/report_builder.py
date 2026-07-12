@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from .contracts import TRUSTED, WARNING
+from .config_loader import load_dataset_config
 from .cross_layer_validator import (
     build_business_impact,
     build_root_cause,
@@ -45,6 +46,7 @@ def _suggested_action(final_verdict: str, layer_status: dict, root_cause: dict) 
 
 
 def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
+    cfg = load_dataset_config()
     detection = run_detection_stack(loader)
 
     bronze_results = validate_bronze(loader)
@@ -86,7 +88,7 @@ def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
         )
 
     root_cause = build_root_cause(silver_results)
-    business_impact = build_business_impact(loader)
+    business_impact = build_business_impact(loader, cfg)
     suggested_action = _suggested_action(
         final_verdict, layer_status, root_cause
     )
@@ -97,7 +99,7 @@ def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
         "project": "Aurum",
         "description": "Cross-layer data quality validation framework",
         "pipeline": PIPELINE,
-        "dataset": "Olist Brazilian E-Commerce",
+        "dataset": cfg.dataset.name,
         "run_id": run_id,
         "layer_status": layer_status,
         "final_verdict": final_verdict,

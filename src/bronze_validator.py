@@ -15,21 +15,9 @@ from .baseline import column_stats, tolerance_band
 from .contracts import BRONZE, CheckResult, FAIL, PASS, WARN
 from .data_loader import DataLoader
 from .resilience import Check, run_checks
+from .config_loader import load_dataset_config, AurumDatasetConfig
 
-REQUIRED_COLUMNS = [
-    "invoice_no",
-    "stock_code",
-    "description",
-    "quantity",
-    "invoice_date",
-    "unit_price",
-    "customer_id",
-    "country",
-]
 
-MANDATORY_NOT_NULL = ["invoice_no", "quantity", "invoice_date", "unit_price", "country"]
-
-DUP_KEY = ["invoice_no", "stock_code", "customer_id", "invoice_date"]
 
 # Fallback thresholds used only when no historical baseline is available.
 CONFIG_MIN_ROWS = 90_000
@@ -42,7 +30,7 @@ def _history(loader: DataLoader) -> Optional[pd.DataFrame]:
     return None
 
 
-def b1_source_to_bronze_count(loader: DataLoader) -> CheckResult:
+def b1_source_to_bronze_count(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
     source = loader.count("raw_orders") if loader.table_exists("raw_orders") else None
     bronze = loader.count("bronze_orders")
     if source is None:
@@ -61,7 +49,7 @@ def b1_source_to_bronze_count(loader: DataLoader) -> CheckResult:
     )
 
 
-def b2_count_band(loader: DataLoader) -> CheckResult:
+def b2_count_band(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
     bronze = loader.count("bronze_orders")
     stats = column_stats(_history(loader), "bronze_count")
     if stats and stats["std"] > 0:
@@ -87,7 +75,7 @@ def b2_count_band(loader: DataLoader) -> CheckResult:
     )
 
 
-def b3_empty_table(loader: DataLoader) -> CheckResult:
+def b3_empty_table(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
     bronze = loader.count("bronze_orders")
     status = PASS if bronze > 0 else FAIL
     detail = "Bronze table has rows." if bronze > 0 else "Bronze table is empty."
@@ -98,9 +86,19 @@ def b3_empty_table(loader: DataLoader) -> CheckResult:
     )
 
 
-def b4_required_columns(loader: DataLoader) -> CheckResult:
+def b4_required_columns(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
+    required_cols = [
+        cfg.columns.primary_key,
+        cfg.columns.product_id,
+        cfg.columns.product_description,
+        cfg.columns.quantity,
+        cfg.columns.timestamp,
+        cfg.columns.unit_price,
+        cfg.columns.customer_id,
+        cfg.columns.geography,
+    ]
     cols = loader.columns("bronze_orders")
-    missing = [c for c in REQUIRED_COLUMNS if c not in cols]
+    missing = [c for c in required_cols if c not in cols]
     status = PASS if not missing else FAIL
     detail = (
         "All required columns are present."
@@ -109,15 +107,25 @@ def b4_required_columns(loader: DataLoader) -> CheckResult:
     )
     return CheckResult(
         "B4", "Required Columns Present", BRONZE, status,
-        observed=cols, expected=REQUIRED_COLUMNS, detail=detail,
+        observed=cols, expected=required_cols, detail=detail,
         evidence_query="SELECT * FROM bronze_orders LIMIT 0",
     )
 
 
-def b5_extra_missing_columns(loader: DataLoader) -> CheckResult:
+def b5_extra_missing_columns(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
+    required_cols = [
+        cfg.columns.primary_key,
+        cfg.columns.product_id,
+        cfg.columns.product_description,
+        cfg.columns.quantity,
+        cfg.columns.timestamp,
+        cfg.columns.unit_price,
+        cfg.columns.customer_id,
+        cfg.columns.geography,
+    ]
     cols = loader.columns("bronze_orders")
-    missing = [c for c in REQUIRED_COLUMNS if c not in cols]
-    extra = [c for c in cols if c not in REQUIRED_COLUMNS]
+    missing = [c for c in required_cols if c not in cols]
+    extra = [c for c in cols if c not in required_cols]
     status = WARN if missing else PASS
     detail = f"missing_columns={missing}, extra_columns={extra}"
     return CheckResult(
@@ -130,10 +138,17 @@ def b5_extra_missing_columns(loader: DataLoader) -> CheckResult:
     )
 
 
-def b6_mandatory_nulls(loader: DataLoader) -> CheckResult:
+def b6_mandatory_nulls(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
+    mandatory_not_null = [
+        cfg.columns.primary_key,
+        cfg.columns.quantity,
+        cfg.columns.timestamp,
+        cfg.columns.unit_price,
+        cfg.columns.geography,
+    ]
     cols = loader.columns("bronze_orders")
     null_counts = {}
-    for col in MANDATORY_NOT_NULL:
+    for col in mandatory_not_null:
         if col in cols:
             null_counts[col] = int(
                 loader.scalar(f"SELECT COUNT(*) FROM bronze_orders WHERE {col} IS NULL")
@@ -149,37 +164,45 @@ def b6_mandatory_nulls(loader: DataLoader) -> CheckResult:
         "B6", "Null Count per Mandatory Column", BRONZE, status,
         observed=null_counts, expected={c: 0 for c in null_counts}, detail=detail,
         evidence_query=(
-            "SELECT COUNT(*) FROM bronze_orders WHERE invoice_no IS NULL"
+            f"SELECT COUNT(*) FROM bronze_orders WHERE {cfg.columns.primary_key} IS NULL"
         ),
     )
 
 
-def b7_negative_values(loader: DataLoader) -> CheckResult:
-    neg_qty = int(loader.scalar("SELECT COUNT(*) FROM bronze_orders WHERE quantity < 0"))
+def b7_negative_values(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
+    qty_col = cfg.columns.quantity
+    price_col = cfg.columns.unit_price
+    neg_qty = int(loader.scalar(f"SELECT COUNT(*) FROM bronze_orders WHERE {qty_col} < 0"))
     neg_price = int(
-        loader.scalar("SELECT COUNT(*) FROM bronze_orders WHERE unit_price < 0")
+        loader.scalar(f"SELECT COUNT(*) FROM bronze_orders WHERE {price_col} < 0")
     )
     total = neg_qty + neg_price
     status = PASS if total == 0 else WARN
     detail = (
-        "No negative quantity or unit_price values."
+        f"No negative {qty_col} or {price_col} values."
         if total == 0
         else (
-            f"Profiled {neg_qty:,} negative-quantity and {neg_price:,} "
-            "negative-price rows (expected to be cleaned in Silver)."
+            f"Profiled {neg_qty:,} negative-{qty_col} and {neg_price:,} "
+            f"negative-{price_col} rows (expected to be cleaned in Silver)."
         )
     )
     return CheckResult(
         "B7", "Negative Value Profiling", BRONZE, status,
         observed={"negative_quantity": neg_qty, "negative_unit_price": neg_price},
         expected="profiled (not blocking at Bronze)", detail=detail,
-        evidence_query="SELECT COUNT(*) FROM bronze_orders WHERE quantity < 0",
+        evidence_query=f"SELECT COUNT(*) FROM bronze_orders WHERE {qty_col} < 0",
     )
 
 
-def b8_duplicates(loader: DataLoader) -> CheckResult:
+def b8_duplicates(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
+    key_cols_list = [
+        cfg.columns.primary_key,
+        cfg.columns.product_id,
+        cfg.columns.customer_id,
+        cfg.columns.timestamp
+    ]
+    key_cols = ", ".join(key_cols_list)
     total = loader.count("bronze_orders")
-    key_cols = ", ".join(DUP_KEY)
     dup_rows = int(
         loader.scalar(
             f"""
@@ -209,48 +232,50 @@ def b8_duplicates(loader: DataLoader) -> CheckResult:
     )
 
 
-def b9_invoice_date_parse(loader: DataLoader) -> CheckResult:
+def b9_invoice_date_parse(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
+    ts_col = cfg.columns.timestamp
     bad = int(
         loader.scalar(
-            """
+            f"""
             SELECT COUNT(*) FROM bronze_orders
-            WHERE invoice_date IS NOT NULL
-              AND TRY_CAST(invoice_date AS DATE) IS NULL
+            WHERE {ts_col} IS NOT NULL
+              AND TRY_CAST({ts_col} AS DATE) IS NULL
             """
         )
     )
     status = PASS if bad == 0 else FAIL
     detail = (
-        "All non-null invoice_date values parse as dates."
+        f"All non-null {ts_col} values parse as dates."
         if bad == 0
-        else f"{bad:,} rows have non-null invoice_date that does not parse as a date."
+        else f"{bad:,} rows have non-null {ts_col} that does not parse as a date."
     )
     return CheckResult(
         "B9", "Invoice Date Parse Validity", BRONZE, status,
         observed=bad, expected=0, detail=detail,
         evidence_query=(
-            "SELECT COUNT(*) FROM bronze_orders "
-            "WHERE invoice_date IS NOT NULL "
-            "AND TRY_CAST(invoice_date AS DATE) IS NULL"
+            f"SELECT COUNT(*) FROM bronze_orders "
+            f"WHERE {ts_col} IS NOT NULL "
+            f"AND TRY_CAST({ts_col} AS DATE) IS NULL"
         ),
     )
 
 
-def b10_future_invoice_dates(loader: DataLoader) -> CheckResult:
+def b10_future_invoice_dates(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
+    ts_col = cfg.columns.timestamp
     future = int(
         loader.scalar(
-            """
+            f"""
             SELECT COUNT(*) FROM bronze_orders
-            WHERE TRY_CAST(invoice_date AS DATE) > CURRENT_DATE
+            WHERE TRY_CAST({ts_col} AS DATE) > CURRENT_DATE
             """
         )
     )
     status = PASS if future == 0 else WARN
     detail = (
-        "No invoice_date values are in the future."
+        f"No {ts_col} values are in the future."
         if future == 0
         else (
-            f"{future:,} rows have invoice_date after the run date "
+            f"{future:,} rows have {ts_col} after the run date "
             "(profiled; expected to be filtered in Silver)."
         )
     )
@@ -258,19 +283,20 @@ def b10_future_invoice_dates(loader: DataLoader) -> CheckResult:
         "B10", "Future Invoice Date Profiling", BRONZE, status,
         observed=future, expected=0, detail=detail,
         evidence_query=(
-            "SELECT COUNT(*) FROM bronze_orders "
-            "WHERE TRY_CAST(invoice_date AS DATE) > CURRENT_DATE"
+            f"SELECT COUNT(*) FROM bronze_orders "
+            f"WHERE TRY_CAST({ts_col} AS DATE) > CURRENT_DATE"
         ),
     )
 
 
 def validate_bronze(loader: DataLoader) -> list[CheckResult]:
+    cfg = load_dataset_config()
     core = run_checks(
         [
-            Check(lambda: b1_source_to_bronze_count(loader), "B1", "Source to Bronze Row Count", BRONZE),
-            Check(lambda: b2_count_band(loader), "B2", "Low / High / Normal Count", BRONZE),
-            Check(lambda: b3_empty_table(loader), "B3", "Empty Table Check", BRONZE),
-            Check(lambda: b4_required_columns(loader), "B4", "Required Columns Present", BRONZE),
+            Check(lambda: b1_source_to_bronze_count(loader, cfg), "B1", "Source to Bronze Row Count", BRONZE),
+            Check(lambda: b2_count_band(loader, cfg), "B2", "Low / High / Normal Count", BRONZE),
+            Check(lambda: b3_empty_table(loader, cfg), "B3", "Empty Table Check", BRONZE),
+            Check(lambda: b4_required_columns(loader, cfg), "B4", "Required Columns Present", BRONZE),
         ]
     )
     # Preserve original control flow: only a hard FAIL on required columns stops
@@ -279,12 +305,12 @@ def validate_bronze(loader: DataLoader) -> list[CheckResult]:
         return core
     return core + run_checks(
         [
-            Check(lambda: b5_extra_missing_columns(loader), "B5", "Extra / Missing Columns", BRONZE),
-            Check(lambda: b6_mandatory_nulls(loader), "B6", "Null Count per Mandatory Column", BRONZE),
-            Check(lambda: b7_negative_values(loader), "B7", "Negative Value Profiling", BRONZE),
-            Check(lambda: b8_duplicates(loader), "B8", "Duplicate Check", BRONZE),
-            Check(lambda: b9_invoice_date_parse(loader), "B9", "Invoice Date Parse Validity", BRONZE),
-            Check(lambda: b10_future_invoice_dates(loader), "B10", "Future Invoice Date Profiling", BRONZE),
+            Check(lambda: b5_extra_missing_columns(loader, cfg), "B5", "Extra / Missing Columns", BRONZE),
+            Check(lambda: b6_mandatory_nulls(loader, cfg), "B6", "Null Count per Mandatory Column", BRONZE),
+            Check(lambda: b7_negative_values(loader, cfg), "B7", "Negative Value Profiling", BRONZE),
+            Check(lambda: b8_duplicates(loader, cfg), "B8", "Duplicate Check", BRONZE),
+            Check(lambda: b9_invoice_date_parse(loader, cfg), "B9", "Invoice Date Parse Validity", BRONZE),
+            Check(lambda: b10_future_invoice_dates(loader, cfg), "B10", "Future Invoice Date Profiling", BRONZE),
         ]
     )
 

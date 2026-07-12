@@ -19,10 +19,17 @@ from .contracts import (
     FAIL,
     PASS,
 )
-from .data_loader import ORDER_ID_FROM_LINE, DataLoader
+from .config_loader import AurumDatasetConfig, load_dataset_config
+from .data_loader import DataLoader
 from .resilience import Check, run_checks
 from .revenue_tolerance import REVENUE_ROUNDING_TOLERANCE, revenue_tolerance_detail
-from .table_specs import VALID_ROW_PREDICATE
+
+
+def _valid_row_predicate(cfg: AurumDatasetConfig) -> str:
+    return (
+        f"{cfg.columns.quantity} > 0 AND {cfg.columns.unit_price} > 0 "
+        f"AND {cfg.columns.primary_key} IS NOT NULL AND {cfg.columns.product_id} IS NOT NULL"
+    )
 
 
 def _result(
@@ -54,19 +61,22 @@ def _result(
     )
 
 
-def rec_count_unexplained_loss(loader: DataLoader) -> CheckResult:
+def rec_count_unexplained_loss(loader: DataLoader, cfg: AurumDatasetConfig | None = None) -> CheckResult:
     """Valid Bronze rows that vanished from Silver without a legitimate reason."""
+    cfg = cfg or load_dataset_config()
+    valid_predicate = _valid_row_predicate(cfg)
+    primary_key = cfg.columns.primary_key
     valid_bronze = int(
-        loader.scalar(f"SELECT COUNT(*) FROM bronze_orders WHERE {VALID_ROW_PREDICATE}")
+        loader.scalar(f"SELECT COUNT(*) FROM bronze_orders WHERE {valid_predicate}")
     )
     silver = loader.count("silver_orders")
     missing_valid = int(
         loader.scalar(
             f"""
             SELECT COUNT(*) FROM bronze_orders b
-            WHERE {VALID_ROW_PREDICATE}
+            WHERE {valid_predicate}
               AND NOT EXISTS (
-                SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no
+                SELECT 1 FROM silver_orders s WHERE s.{primary_key} = b.{primary_key}
               )
             """
         )
@@ -74,8 +84,8 @@ def rec_count_unexplained_loss(loader: DataLoader) -> CheckResult:
     # Legitimate removals: invalid rows (qty<=0 or price<=0) never expected in Silver.
     legit_removable = int(
         loader.scalar(
-            "SELECT COUNT(*) FROM bronze_orders "
-            "WHERE quantity <= 0 OR unit_price <= 0"
+            f"SELECT COUNT(*) FROM bronze_orders WHERE {cfg.columns.quantity} <= 0 "
+            f"OR {cfg.columns.unit_price} <= 0"
         )
     )
     bronze_total = loader.count("bronze_orders")
@@ -105,17 +115,18 @@ def rec_count_unexplained_loss(loader: DataLoader) -> CheckResult:
         ),
         sql=(
             "SELECT COUNT(*) FROM bronze_orders b WHERE "
-            f"{VALID_ROW_PREDICATE} AND NOT EXISTS "
-            "(SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)"
+            f"{valid_predicate} AND NOT EXISTS "
+            f"(SELECT 1 FROM silver_orders s WHERE s.{primary_key} = b.{primary_key})"
         ),
     )
 
 
-def rec_revenue(loader: DataLoader) -> CheckResult:
+def rec_revenue(loader: DataLoader, cfg: AurumDatasetConfig | None = None) -> CheckResult:
     """Silver revenue vs Gold total_revenue — within documented rounding tolerance."""
+    cfg = cfg or load_dataset_config()
     tolerance = REVENUE_ROUNDING_TOLERANCE
-    silver_rev = float(loader.scalar("SELECT SUM(net_revenue) FROM silver_orders") or 0)
-    gold_rev = float(loader.scalar("SELECT total_revenue FROM gold_metrics") or 0)
+    silver_rev = float(loader.scalar(f"SELECT SUM({cfg.columns.revenue}) FROM silver_orders") or 0)
+    gold_rev = float(loader.scalar(f"SELECT {cfg.metrics.total_revenue_metric} FROM gold_metrics") or 0)
     diff = abs(silver_rev - gold_rev)
     status = PASS if diff <= tolerance else FAIL
     tol_note = revenue_tolerance_detail(tolerance)
@@ -138,30 +149,33 @@ def rec_revenue(loader: DataLoader) -> CheckResult:
                 f"diff={diff:,.2f} exceeds tolerance {tolerance}."
             )
         ),
-        sql="SELECT SUM(net_revenue) FROM silver_orders",
+        sql=f"SELECT SUM({cfg.columns.revenue}) FROM silver_orders",
         table="gold_metrics",
         revenue_rounding_tolerance=tolerance,
     )
 
 
-def rec_key_set(loader: DataLoader) -> CheckResult:
+def rec_key_set(loader: DataLoader, cfg: AurumDatasetConfig | None = None) -> CheckResult:
     """invoice_no in Silver must be subset of Bronze; Gold orders <= Silver orders."""
+    cfg = cfg or load_dataset_config()
+    primary_key = cfg.columns.primary_key
+    business_key = cfg.columns.resolve_business_key()
     silver_not_in_bronze = int(
         loader.scalar(
-            """
+            f"""
             SELECT COUNT(*) FROM silver_orders s
             WHERE NOT EXISTS (
-                SELECT 1 FROM bronze_orders b WHERE b.invoice_no = s.invoice_no
+                SELECT 1 FROM bronze_orders b WHERE b.{primary_key} = s.{primary_key}
             )
             """
         )
     )
     silver_distinct = int(
         loader.scalar(
-            f"SELECT COUNT(DISTINCT {ORDER_ID_FROM_LINE}) FROM silver_orders"
+            f"SELECT COUNT(DISTINCT {business_key}) FROM silver_orders"
         )
     )
-    gold_orders = int(loader.scalar("SELECT total_orders FROM gold_metrics") or 0)
+    gold_orders = int(loader.scalar(f"SELECT {cfg.metrics.total_orders_metric} FROM gold_metrics") or 0)
     gold_excess = gold_orders - silver_distinct
     violations = silver_not_in_bronze + max(0, gold_excess)
     status = PASS if violations == 0 else FAIL
@@ -186,24 +200,27 @@ def rec_key_set(loader: DataLoader) -> CheckResult:
         ),
         sql=(
             "SELECT COUNT(*) FROM silver_orders s WHERE NOT EXISTS "
-            "(SELECT 1 FROM bronze_orders b WHERE b.invoice_no = s.invoice_no)"
+            f"(SELECT 1 FROM bronze_orders b WHERE b.{primary_key} = s.{primary_key})"
         ),
     )
 
 
-def rec_aggregate_crosscheck(loader: DataLoader) -> CheckResult:
+def rec_aggregate_crosscheck(loader: DataLoader, cfg: AurumDatasetConfig | None = None) -> CheckResult:
     """Recompute all Gold aggregates from Silver and compare."""
+    cfg = cfg or load_dataset_config()
     silver = loader.query(
         f"""
         SELECT
-            SUM(net_revenue) AS revenue,
-            COUNT(DISTINCT {ORDER_ID_FROM_LINE}) AS orders,
-            COUNT(DISTINCT customer_id) AS customers
+            SUM({cfg.columns.revenue}) AS revenue,
+            COUNT(DISTINCT {cfg.columns.resolve_business_key()}) AS orders,
+            COUNT(DISTINCT {cfg.columns.customer_id}) AS customers
         FROM silver_orders
         """
     ).to_dict("records")[0]
     gold = loader.query(
-        "SELECT total_revenue, total_orders, total_customers FROM gold_metrics"
+        f"SELECT {cfg.metrics.total_revenue_metric} AS total_revenue, "
+        f"{cfg.metrics.total_orders_metric} AS total_orders, "
+        f"{cfg.metrics.total_customers_metric} AS total_customers FROM gold_metrics"
     ).to_dict("records")[0]
 
     mismatches = []
@@ -229,19 +246,20 @@ def rec_aggregate_crosscheck(loader: DataLoader) -> CheckResult:
             else f"Aggregate mismatch in: {mismatches}."
         ),
         sql=(
-            f"SELECT SUM(net_revenue), COUNT(DISTINCT {ORDER_ID_FROM_LINE}), "
-            "COUNT(DISTINCT customer_id) FROM silver_orders"
+            f"SELECT SUM({cfg.columns.revenue}), COUNT(DISTINCT {cfg.columns.resolve_business_key()}), "
+            f"COUNT(DISTINCT {cfg.columns.customer_id}) FROM silver_orders"
         ),
         table="gold_metrics",
     )
 
 
 def run_reconciliation_layer(loader: DataLoader) -> list[CheckResult]:
+    cfg = load_dataset_config()
     checks: list[Check] = []
     if loader.table_exists("bronze_orders") and loader.table_exists("silver_orders"):
-        checks.append(Check(lambda: rec_count_unexplained_loss(loader), "L2-REC-COUNT", "Count Reconciliation: Unexplained Valid Row Loss", SILVER))
-        checks.append(Check(lambda: rec_key_set(loader), "L2-REC-KEY", "Key-Set Reconciliation", SILVER))
+        checks.append(Check(lambda: rec_count_unexplained_loss(loader, cfg), "L2-REC-COUNT", "Count Reconciliation: Unexplained Valid Row Loss", SILVER))
+        checks.append(Check(lambda: rec_key_set(loader, cfg), "L2-REC-KEY", "Key-Set Reconciliation", SILVER))
     if loader.table_exists("silver_orders") and loader.table_exists("gold_metrics"):
-        checks.append(Check(lambda: rec_revenue(loader), "L2-REC-REV", "Revenue Reconciliation", GOLD))
-        checks.append(Check(lambda: rec_aggregate_crosscheck(loader), "L2-REC-AGG", "Aggregate Cross-Check", GOLD))
+        checks.append(Check(lambda: rec_revenue(loader, cfg), "L2-REC-REV", "Revenue Reconciliation", GOLD))
+        checks.append(Check(lambda: rec_aggregate_crosscheck(loader, cfg), "L2-REC-AGG", "Aggregate Cross-Check", GOLD))
     return run_checks(checks)

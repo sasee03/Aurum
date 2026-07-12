@@ -21,8 +21,23 @@ _COLUMN_FIELDS = (
     "unit_price",
     "geography",
     "revenue",
+    "product_id",
+    "product_description",
+    "order_id",
+    "order_id_expression",
+    "line_item_key",
 )
-_METRIC_FIELDS = ("revenue_formula", "top_revenue_dimension", "top_revenue_label")
+_METRIC_FIELDS = (
+    "revenue_formula",
+    "top_revenue_dimension",
+    "top_revenue_label",
+    "total_revenue_metric",
+    "total_orders_metric",
+    "total_customers_metric",
+    "average_order_value_metric",
+    "aggregate_revenue_metric",
+    "total_quantity_metric",
+)
 
 
 @dataclass(frozen=True)
@@ -49,13 +64,34 @@ class ColumnsInfo:
     unit_price: str
     geography: str
     revenue: str
+    product_id: str
+    product_description: str
+    order_id: str
+    order_id_expression: str
+    line_item_key: tuple[str, str, str, str]
+
+    def resolve_identifier(self) -> str:
+        return self.primary_key
+
+    def resolve_business_key(self) -> str:
+        return self.order_id_expression if self.order_id_expression else self.order_id
+
+    def resolve_line_item_key(self) -> tuple[str, str, str, str]:
+        return self.line_item_key
 
 
 @dataclass(frozen=True)
 class MetricsInfo:
     revenue_formula: str
+    order_id_expression: str
     top_revenue_dimension: str
     top_revenue_label: str
+    total_revenue_metric: str
+    total_orders_metric: str
+    total_customers_metric: str
+    average_order_value_metric: str
+    aggregate_revenue_metric: str
+    total_quantity_metric: str
 
 
 @dataclass(frozen=True)
@@ -127,11 +163,23 @@ def _parse_raw_config(raw: Any, source: str) -> AurumDatasetConfig:
             unit_price=str(columns_raw["unit_price"]),
             geography=str(columns_raw["geography"]),
             revenue=str(columns_raw["revenue"]),
+            product_id=str(columns_raw["product_id"]),
+            product_description=str(columns_raw["product_description"]),
+            order_id=str(columns_raw["order_id"]),
+            order_id_expression=str(columns_raw.get("order_id_expression", columns_raw["order_id"])),
+            line_item_key=tuple(str(column) for column in columns_raw["line_item_key"]),
         ),
         metrics=MetricsInfo(
             revenue_formula=str(metrics_raw["revenue_formula"]),
+            order_id_expression=str(columns_raw.get("order_id_expression", columns_raw["order_id"])),
             top_revenue_dimension=str(metrics_raw["top_revenue_dimension"]),
             top_revenue_label=str(metrics_raw["top_revenue_label"]),
+            total_revenue_metric=str(metrics_raw["total_revenue_metric"]),
+            total_orders_metric=str(metrics_raw["total_orders_metric"]),
+            total_customers_metric=str(metrics_raw["total_customers_metric"]),
+            average_order_value_metric=str(metrics_raw["average_order_value_metric"]),
+            aggregate_revenue_metric=str(metrics_raw["aggregate_revenue_metric"]),
+            total_quantity_metric=str(metrics_raw["total_quantity_metric"]),
         ),
     )
 

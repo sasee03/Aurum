@@ -31,6 +31,10 @@ def test_load_olist_yaml_has_required_sections():
     assert cfg.columns.unit_price == "unit_price"
     assert cfg.columns.geography == "country"
     assert cfg.columns.revenue == "net_revenue"
+    assert cfg.columns.resolve_line_item_key() == (
+        "invoice_no", "stock_code", "customer_id", "invoice_date",
+    )
+    assert cfg.columns.resolve_business_key() == "REGEXP_REPLACE(invoice_no, '_[0-9]+$', '')"
     assert cfg.metrics.revenue_formula == "quantity * unit_price"
     assert cfg.metrics.top_revenue_dimension == "country"
     assert cfg.metrics.top_revenue_label == "state"
@@ -58,10 +62,21 @@ def test_env_override(tmp_path, monkeypatch):
               unit_price: price
               geography: region
               revenue: revenue
+              product_id: prod_id
+              product_description: prod_desc
+              order_id: ord_id
+              order_id_expression: ord_id
+              line_item_key: [id, prod_id, cust_id, created_at]
             metrics:
               revenue_formula: "qty * price"
               top_revenue_dimension: region
               top_revenue_label: region
+              total_revenue_metric: t_rev
+              total_orders_metric: t_ord
+              total_customers_metric: t_cust
+              average_order_value_metric: a_o_v
+              aggregate_revenue_metric: a_rev
+              total_quantity_metric: t_qty
             """
         ).strip(),
         encoding="utf-8",
@@ -109,10 +124,20 @@ def test_missing_required_key_raises_clear_error(tmp_path):
               unit_price: unit_price
               geography: country
               revenue: net_revenue
+              product_id: stock_code
+              product_description: description
+              order_id: invoice_no
+              order_id_expression: invoice_no
             metrics:
               revenue_formula: "quantity * unit_price"
               top_revenue_dimension: country
               top_revenue_label: state
+              total_revenue_metric: total_revenue
+              total_orders_metric: total_orders
+              total_customers_metric: total_customers
+              average_order_value_metric: average_order_value
+              aggregate_revenue_metric: total_revenue
+              total_quantity_metric: total_quantity
             """
         ).strip(),
         encoding="utf-8",

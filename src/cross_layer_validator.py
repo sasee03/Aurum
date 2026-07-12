@@ -19,13 +19,16 @@ from .contracts import (
     SILVER,
     WARN,
 )
+from .config_loader import AurumDatasetConfig, load_dataset_config
 from .data_loader import DataLoader
 from .resilience import Check, run_checks
 from .engines.lineage_engine import LineageIntelligenceEngine
 
 lineage_engine = LineageIntelligenceEngine()
 
-VALID_BRONZE_PREDICATE = "quantity > 0 AND unit_price > 0"
+
+def _valid_bronze_predicate(cfg: AurumDatasetConfig) -> str:
+    return f"{cfg.columns.quantity} > 0 AND {cfg.columns.unit_price} > 0"
 
 
 def _by_id(results: list[CheckResult], check_id: str) -> Optional[CheckResult]:
@@ -46,7 +49,7 @@ def _rollup(results: list[CheckResult], ids: list[str]) -> str:
     return PASS
 
 
-def x1_source_to_bronze(bronze_results: list[CheckResult]) -> CheckResult:
+def x1_source_to_bronze(bronze_results: list[CheckResult], cfg: AurumDatasetConfig | None = None) -> CheckResult:
     status = _rollup(bronze_results, ["B1", "B3"])
     b1 = _by_id(bronze_results, "B1")
     detail = b1.detail if b1 else "Source-to-Bronze completeness evaluated."
@@ -56,7 +59,7 @@ def x1_source_to_bronze(bronze_results: list[CheckResult]) -> CheckResult:
     )
 
 
-def x2_bronze_to_silver(silver_results: list[CheckResult]) -> CheckResult:
+def x2_bronze_to_silver(silver_results: list[CheckResult], cfg: AurumDatasetConfig | None = None) -> CheckResult:
     ids = ["S1", "S8", "S9", "S10"]
     status = _rollup(silver_results, ids)
     failed = [r.check_id for r in silver_results if r.check_id in ids and r.status == FAIL]
@@ -71,7 +74,7 @@ def x2_bronze_to_silver(silver_results: list[CheckResult]) -> CheckResult:
     )
 
 
-def x3_silver_to_gold(gold_results: list[CheckResult]) -> CheckResult:
+def x3_silver_to_gold(gold_results: list[CheckResult], cfg: AurumDatasetConfig | None = None) -> CheckResult:
     ids = ["G1", "G2", "G3", "G4", "G6"]
     status = _rollup(gold_results, ids)
     detail = (
@@ -88,7 +91,7 @@ def x3_silver_to_gold(gold_results: list[CheckResult]) -> CheckResult:
 def first_failed_layer(layer_status: dict) -> Optional[str]:
     return lineage_engine.first_failed_layer(layer_status)
 
-def x4_first_failed_layer(layer_status: dict) -> CheckResult:
+def x4_first_failed_layer(layer_status: dict, cfg: AurumDatasetConfig | None = None) -> CheckResult:
     layer = lineage_engine.first_failed_layer(layer_status)
     status = PASS if layer is None else FAIL
     detail = (
@@ -144,7 +147,7 @@ def build_root_cause(silver_results: list[CheckResult]) -> dict:
     }
 
 
-def build_business_impact(loader: DataLoader) -> dict:
+def build_business_impact(loader: DataLoader, cfg: AurumDatasetConfig | None = None) -> dict:
     # Report assembly (not a check) reads tables directly, so guard missing
     # tables here: without this an absent bronze/gold would crash the whole run.
     if not (
@@ -154,11 +157,14 @@ def build_business_impact(loader: DataLoader) -> dict:
             "status": "NOT_AVAILABLE",
             "detail": "Expected baseline not available (bronze_orders/gold_metrics missing).",
         }
+    cfg = cfg or load_dataset_config()
     expected = loader.scalar(
-        f"SELECT COALESCE(SUM(quantity * unit_price), 0) "
-        f"FROM bronze_orders WHERE {VALID_BRONZE_PREDICATE}"
+        f"SELECT COALESCE(SUM({cfg.columns.quantity} * {cfg.columns.unit_price}), 0) "
+        f"FROM bronze_orders WHERE {_valid_bronze_predicate(cfg)}"
     )
-    actual = loader.scalar("SELECT COALESCE(total_revenue, 0) FROM gold_metrics")
+    actual = loader.scalar(
+        f"SELECT COALESCE({cfg.metrics.total_revenue_metric}, 0) FROM gold_metrics"
+    )
 
     if expected is None or actual is None:
         return {
@@ -188,11 +194,12 @@ def validate_cross_layer(
     gold_results: list[CheckResult],
     layer_status: dict,
 ) -> list[CheckResult]:
+    cfg = load_dataset_config()
     return run_checks(
         [
-            Check(lambda: x1_source_to_bronze(bronze_results), "X1", "Source to Bronze Completeness", CROSS_LAYER),
-            Check(lambda: x2_bronze_to_silver(silver_results), "X2", "Bronze to Silver Transformation Quality", CROSS_LAYER),
-            Check(lambda: x3_silver_to_gold(gold_results), "X3", "Silver to Gold Metric Correctness", CROSS_LAYER),
-            Check(lambda: x4_first_failed_layer(layer_status), "X4", "First Failed Layer Locator", CROSS_LAYER),
+            Check(lambda: x1_source_to_bronze(bronze_results, cfg), "X1", "Source to Bronze Completeness", CROSS_LAYER),
+            Check(lambda: x2_bronze_to_silver(silver_results, cfg), "X2", "Bronze to Silver Transformation Quality", CROSS_LAYER),
+            Check(lambda: x3_silver_to_gold(gold_results, cfg), "X3", "Silver to Gold Metric Correctness", CROSS_LAYER),
+            Check(lambda: x4_first_failed_layer(layer_status, cfg), "X4", "First Failed Layer Locator", CROSS_LAYER),
         ]
     )

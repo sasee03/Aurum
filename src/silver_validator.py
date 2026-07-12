@@ -16,17 +16,15 @@ from .baseline import column_stats, tolerance_band
 from .contracts import CheckResult, FAIL, PASS, SILVER, WARN
 from .data_loader import DataLoader
 from .resilience import Check, run_checks
+from .config_loader import load_dataset_config, AurumDatasetConfig
 
-MANDATORY_NOT_NULL = [
-    "invoice_no", "stock_code", "quantity", "unit_price", "invoice_date", "country",
-]
 
-# A Bronze row represents a valid business record when it has a positive quantity
-# and price and identifying keys. Such rows MUST survive into Silver.
-VALID_PREDICATE = (
-    "quantity > 0 AND unit_price > 0 "
-    "AND invoice_no IS NOT NULL AND stock_code IS NOT NULL"
-)
+
+def _valid_predicate(cfg: AurumDatasetConfig) -> str:
+    return (
+        f"{cfg.columns.quantity} > 0 AND {cfg.columns.unit_price} > 0 "
+        f"AND {cfg.columns.primary_key} IS NOT NULL AND {cfg.columns.product_id} IS NOT NULL"
+    )
 
 # Fallback drop expectations when no historical baseline exists.
 EXPECTED_MIN_DROP = 2.0
@@ -34,25 +32,24 @@ EXPECTED_MAX_DROP = 10.0
 
 # Olist line items use quantity=1; the planted Silver bug filters on unit_price.
 HIGH_PRICE_THRESHOLD = 20.0
-BUSINESS_KEY = ("invoice_no", "stock_code", "customer_id", "invoice_date")
 
 
 def _business_key_match(
-    bronze_alias: str = "b", silver_alias: str = "s", *, native: bool = False
+    business_key: tuple[str, ...], bronze_alias: str = "b", silver_alias: str = "s", *, native: bool = False
 ) -> str:
     # Intended for EXISTS/NOT EXISTS filter predicates only; do not use this
     # helper to produce a standalone boolean value.
     if native:
         return " AND ".join(
             f"{silver_alias}.{column} IS NOT DISTINCT FROM {bronze_alias}.{column}"
-            for column in BUSINESS_KEY
+            for column in business_key
         )
     return " AND ".join(
         (
             f"({silver_alias}.{column} = {bronze_alias}.{column} "
             f"OR ({silver_alias}.{column} IS NULL AND {bronze_alias}.{column} IS NULL))"
         )
-        for column in BUSINESS_KEY
+        for column in business_key
     )
 
 
@@ -69,7 +66,7 @@ def _drop_pct(loader: DataLoader) -> tuple[int, int, float]:
     return bronze, silver, drop
 
 
-def s1_drop_percentage(loader: DataLoader) -> CheckResult:
+def s1_drop_percentage(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
     bronze, silver, drop = _drop_pct(loader)
     if bronze == 0:
         # bronze_orders is expected to be non-empty; an empty upstream is itself
@@ -111,7 +108,7 @@ def s1_drop_percentage(loader: DataLoader) -> CheckResult:
     )
 
 
-def s2_expected_drop(loader: DataLoader) -> CheckResult:
+def s2_expected_drop(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
     bronze, _, drop = _drop_pct(loader)
     if bronze == 0:
         return CheckResult(
@@ -144,8 +141,14 @@ def s2_expected_drop(loader: DataLoader) -> CheckResult:
     )
 
 
-def s3_dedup_count(loader: DataLoader) -> CheckResult:
-    key = "invoice_no, stock_code, customer_id, invoice_date"
+def s3_dedup_count(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
+    business_key = (
+        cfg.columns.primary_key,
+        cfg.columns.product_id,
+        cfg.columns.customer_id,
+        cfg.columns.timestamp,
+    )
+    key = ", ".join(business_key)
     bronze_dups = int(
         loader.scalar(
             f"""
@@ -183,10 +186,18 @@ def s3_dedup_count(loader: DataLoader) -> CheckResult:
     )
 
 
-def s4_mandatory_nulls(loader: DataLoader) -> CheckResult:
+def s4_mandatory_nulls(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
     cols = loader.columns("silver_orders")
+    mandatory_not_null = [
+        cfg.columns.primary_key,
+        cfg.columns.product_id,
+        cfg.columns.quantity,
+        cfg.columns.unit_price,
+        cfg.columns.timestamp,
+        cfg.columns.geography,
+    ]
     null_counts = {}
-    for col in MANDATORY_NOT_NULL:
+    for col in mandatory_not_null:
         if col in cols:
             null_counts[col] = int(
                 loader.scalar(f"SELECT COUNT(*) FROM silver_orders WHERE {col} IS NULL")
@@ -201,67 +212,77 @@ def s4_mandatory_nulls(loader: DataLoader) -> CheckResult:
     return CheckResult(
         "S4", "Mandatory Columns Not Null", SILVER, status,
         observed=null_counts, expected={c: 0 for c in null_counts}, detail=detail,
-        evidence_query="SELECT COUNT(*) FROM silver_orders WHERE invoice_no IS NULL",
+        evidence_query=f"SELECT COUNT(*) FROM silver_orders WHERE {cfg.columns.primary_key} IS NULL",
     )
 
 
-def s5_quantity_positive(loader: DataLoader) -> CheckResult:
-    bad = int(loader.scalar("SELECT COUNT(*) FROM silver_orders WHERE quantity <= 0"))
+def s5_quantity_positive(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
+    qty_col = cfg.columns.quantity
+    bad = int(loader.scalar(f"SELECT COUNT(*) FROM silver_orders WHERE {qty_col} <= 0"))
     status = PASS if bad == 0 else FAIL
     detail = (
-        "All Silver rows have quantity > 0."
+        f"All Silver rows have {qty_col} > 0."
         if bad == 0
-        else f"{bad:,} Silver rows have quantity <= 0."
+        else f"{bad:,} Silver rows have {qty_col} <= 0."
     )
     return CheckResult(
         "S5", "Quantity > 0", SILVER, status,
         observed=bad, expected=0, detail=detail,
-        evidence_query="SELECT COUNT(*) FROM silver_orders WHERE quantity <= 0",
+        evidence_query=f"SELECT COUNT(*) FROM silver_orders WHERE {qty_col} <= 0",
     )
 
 
-def s6_unit_price_positive(loader: DataLoader) -> CheckResult:
-    bad = int(loader.scalar("SELECT COUNT(*) FROM silver_orders WHERE unit_price <= 0"))
+def s6_unit_price_positive(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
+    price_col = cfg.columns.unit_price
+    bad = int(loader.scalar(f"SELECT COUNT(*) FROM silver_orders WHERE {price_col} <= 0"))
     status = PASS if bad == 0 else FAIL
     detail = (
-        "All Silver rows have unit_price > 0."
+        f"All Silver rows have {price_col} > 0."
         if bad == 0
-        else f"{bad:,} Silver rows have unit_price <= 0."
+        else f"{bad:,} Silver rows have {price_col} <= 0."
     )
     return CheckResult(
         "S6", "Unit Price > 0", SILVER, status,
         observed=bad, expected=0, detail=detail,
-        evidence_query="SELECT COUNT(*) FROM silver_orders WHERE unit_price <= 0",
+        evidence_query=f"SELECT COUNT(*) FROM silver_orders WHERE {price_col} <= 0",
     )
 
 
-def s7_revenue_not_negative(loader: DataLoader) -> CheckResult:
-    bad = int(loader.scalar("SELECT COUNT(*) FROM silver_orders WHERE net_revenue < 0"))
+def s7_revenue_not_negative(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
+    rev_col = cfg.columns.revenue
+    bad = int(loader.scalar(f"SELECT COUNT(*) FROM silver_orders WHERE {rev_col} < 0"))
     status = PASS if bad == 0 else FAIL
     detail = (
-        "All Silver rows have non-negative net_revenue."
+        f"All Silver rows have non-negative {rev_col}."
         if bad == 0
-        else f"{bad:,} Silver rows have negative net_revenue."
+        else f"{bad:,} Silver rows have negative {rev_col}."
     )
     return CheckResult(
         "S7", "Revenue Not Negative", SILVER, status,
         observed=bad, expected=0, detail=detail,
-        evidence_query="SELECT COUNT(*) FROM silver_orders WHERE net_revenue < 0",
+        evidence_query=f"SELECT COUNT(*) FROM silver_orders WHERE {rev_col} < 0",
     )
 
 
-def s8_valid_records_removed(loader: DataLoader) -> CheckResult:
+def s8_valid_records_removed(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
     """HERO CHECK: valid Bronze records that never made it into Silver."""
-    valid_total = int(
-        loader.scalar(f"SELECT COUNT(*) FROM bronze_orders WHERE {VALID_PREDICATE}")
+    valid_predicate = _valid_predicate(cfg)
+    business_key = (
+        cfg.columns.primary_key,
+        cfg.columns.product_id,
+        cfg.columns.customer_id,
+        cfg.columns.timestamp,
     )
-    key_match = _business_key_match()
-    evidence_key_match = _business_key_match(native=True)
+    valid_total = int(
+        loader.scalar(f"SELECT COUNT(*) FROM bronze_orders WHERE {valid_predicate}")
+    )
+    key_match = _business_key_match(business_key)
+    evidence_key_match = _business_key_match(business_key, native=True)
     missing = int(
         loader.scalar(
             f"""
             SELECT COUNT(*) FROM bronze_orders b
-            WHERE {VALID_PREDICATE}
+            WHERE {valid_predicate}
               AND NOT EXISTS (
                 SELECT 1 FROM silver_orders s WHERE {key_match}
               )
@@ -285,7 +306,7 @@ def s8_valid_records_removed(loader: DataLoader) -> CheckResult:
         observed=missing, expected=0, detail=detail,
         evidence_query=(
             "SELECT COUNT(*) FROM bronze_orders b WHERE "
-            f"{VALID_PREDICATE} AND NOT EXISTS "
+            f"{valid_predicate} AND NOT EXISTS "
             f"(SELECT 1 FROM silver_orders s WHERE {evidence_key_match})"
         ),
         extra={"valid_bronze": valid_total, "missing": missing,
@@ -293,24 +314,26 @@ def s8_valid_records_removed(loader: DataLoader) -> CheckResult:
     )
 
 
-def s9_record_loss_by_segment(loader: DataLoader) -> CheckResult:
+def s9_record_loss_by_segment(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
+    valid_predicate = _valid_predicate(cfg)
+    price_col = cfg.columns.unit_price
     segment_sql = f"""
     WITH valid_bronze AS (
-        SELECT * FROM bronze_orders WHERE {VALID_PREDICATE}
+        SELECT * FROM bronze_orders WHERE {valid_predicate}
     ),
     seg AS (
         SELECT
-            CASE WHEN unit_price > {HIGH_PRICE_THRESHOLD}
-                 THEN 'unit_price > {HIGH_PRICE_THRESHOLD}'
-                 ELSE 'unit_price <= {HIGH_PRICE_THRESHOLD}' END AS segment,
+            CASE WHEN {price_col} > {HIGH_PRICE_THRESHOLD}
+                 THEN '{price_col} > {HIGH_PRICE_THRESHOLD}'
+                 ELSE '{price_col} <= {HIGH_PRICE_THRESHOLD}' END AS segment,
             COUNT(*) AS bronze_valid
         FROM valid_bronze GROUP BY 1
     ),
     sil AS (
         SELECT
-            CASE WHEN unit_price > {HIGH_PRICE_THRESHOLD}
-                 THEN 'unit_price > {HIGH_PRICE_THRESHOLD}'
-                 ELSE 'unit_price <= {HIGH_PRICE_THRESHOLD}' END AS segment,
+            CASE WHEN {price_col} > {HIGH_PRICE_THRESHOLD}
+                 THEN '{price_col} > {HIGH_PRICE_THRESHOLD}'
+                 ELSE '{price_col} <= {HIGH_PRICE_THRESHOLD}' END AS segment,
             COUNT(*) AS silver_count
         FROM silver_orders GROUP BY 1
     )
@@ -344,14 +367,21 @@ def s9_record_loss_by_segment(loader: DataLoader) -> CheckResult:
     )
 
 
-def s10_wrong_filter_detection(loader: DataLoader) -> CheckResult:
-    key_match = _business_key_match()
-    evidence_key_match = _business_key_match(native=True)
+def s10_wrong_filter_detection(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
+    business_key = (
+        cfg.columns.primary_key,
+        cfg.columns.product_id,
+        cfg.columns.customer_id,
+        cfg.columns.timestamp,
+    )
+    valid_predicate = _valid_predicate(cfg)
+    key_match = _business_key_match(business_key)
+    evidence_key_match = _business_key_match(business_key, native=True)
     stats = loader.query(
         f"""
-        SELECT MIN(unit_price) AS min_price, MAX(unit_price) AS max_price, COUNT(*) AS n
+        SELECT MIN({cfg.columns.unit_price}) AS min_price, MAX({cfg.columns.unit_price}) AS max_price, COUNT(*) AS n
         FROM bronze_orders b
-        WHERE {VALID_PREDICATE}
+        WHERE {valid_predicate}
           AND NOT EXISTS (
             SELECT 1 FROM silver_orders s WHERE {key_match}
           )
@@ -367,9 +397,9 @@ def s10_wrong_filter_detection(loader: DataLoader) -> CheckResult:
         )
     min_price = float(stats["min_price"])
     if min_price > HIGH_PRICE_THRESHOLD:
-        suspected = f"unit_price > {HIGH_PRICE_THRESHOLD} records are being filtered out"
+        suspected = f"{cfg.columns.unit_price} > {HIGH_PRICE_THRESHOLD} records are being filtered out"
         detail = (
-            f"All {missing_n:,} missing valid records have unit_price >= {min_price:.2f}; "
+            f"All {missing_n:,} missing valid records have {cfg.columns.unit_price} >= {min_price:.2f}; "
             f"suspected bad filter: {suspected}."
         )
     else:
@@ -379,8 +409,8 @@ def s10_wrong_filter_detection(loader: DataLoader) -> CheckResult:
         "S10", "Wrong Filter Detection", SILVER, FAIL,
         observed=suspected, expected="no suspect filter", detail=detail,
         evidence_query=(
-            "SELECT MIN(unit_price), MAX(unit_price), COUNT(*) FROM bronze_orders b WHERE "
-            f"{VALID_PREDICATE} AND NOT EXISTS "
+            f"SELECT MIN({cfg.columns.unit_price}), MAX({cfg.columns.unit_price}), COUNT(*) FROM bronze_orders b WHERE "
+            f"{valid_predicate} AND NOT EXISTS "
             f"(SELECT 1 FROM silver_orders s WHERE {evidence_key_match})"
         ),
         extra={"suspected_filter": suspected, "missing": missing_n},
@@ -388,18 +418,19 @@ def s10_wrong_filter_detection(loader: DataLoader) -> CheckResult:
 
 
 def validate_silver(loader: DataLoader) -> list[CheckResult]:
+    cfg = load_dataset_config()
     return run_checks(
         [
-            Check(lambda: s1_drop_percentage(loader), "S1", "Bronze to Silver Drop Percentage", SILVER),
-            Check(lambda: s2_expected_drop(loader), "S2", "Expected Drop Check", SILVER),
-            Check(lambda: s3_dedup_count(loader), "S3", "Deduplication Count Check", SILVER),
-            Check(lambda: s4_mandatory_nulls(loader), "S4", "Mandatory Columns Not Null", SILVER),
-            Check(lambda: s5_quantity_positive(loader), "S5", "Quantity > 0", SILVER),
-            Check(lambda: s6_unit_price_positive(loader), "S6", "Unit Price > 0", SILVER),
-            Check(lambda: s7_revenue_not_negative(loader), "S7", "Revenue Not Negative", SILVER),
-            Check(lambda: s8_valid_records_removed(loader), "S8", "Valid Record Wrongly Removed", SILVER),
-            Check(lambda: s9_record_loss_by_segment(loader), "S9", "Record-Loss by Segment", SILVER),
-            Check(lambda: s10_wrong_filter_detection(loader), "S10", "Wrong Filter Detection", SILVER),
+            Check(lambda: s1_drop_percentage(loader, cfg), "S1", "Bronze to Silver Drop Percentage", SILVER),
+            Check(lambda: s2_expected_drop(loader, cfg), "S2", "Expected Drop Check", SILVER),
+            Check(lambda: s3_dedup_count(loader, cfg), "S3", "Deduplication Count Check", SILVER),
+            Check(lambda: s4_mandatory_nulls(loader, cfg), "S4", "Mandatory Columns Not Null", SILVER),
+            Check(lambda: s5_quantity_positive(loader, cfg), "S5", "Quantity > 0", SILVER),
+            Check(lambda: s6_unit_price_positive(loader, cfg), "S6", "Unit Price > 0", SILVER),
+            Check(lambda: s7_revenue_not_negative(loader, cfg), "S7", "Revenue Not Negative", SILVER),
+            Check(lambda: s8_valid_records_removed(loader, cfg), "S8", "Valid Record Wrongly Removed", SILVER),
+            Check(lambda: s9_record_loss_by_segment(loader, cfg), "S9", "Record-Loss by Segment", SILVER),
+            Check(lambda: s10_wrong_filter_detection(loader, cfg), "S10", "Wrong Filter Detection", SILVER),
         ]
     )
 

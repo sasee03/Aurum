@@ -143,7 +143,7 @@ def test_build_report_completes_when_a_check_throws(monkeypatch):
     from src.data_loader import DataLoader
     from src.report_builder import build_report
 
-    monkeypatch.setattr(sv, "s5_quantity_positive", lambda loader: _boom())
+    monkeypatch.setattr(sv, "s5_quantity_positive", lambda loader, *args, **kwargs: _boom())
     loader = DataLoader()
     try:
         report = build_report(loader)
