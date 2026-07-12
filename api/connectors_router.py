@@ -101,21 +101,31 @@ def test_postgres_connector(body: PostgresTestRequest) -> dict:
     if not result["connected"]:
         return result
 
-    session = store_session_connection(
-        target,
-        project_id=body.project_id,
-        name=body.name,
-    )
-    if body.project_id and get_project(body.project_id):
-        save_data_connection(
-            connection_id=session.connection_id,
+    try:
+        session = store_session_connection(
+            target,
             project_id=body.project_id,
-            name=session.name,
-            host=session.host,
-            port=session.port,
-            database_name=session.database,
-            username=session.username,
+            name=body.name,
         )
+        if body.project_id and get_project(body.project_id):
+            save_data_connection(
+                connection_id=session.connection_id,
+                project_id=body.project_id,
+                name=session.name,
+                host=session.host,
+                port=session.port,
+                database_name=session.database,
+                username=session.username,
+            )
+    except Exception:
+        return {
+            "connected": False,
+            "error": "Connection succeeded, but saving connection metadata failed. Please retry.",
+            "host": target.host,
+            "port": int(target.port),
+            "database": target.database,
+            "username": target.username,
+        }
 
     public = session_public_view(session)
     return {

@@ -472,3 +472,94 @@ def test_password_never_persisted_to_sqlite(client):
     assert row is not None
     assert "super-secret-password" not in dump
     assert "password" not in row.keys()
+
+
+def test_test_connection_metadata_save_failure(client, monkeypatch):
+    mock_conn = MagicMock()
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_cur = MagicMock()
+    mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+    mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+    mock_cur.fetchone.return_value = (1,)
+
+    project = client.post(
+        "/projects",
+        json={"name": "Fail Save Project", "environment": "Development"},
+    )
+    assert project.status_code == 201
+    project_id = project.json()["id"]
+
+    def fail_save(*args, **kwargs):
+        raise Exception("sqlite disk full or locked")
+
+    monkeypatch.setattr("api.connectors_router.save_data_connection", fail_save)
+
+    with patch("src.postgres_connector.psycopg.connect", return_value=mock_conn):
+        response = client.post(
+            "/connectors/postgres/test",
+            json={
+                "host": "localhost",
+                "port": 5433,
+                "database": "aurum",
+                "username": "aurum",
+                "password": "aurum",
+                "project_id": project_id,
+            },
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["connected"] is False
+    assert "Connection succeeded, but saving connection metadata failed" in body["error"]
+
+
+def test_validate_count_timeout_honest_422(client, monkeypatch):
+    import psycopg
+    session = store_session_connection(
+        UserPostgresTarget(
+            host="localhost",
+            port=5433,
+            database="aurum",
+            username="aurum",
+            password="aurum",
+        )
+    )
+
+    mock_conn = MagicMock()
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+
+    def mock_cursor_enter(*args, **kwargs):
+        mock_cur = MagicMock()
+        def mock_execute(query, *a, **kw):
+            if "SELECT COUNT(*)" in str(query):
+                raise psycopg.errors.QueryCanceled("canceling statement due to statement timeout")
+        mock_cur.execute.side_effect = mock_execute
+        return mock_cur
+
+    mock_conn.cursor.return_value.__enter__ = mock_cursor_enter
+    mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+    monkeypatch.setattr(
+        "src.postgres_connector.open_session_connection",
+        MagicMock(return_value=mock_conn),
+    )
+    monkeypatch.setattr(
+        "src.postgres_connector.list_tables",
+        MagicMock(return_value=[{"schema": "public", "name": "orders", "type": "table"}]),
+    )
+
+    response = client.post(
+        "/connectors/postgres/validate",
+        json={
+            "connection_id": session.connection_id,
+            "schema": "public",
+            "table": "orders",
+        },
+    )
+    
+    assert response.status_code == 422
+    body = response.json()
+    assert body["schema_match"] is False
+    assert "Table row count could not be determined" in body["error"]
+    assert "too large" in body["error"]

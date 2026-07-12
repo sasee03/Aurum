@@ -250,8 +250,18 @@ def read_table_as_dataframe(
     """Read a user table into a DataFrame, enforcing the Stage 4 row cap."""
     qualified = _qualified_table(schema, table)
     with conn.cursor() as cur:
-        cur.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(qualified))
-        count = int(cur.fetchone()[0])
+        timeout_ms = int(db_connect_timeout() * 1000)
+        cur.execute(sql.SQL("SET statement_timeout = {}").format(timeout_ms))
+        try:
+            cur.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(qualified))
+            count = int(cur.fetchone()[0])
+        except psycopg.errors.QueryCanceled:
+            raise CsvSchemaMismatch(
+                missing_columns=[],
+                error=f"Table row count could not be determined within {db_connect_timeout()} seconds — table may be too large or the connection is slow.",
+            ) from None
+        finally:
+            cur.execute("SET statement_timeout = 0")
     if count == 0:
         raise CsvSchemaMismatch(
             missing_columns=[],
