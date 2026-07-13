@@ -1,0 +1,37 @@
+dataset:
+  name: Generic Retail Orders
+  currency: USD
+  domain: retail
+  geography_label: market
+
+tables:
+  bronze: bronze_orders
+  silver: silver_orders
+  gold: gold_metrics
+
+columns:
+  primary_key: sale_line_id
+  order_id: order_ref
+  order_id_expression: "{order_id}"
+  product_id: sku
+  product_description: item_name
+  customer_id: buyer_ref
+  timestamp: sold_at
+  quantity: units
+  unit_price: price_each
+  geography: market
+  revenue: line_revenue
+  line_item_key: [sale_line_id, sku, buyer_ref, sold_at]
+  price_ceiling: null
+
+metrics:
+  order_id_expression: "{order_id}"
+  revenue_formula: "units * price_each"
+  top_revenue_dimension: market
+  top_revenue_label: market
+  total_revenue_metric: total_revenue
+  total_orders_metric: total_orders
+  total_customers_metric: total_customers
+  average_order_value_metric: average_order_value
+  aggregate_revenue_metric: revenue
+  total_quantity_metric: total_quantity

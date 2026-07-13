@@ -27,10 +27,10 @@ import psycopg
 from psycopg import sql
 
 try:
-    from .config_loader import load_dataset_config
+    from .config_loader import load_dataset_config, AurumDatasetConfig
     from .db_config import db_connect_timeout, postgres_conninfo
 except ImportError:  # pragma: no cover - supports `python src/data_loader.py`
-    from config_loader import load_dataset_config
+    from config_loader import load_dataset_config, AurumDatasetConfig
     from db_config import db_connect_timeout, postgres_conninfo
 
 DATA_DIR = Path("data")
@@ -287,36 +287,94 @@ class DataLoader:
                 "historical_runs", pd.read_csv(hist_path), temporary=False
             )
 
-    def build_silver(self) -> None:
-        self.conn.execute(SILVER_ETL_SQL)
+    def build_silver(self, cfg: Optional[AurumDatasetConfig] = None) -> None:
+        if cfg is None:
+            cfg = load_dataset_config()
+        pk = cfg.columns.primary_key
+        order_id = cfg.columns.order_id
+        prod_id = cfg.columns.product_id
+        prod_desc = cfg.columns.product_description
+        qty = cfg.columns.quantity
+        ts = cfg.columns.timestamp
+        price = cfg.columns.unit_price
+        cust_id = cfg.columns.customer_id
+        geo = cfg.columns.geography
+        revenue_col = cfg.columns.revenue
 
-    def build_gold(self) -> None:
+        revenue_expr = cfg.metrics.revenue_formula
+
+        price_ceiling_cond = ""
+        if cfg.columns.price_ceiling is not None:
+            price_ceiling_cond = f'  AND "{price}" <= {cfg.columns.price_ceiling}'
+
+        extra_proj = ""
+        if order_id not in (pk, prod_id, prod_desc, qty, ts, price, cust_id, geo):
+            extra_proj = f'\n            "{order_id}",'
+
+        sql_query = f"""
+        CREATE OR REPLACE TABLE silver_orders AS
+        SELECT
+            "{pk}",{extra_proj}
+            "{prod_id}",
+            "{prod_desc}",
+            "{qty}",
+            "{ts}",
+            "{price}",
+            "{cust_id}",
+            "{geo}",
+            {revenue_expr} AS "{revenue_col}"
+        FROM bronze_orders
+        WHERE "{qty}" > 0
+          AND "{price}" > 0{price_ceiling_cond};
+        """
+        self.conn.execute(sql_query)
+
+    def build_gold(self, cfg: Optional[AurumDatasetConfig] = None) -> None:
+        if cfg is None:
+            cfg = load_dataset_config()
+        
+        cust_id = cfg.columns.customer_id
+        revenue_col = cfg.columns.revenue
+        order_id_col = f'"{cfg.columns.order_id}"'
+        order_id_expr = cfg.metrics.order_id_expression.format(order_id=order_id_col)
+        
+        total_rev = cfg.metrics.total_revenue_metric
+        total_ord = cfg.metrics.total_orders_metric
+        total_cust = cfg.metrics.total_customers_metric
+        aov = cfg.metrics.average_order_value_metric
+
         self.conn.execute(
-            """
+            f"""
             CREATE OR REPLACE TABLE gold_metrics AS
             SELECT
-                SUM(net_revenue) AS total_revenue,
-                COUNT(DISTINCT {order_expr}) AS total_orders,
-                COUNT(DISTINCT customer_id) AS total_customers,
-                CASE WHEN COUNT(DISTINCT {order_expr}) = 0 THEN 0
-                     ELSE SUM(net_revenue) / COUNT(DISTINCT {order_expr}) END
-                     AS average_order_value
+                SUM("{revenue_col}") AS "{total_rev}",
+                COUNT(DISTINCT {order_id_expr}) AS "{total_ord}",
+                COUNT(DISTINCT "{cust_id}") AS "{total_cust}",
+                CASE WHEN COUNT(DISTINCT {order_id_expr}) = 0 THEN 0
+                     ELSE SUM("{revenue_col}") / COUNT(DISTINCT {order_id_expr}) END
+                     AS "{aov}"
             FROM silver_orders;
-            """.format(order_expr=ORDER_ID_FROM_LINE)
-        )
-        self.conn.execute(
             """
+        )
+        geo = cfg.columns.geography
+        rev = cfg.metrics.aggregate_revenue_metric
+        prod_id = cfg.columns.product_id
+        qty = cfg.columns.quantity
+        total_qty = cfg.metrics.total_quantity_metric
+
+        self.conn.execute(
+            f"""
             CREATE OR REPLACE TABLE gold_country_revenue AS
-            SELECT country, SUM(net_revenue) AS revenue
-            FROM silver_orders GROUP BY country;
+            SELECT "{geo}", SUM("{revenue_col}") AS "{rev}"
+            FROM silver_orders GROUP BY "{geo}";
             """
         )
         self.conn.execute(
-            """
+            f"""
             CREATE OR REPLACE TABLE gold_product_sales AS
-            SELECT stock_code, SUM(quantity) AS total_quantity,
-                   SUM(net_revenue) AS revenue
-            FROM silver_orders GROUP BY stock_code;
+            SELECT "{prod_id}", SUM("{qty}") AS "{total_qty}",
+                   SUM("{revenue_col}") AS "{rev}"
+            FROM silver_orders GROUP BY "{prod_id}";
             """
         )
 

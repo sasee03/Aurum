@@ -35,6 +35,7 @@ def test_load_olist_yaml_has_required_sections():
         "invoice_no", "stock_code", "customer_id", "invoice_date",
     )
     assert cfg.columns.resolve_business_key() == "REGEXP_REPLACE(invoice_no, '_[0-9]+$', '')"
+    assert cfg.columns.price_ceiling == 20.0
     assert cfg.metrics.revenue_formula == "quantity * unit_price"
     assert cfg.metrics.top_revenue_dimension == "country"
     assert cfg.metrics.top_revenue_label == "state"
@@ -85,6 +86,53 @@ def test_env_override(tmp_path, monkeypatch):
     cfg = load_dataset_config()
     assert cfg.dataset.name == "Custom Dataset"
     assert cfg.tables.silver == "raw_silver"
+    assert cfg.columns.price_ceiling is None
+
+
+def test_price_ceiling_custom(tmp_path):
+    config_file = tmp_path / "custom_ceiling.yaml"
+    config_file.write_text(
+        textwrap.dedent(
+            """
+            dataset:
+              name: Custom Dataset
+              currency: USD
+              domain: retail
+              geography_label: region
+            tables:
+              bronze: raw_bronze
+              silver: raw_silver
+              gold: raw_gold
+            columns:
+              primary_key: id
+              customer_id: cust_id
+              timestamp: created_at
+              quantity: qty
+              unit_price: price
+              geography: region
+              revenue: revenue
+              product_id: prod_id
+              product_description: prod_desc
+              order_id: ord_id
+              order_id_expression: ord_id
+              line_item_key: [id, prod_id, cust_id, created_at]
+              price_ceiling: 50.5
+            metrics:
+              revenue_formula: "qty * price"
+              top_revenue_dimension: region
+              top_revenue_label: region
+              total_revenue_metric: t_rev
+              total_orders_metric: t_ord
+              total_customers_metric: t_cust
+              average_order_value_metric: a_o_v
+              aggregate_revenue_metric: a_rev
+              total_quantity_metric: t_qty
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+    cfg = load_dataset_config(config_file)
+    assert cfg.columns.price_ceiling == 50.5
 
 
 def test_missing_config_raises_clear_error(tmp_path):

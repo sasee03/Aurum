@@ -58,18 +58,23 @@ def g1_revenue_reconciliation(loader: DataLoader, cfg: Optional[AurumDatasetConf
 
 
 def g2_order_count_reconciliation(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
-    order_id_expression = cfg.metrics.order_id_expression if cfg else "REGEXP_REPLACE(invoice_no, '_[0-9]+$', '')"
+    order_id_expression = (
+        cfg.metrics.order_id_expression.format(order_id=f'"{cfg.columns.order_id}"')
+        if cfg
+        else "REGEXP_REPLACE(invoice_no, '_[0-9]+$', '')"
+    )
+    orders_metric = cfg.metrics.total_orders_metric if cfg else "total_orders"
     silver_orders = int(
         loader.scalar(
             f"SELECT COUNT(DISTINCT {order_id_expression}) FROM silver_orders"
         )
         or 0
     )
-    gold_orders = int(loader.scalar("SELECT total_orders FROM gold_metrics") or 0)
+    gold_orders = int(loader.scalar(f"SELECT {orders_metric} FROM gold_metrics") or 0)
     match = silver_orders == gold_orders
     status = PASS if match else FAIL
     detail = (
-        "Gold total_orders reconciles with Silver."
+        f"Gold {orders_metric} reconciles with Silver."
         if match
         else f"Gold orders {gold_orders:,} != Silver distinct invoices {silver_orders:,}."
     )
@@ -194,12 +199,12 @@ def g6_country_revenue_reconciliation(loader: DataLoader, cfg: Optional[AurumDat
         loader.scalar(
             f"""
             WITH silver_by_country AS (
-                SELECT {geo_col}, SUM({rev_col}) AS revenue
-                FROM silver_orders GROUP BY {geo_col}
+                SELECT "{geo_col}", SUM("{rev_col}") AS revenue
+                FROM silver_orders GROUP BY "{geo_col}"
             )
             SELECT COUNT(*) FROM gold_country_revenue g
-            FULL OUTER JOIN silver_by_country s ON g.{geo_col} = s.{geo_col}
-            WHERE ABS(COALESCE(g.revenue, 0) - COALESCE(s.revenue, 0)) > 1.0
+            FULL OUTER JOIN silver_by_country s ON g."{geo_col}" = s."{geo_col}"
+            WHERE ABS(COALESCE(g."{agg_rev}", 0) - COALESCE(s.revenue, 0)) > 1.0
             """
         )
     )
@@ -322,7 +327,7 @@ def g10_country_coverage(loader: DataLoader, cfg: Optional[AurumDatasetConfig] =
             evidence_query="",
         )
     silver_countries = int(
-        loader.scalar(f"SELECT COUNT(DISTINCT {geo_col}) FROM silver_orders") or 0
+        loader.scalar(f'SELECT COUNT(DISTINCT "{geo_col}") FROM silver_orders') or 0
     )
     gold_countries = int(
         loader.scalar("SELECT COUNT(*) FROM gold_country_revenue") or 0
