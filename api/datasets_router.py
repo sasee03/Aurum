@@ -9,7 +9,8 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 
 import api.main as api_main
-from src.app_state.store import get_project, save_validation_report, save_validation_run
+from src.app_state.store import save_validation_report, save_validation_run
+from src.config_loader import ConfigResolutionError, resolve_config_for_project_or_table
 from src.csv_ingest import (
     RAW_ORDERS_COLUMNS,
     CsvSchemaMismatch,
@@ -24,6 +25,26 @@ router = APIRouter(tags=["datasets"])
 logger = logging.getLogger(__name__)
 
 _READ_CHUNK_BYTES = 1024 * 1024
+
+
+def _config_resolution_response(
+    exc: ConfigResolutionError,
+    project_id: str,
+) -> JSONResponse:
+    if exc.code == "project_not_found":
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": "Project not found", "project_id": project_id},
+        )
+    status_code = (
+        status.HTTP_500_INTERNAL_SERVER_ERROR
+        if exc.code in {"project_store_lookup_failed", "dataset_config_lookup_failed"}
+        else status.HTTP_422_UNPROCESSABLE_ENTITY
+    )
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": exc.code, "message": str(exc)},
+    )
 
 
 async def _read_upload_bytes_capped(file: UploadFile) -> bytes:
@@ -80,15 +101,14 @@ async def upload_dataset(
             },
         )
 
-    if project_id and get_project(project_id) is None:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": "Project not found", "project_id": project_id},
-        )
+    try:
+        cfg = resolve_config_for_project_or_table(project_id or None, file.filename)
+    except ConfigResolutionError as exc:
+        return _config_resolution_response(exc, project_id)
 
     try:
         raw_bytes = await _read_upload_bytes_capped(file)
-        frame = parse_raw_orders_csv(raw_bytes)
+        frame = parse_raw_orders_csv(raw_bytes, cfg=cfg)
     except CsvSchemaMismatch as exc:
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -103,7 +123,7 @@ async def upload_dataset(
     run_id = f"upload_{uuid.uuid4().hex[:12]}"
     try:
         report = attach_trust_narrative(
-            run_validation_from_raw_orders(frame, run_id=run_id)
+            run_validation_from_raw_orders(frame, run_id=run_id, cfg=cfg)
         )
         persisted_run_id = report.get("run_id", run_id)
         save_validation_run(

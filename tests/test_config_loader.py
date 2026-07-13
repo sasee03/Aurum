@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from src.config_loader import default_config_path, load_dataset_config
+import src.config_loader as config_loader
+from src.config_loader import (
+    ConfigResolutionError,
+    default_config_path,
+    load_dataset_config,
+    resolve_config_for_project_or_table,
+)
 
 
 def test_default_config_path_points_to_olist_yaml():
@@ -192,3 +198,50 @@ def test_missing_required_key_raises_clear_error(tmp_path):
     )
     with pytest.raises(ValueError, match="section 'dataset' is missing required key"):
         load_dataset_config(incomplete)
+
+
+def test_matching_malformed_config_raises_loud_error(tmp_path, monkeypatch):
+    (tmp_path / "custom_orders.yaml").write_text("dataset: [", encoding="utf-8")
+    monkeypatch.setattr(
+        config_loader,
+        "default_config_path",
+        lambda: tmp_path / "olist.yaml",
+    )
+
+    with pytest.raises(ConfigResolutionError) as raised:
+        resolve_config_for_project_or_table(None, "custom_orders.csv")
+
+    assert raised.value.code == "dataset_config_invalid"
+    assert "exists but could not be loaded" in str(raised.value)
+
+
+def test_project_store_failure_raises_loud_error(tmp_path, monkeypatch):
+    from src.app_state import store
+
+    def fail_project_lookup(_project_id):
+        raise RuntimeError("store unavailable")
+
+    monkeypatch.setattr(
+        config_loader,
+        "default_config_path",
+        lambda: tmp_path / "olist.yaml",
+    )
+    monkeypatch.setattr(store, "get_project", fail_project_lookup)
+
+    with pytest.raises(ConfigResolutionError) as raised:
+        resolve_config_for_project_or_table("project-123", "custom_orders.csv")
+
+    assert raised.value.code == "project_store_lookup_failed"
+    assert "store unavailable" in str(raised.value)
+
+
+def test_missing_custom_config_refuses_olist_default(tmp_path, monkeypatch):
+    olist_path = tmp_path / "olist.yaml"
+    olist_path.write_text(default_config_path().read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setattr(config_loader, "default_config_path", lambda: olist_path)
+
+    with pytest.raises(ConfigResolutionError) as raised:
+        resolve_config_for_project_or_table(None, "customer_orders.csv")
+
+    assert raised.value.code == "dataset_config_not_found"
+    assert "refusing to substitute the default Olist config" in str(raised.value)
