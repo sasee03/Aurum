@@ -189,6 +189,85 @@ def test_build_silver_custom_config():
         loader.close()
 
 
+def test_reconciliation_indexes_follow_custom_line_item_key():
+    import yaml
+    from src.config_loader import _parse_raw_config
+
+    cfg_raw = yaml.safe_load('''
+    dataset:
+      name: Test
+      currency: USD
+      domain: retail
+      geography_label: market
+    tables:
+      bronze: bronze_orders
+      silver: silver_orders
+      gold: gold_metrics
+    columns:
+      primary_key: SaleLineId
+      order_id: OrderRef
+      order_id_expression: "{order_id}"
+      product_id: Sku
+      product_description: ItemName
+      customer_id: BuyerRef
+      timestamp: SoldAt
+      quantity: Units
+      unit_price: PriceEach
+      geography: Market
+      revenue: LineRevenue
+      line_item_key: [SaleLineId, Sku, BuyerRef, SoldAt]
+      price_ceiling: 20
+    metrics:
+      revenue_formula: "Units * PriceEach"
+      order_id_expression: "{order_id}"
+      top_revenue_dimension: Market
+      top_revenue_label: Market
+      total_revenue_metric: total_revenue
+      total_orders_metric: total_orders
+      total_customers_metric: total_customers
+      average_order_value_metric: average_order_value
+      aggregate_revenue_metric: LineRevenue
+      total_quantity_metric: total_quantity
+    ''')
+    cfg = _parse_raw_config(cfg_raw, "test")
+
+    df = pd.DataFrame({
+        "SaleLineId": ["L1", "L2"],
+        "Sku": ["A", "B"],
+        "ItemName": ["da", "db"],
+        "Units": [5, 10],
+        "SoldAt": ["2026-01-01", "2026-01-02"],
+        "PriceEach": [15.0, 25.0],
+        "BuyerRef": ["C1", "C2"],
+        "Market": ["US", "CA"],
+        "OrderRef": ["O1", "O2"],
+    })
+
+    loader = DataLoader(build=False)
+    try:
+        loader._materialize_frame("bronze_orders", df, temporary=False)
+        loader._materialize_frame("silver_orders", df, temporary=False)
+        loader._create_reconciliation_indexes(cfg)
+
+        indexdef = loader.scalar(
+            """
+            SELECT indexdef
+            FROM pg_indexes
+            WHERE schemaname = current_schema()
+              AND indexname = 'idx_bronze_valid_business_key'
+            """
+        )
+
+        assert indexdef is not None
+        assert '"SaleLineId", "Sku", "BuyerRef", "SoldAt"' in indexdef
+        assert '"Units"' in indexdef
+        assert '"PriceEach"' in indexdef
+        assert '"OrderRef" IS NOT NULL' in indexdef
+        assert '"Sku" IS NOT NULL' in indexdef
+    finally:
+        loader.close()
+
+
 def test_generic_revenue_column_flows_through_full_validator_chain(monkeypatch):
     config_path = Path(__file__).resolve().parents[1] / "configs" / "generic_orders.yaml"
     monkeypatch.setenv("AURUM_DATASET_CONFIG", str(config_path))

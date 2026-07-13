@@ -270,6 +270,7 @@ class DataLoader:
                 "customers",
             ]
         )
+        cfg = load_dataset_config()
         raw_path = self.data_dir / "raw" / "raw_orders.csv"
         if not raw_path.exists():
             raise FileNotFoundError(
@@ -277,9 +278,9 @@ class DataLoader:
             )
         self._materialize_frame("raw_orders", pd.read_csv(raw_path), temporary=False)
         self.conn.execute("CREATE OR REPLACE TABLE bronze_orders AS SELECT * FROM raw_orders")
-        self.build_silver()
-        self._create_reconciliation_indexes()
-        self.build_gold()
+        self.build_silver(cfg)
+        self._create_reconciliation_indexes(cfg)
+        self.build_gold(cfg)
 
         hist_path = self.data_dir / "historical" / "historical_runs.csv"
         if hist_path.exists():
@@ -397,18 +398,26 @@ class DataLoader:
             for table in tables:
                 cur.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(_quote_ident(table)))
 
-    def _create_reconciliation_indexes(self) -> None:
+    def _create_reconciliation_indexes(self, cfg: Optional[AurumDatasetConfig] = None) -> None:
         """Indexes for Silver anti-join checks S8/S10; additive, no result changes."""
-        line_item_key = ", ".join(load_dataset_config().columns.resolve_line_item_key())
+        if cfg is None:
+            cfg = load_dataset_config()
+        line_item_key = sql.SQL(", ").join(
+            _quote_ident(column) for column in cfg.columns.resolve_line_item_key()
+        ).as_string(self._pg_conn)
+        qty = _quote_ident(cfg.columns.quantity).as_string(self._pg_conn)
+        price = _quote_ident(cfg.columns.unit_price).as_string(self._pg_conn)
+        order_id = _quote_ident(cfg.columns.order_id).as_string(self._pg_conn)
+        product_id = _quote_ident(cfg.columns.product_id).as_string(self._pg_conn)
         statements = [
             f"""
             CREATE INDEX IF NOT EXISTS idx_bronze_valid_business_key
             ON bronze_orders ({line_item_key})
-            INCLUDE (quantity, unit_price)
-            WHERE quantity > 0
-              AND unit_price > 0
-              AND invoice_no IS NOT NULL
-              AND stock_code IS NOT NULL
+            INCLUDE ({qty}, {price})
+            WHERE {qty} > 0
+              AND {price} > 0
+              AND {order_id} IS NOT NULL
+              AND {product_id} IS NOT NULL
             """,
             f"""
             CREATE INDEX IF NOT EXISTS idx_silver_business_key
