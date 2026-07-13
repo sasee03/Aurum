@@ -156,7 +156,7 @@ def rec_revenue(loader: DataLoader, cfg: AurumDatasetConfig | None = None) -> Ch
 
 
 def rec_key_set(loader: DataLoader, cfg: AurumDatasetConfig | None = None) -> CheckResult:
-    """invoice_no in Silver must be subset of Bronze; Gold orders <= Silver orders."""
+    """Every Silver primary key must exist in Bronze; G2 owns Gold order counts."""
     cfg = cfg or load_dataset_config()
     primary_key = cfg.columns.primary_key
     business_key = cfg.columns.resolve_business_key()
@@ -175,29 +175,37 @@ def rec_key_set(loader: DataLoader, cfg: AurumDatasetConfig | None = None) -> Ch
             f"SELECT COUNT(DISTINCT {business_key}) FROM silver_orders"
         )
     )
+    # Legacy report context only; G2 exclusively owns this verdict.
     gold_orders = int(loader.scalar(f"SELECT {cfg.metrics.total_orders_metric} FROM gold_metrics") or 0)
-    gold_excess = gold_orders - silver_distinct
-    violations = silver_not_in_bronze + max(0, gold_excess)
-    status = PASS if violations == 0 else FAIL
+    gold_excess = max(0, gold_orders - silver_distinct)
+    status = PASS if silver_not_in_bronze == 0 else FAIL
+    observed = {
+        "silver_keys_not_in_bronze": silver_not_in_bronze,
+        "silver_distinct_invoices": silver_distinct,
+        "gold_total_orders": gold_orders,
+        "gold_excess_over_silver": gold_excess,
+    }
+
+    if status == FAIL:
+        detail = (
+            f"Key-set violation: {silver_not_in_bronze} Silver keys are not present "
+            "in Bronze."
+        )
+    elif gold_orders != silver_distinct:
+        detail = (
+            "Silver keys are consistent with Bronze; Gold order-count "
+            "reconciliation is owned by G2."
+        )
+    else:
+        detail = "Key sets are consistent across layers."
+
     return _result(
         "L2-REC-KEY",
         "Key-Set Reconciliation: Bronze ⊇ Silver, Silver ⊇ Gold keys",
         SILVER, CONSISTENCY, status,
-        observed={
-            "silver_keys_not_in_bronze": silver_not_in_bronze,
-            "silver_distinct_invoices": silver_distinct,
-            "gold_total_orders": gold_orders,
-            "gold_excess_over_silver": max(0, gold_excess),
-        },
+        observed=observed,
         expected={"violations": 0},
-        detail=(
-            "Key sets are consistent across layers."
-            if status == PASS
-            else (
-                f"Key-set violation: {silver_not_in_bronze} Silver keys not in Bronze, "
-                f"Gold orders exceed Silver by {max(0, gold_excess)}."
-            )
-        ),
+        detail=detail,
         sql=(
             "SELECT COUNT(*) FROM silver_orders s WHERE NOT EXISTS "
             f"(SELECT 1 FROM bronze_orders b WHERE b.{primary_key} = s.{primary_key})"
@@ -206,7 +214,7 @@ def rec_key_set(loader: DataLoader, cfg: AurumDatasetConfig | None = None) -> Ch
 
 
 def rec_aggregate_crosscheck(loader: DataLoader, cfg: AurumDatasetConfig | None = None) -> CheckResult:
-    """Recompute all Gold aggregates from Silver and compare."""
+    """Recompute Gold revenue and customers; G2 owns order-count reconciliation."""
     cfg = cfg or load_dataset_config()
     silver = loader.query(
         f"""
@@ -228,8 +236,8 @@ def rec_aggregate_crosscheck(loader: DataLoader, cfg: AurumDatasetConfig | None 
     rev_diff = abs(float(silver["revenue"]) - float(gold["total_revenue"]))
     if rev_diff > tol:
         mismatches.append(f"total_revenue (diff={rev_diff:.2f}, tolerance={tol})")
-    if int(silver["orders"]) != int(gold["total_orders"]):
-        mismatches.append("total_orders")
+    # Keep order values as report evidence, but leave their verdict exclusively to G2.
+    order_count_matches = int(silver["orders"]) == int(gold["total_orders"])
     if int(silver["customers"]) != int(gold["total_customers"]):
         mismatches.append("total_customers")
 
@@ -242,8 +250,13 @@ def rec_aggregate_crosscheck(loader: DataLoader, cfg: AurumDatasetConfig | None 
         expected={"mismatched_fields": []},
         detail=(
             "All Gold aggregates match Silver recomputation (revenue within rounding tolerance)."
-            if status == PASS
-            else f"Aggregate mismatch in: {mismatches}."
+            if status == PASS and order_count_matches
+            else (
+                "Revenue and customer aggregates match; total_orders reconciliation "
+                "is owned by G2."
+                if status == PASS
+                else f"Aggregate mismatch in: {mismatches}."
+            )
         ),
         sql=(
             f"SELECT SUM({cfg.columns.revenue}), COUNT(DISTINCT {cfg.columns.resolve_business_key()}), "
