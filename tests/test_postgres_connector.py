@@ -4,21 +4,28 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import pandas as pd
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from psycopg import sql
+from psycopg.conninfo import conninfo_to_dict
 
 import api.main as api_main
 from src.app_state.db import get_connection
 from src.csv_ingest import MAX_UPLOAD_ROWS, RAW_ORDERS_COLUMNS
+from src.db_config import postgres_conninfo
 from src.postgres_connector import (
     SESSION_TTL_SECONDS,
     UserPostgresTarget,
+    build_user_conninfo,
     clear_session_connections,
     classify_connect_error,
     get_session_connection,
     store_session_connection,
+    test_user_postgres as check_user_postgres,
 )
 from tests.builders import make_rows, to_df
 
@@ -93,6 +100,65 @@ def test_classify_permission_denied():
 
 def test_classify_timeout():
     assert "timed out" in classify_connect_error(TimeoutError("timeout")).lower()
+
+
+@pytest.mark.parametrize(
+    "password",
+    ["contains space", "single'quote", "back\\slash", "equals=sign", ""],
+)
+def test_build_user_conninfo_quotes_special_character_passwords(password):
+    target = UserPostgresTarget("localhost", 5433, "aurum", "aurum", password)
+
+    parsed = conninfo_to_dict(build_user_conninfo(target))
+
+    assert parsed["password"] == password
+
+
+def test_real_postgres_connects_with_special_character_password(caplog):
+    role = f"aurum_conninfo_{uuid4().hex}"
+    password = "space quote' slash\\ equals="
+    wrong_password = "wrong secret' \\ ="
+
+    with psycopg.connect(postgres_conninfo(), autocommit=True) as admin:
+        target = UserPostgresTarget(
+            admin.info.host,
+            admin.info.port,
+            admin.info.dbname,
+            role,
+            password,
+        )
+        try:
+            admin.execute(
+                sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                    sql.Identifier(role), sql.Literal(password)
+                )
+            )
+
+            result = check_user_postgres(target)
+            assert result["connected"] is True
+
+            wrong_target = UserPostgresTarget(
+                target.host,
+                target.port,
+                target.database,
+                target.username,
+                wrong_password,
+            )
+            with pytest.raises(psycopg.OperationalError) as exc_info:
+                psycopg.connect(build_user_conninfo(wrong_target))
+            assert password not in str(exc_info.value)
+            assert wrong_password not in str(exc_info.value)
+
+            failed = check_user_postgres(wrong_target)
+            assert failed["connected"] is False
+            assert password not in str(failed)
+            assert wrong_password not in str(failed)
+            assert password not in caplog.text
+            assert wrong_password not in caplog.text
+        finally:
+            admin.execute(
+                sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role))
+            )
 
 
 def test_test_connection_wrong_password_honest(client):

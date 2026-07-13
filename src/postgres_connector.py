@@ -16,6 +16,7 @@ from typing import Any, Optional
 import pandas as pd
 import psycopg
 from psycopg import sql
+from psycopg.conninfo import make_conninfo
 
 from src.csv_ingest import MAX_UPLOAD_ROWS, CsvSchemaMismatch, validate_raw_orders_frame
 from src.config_loader import AurumDatasetConfig
@@ -66,12 +67,12 @@ def _qualified_table(schema_name: str, table_name: str) -> sql.Composed:
 
 def build_user_conninfo(target: UserPostgresTarget) -> str:
     """Libpq keyword string for a user-specified Postgres (never uses DATABASE_URL)."""
-    return (
-        f"host={target.host} "
-        f"port={int(target.port)} "
-        f"dbname={target.database} "
-        f"user={target.username} "
-        f"password={target.password}"
+    return make_conninfo(
+        host=target.host,
+        port=int(target.port),
+        dbname=target.database,
+        user=target.username,
+        password=target.password,
     )
 
 
