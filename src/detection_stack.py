@@ -36,7 +36,7 @@ def run_detection_stack(
 ) -> DetectionStackResult:
     """Run all three Pain-1 detection layers in order (cheapest first)."""
     return DetectionStackResult(
-        layer_1_rules=run_rule_library(loader),
+        layer_1_rules=run_rule_library(loader, cfg),
         layer_2_reconciliation=run_reconciliation_layer(loader, cfg),
         layer_3_robust_anomaly=run_robust_anomaly_layer(loader),
     )
