@@ -190,19 +190,30 @@ def parse_raw_orders_csv(source: Union[str, Path, BinaryIO, bytes], cfg: Optiona
     return validate_raw_orders_frame(df, cfg)
 
 
-def materialize_upload_pipeline(loader: DataLoader) -> None:
+def materialize_upload_pipeline(
+    loader: DataLoader,
+    cfg: Optional[AurumDatasetConfig] = None,
+) -> None:
     """Bronze → Silver → Gold on a loader that already has raw_orders materialized."""
+    if cfg is None:
+        cfg = load_dataset_config()
     loader.conn.execute("CREATE OR REPLACE TABLE bronze_orders AS SELECT * FROM raw_orders")
-    loader.build_silver()
-    loader._create_reconciliation_indexes()
-    loader.build_gold()
+    loader.build_silver(cfg)
+    loader._create_reconciliation_indexes(cfg)
+    loader.build_gold(cfg)
 
 
-def run_validation_from_raw_orders(df: pd.DataFrame, run_id: str) -> dict:
+def run_validation_from_raw_orders(
+    df: pd.DataFrame,
+    run_id: str,
+    cfg: Optional[AurumDatasetConfig] = None,
+) -> dict:
     """Build a full validation report from an in-memory raw_orders frame."""
+    if cfg is None:
+        cfg = load_dataset_config()
     loader = DataLoader.from_frames({"raw_orders": df})
     try:
-        materialize_upload_pipeline(loader)
-        return build_report(loader, run_id=run_id)
+        materialize_upload_pipeline(loader, cfg)
+        return build_report(loader, run_id=run_id, cfg=cfg)
     finally:
         loader.close()

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .contracts import BRONZE, CROSS_LAYER, GOLD, SILVER, CheckResult
+from .config_loader import AurumDatasetConfig
 from .data_loader import DataLoader
 from .reconciliation_layer import run_reconciliation_layer
 from .robust_anomaly import run_robust_anomaly_layer
@@ -29,11 +30,14 @@ class DetectionStackResult:
         return [c for c in self.all_checks if c.layer == layer]
 
 
-def run_detection_stack(loader: DataLoader) -> DetectionStackResult:
+def run_detection_stack(
+    loader: DataLoader,
+    cfg: AurumDatasetConfig | None = None,
+) -> DetectionStackResult:
     """Run all three Pain-1 detection layers in order (cheapest first)."""
     return DetectionStackResult(
         layer_1_rules=run_rule_library(loader),
-        layer_2_reconciliation=run_reconciliation_layer(loader),
+        layer_2_reconciliation=run_reconciliation_layer(loader, cfg),
         layer_3_robust_anomaly=run_robust_anomaly_layer(loader),
     )
 

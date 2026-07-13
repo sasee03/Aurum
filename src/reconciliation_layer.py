@@ -32,6 +32,10 @@ def _valid_row_predicate(cfg: AurumDatasetConfig) -> str:
     )
 
 
+def _order_id_expression(cfg: AurumDatasetConfig) -> str:
+    return cfg.metrics.order_id_expression.format(order_id=cfg.columns.order_id)
+
+
 def _result(
     check_id: str,
     check_name: str,
@@ -159,7 +163,7 @@ def rec_key_set(loader: DataLoader, cfg: AurumDatasetConfig | None = None) -> Ch
     """invoice_no in Silver must be subset of Bronze; Gold orders <= Silver orders."""
     cfg = cfg or load_dataset_config()
     primary_key = cfg.columns.primary_key
-    business_key = cfg.columns.resolve_business_key()
+    order_id_expr = _order_id_expression(cfg)
     silver_not_in_bronze = int(
         loader.scalar(
             f"""
@@ -172,7 +176,7 @@ def rec_key_set(loader: DataLoader, cfg: AurumDatasetConfig | None = None) -> Ch
     )
     silver_distinct = int(
         loader.scalar(
-            f"SELECT COUNT(DISTINCT {business_key}) FROM silver_orders"
+            f"SELECT COUNT(DISTINCT {order_id_expr}) FROM silver_orders"
         )
     )
     gold_orders = int(loader.scalar(f"SELECT {cfg.metrics.total_orders_metric} FROM gold_metrics") or 0)
@@ -212,7 +216,7 @@ def rec_aggregate_crosscheck(loader: DataLoader, cfg: AurumDatasetConfig | None 
         f"""
         SELECT
             SUM({cfg.columns.revenue}) AS revenue,
-            COUNT(DISTINCT {cfg.columns.resolve_business_key()}) AS orders,
+            COUNT(DISTINCT {_order_id_expression(cfg)}) AS orders,
             COUNT(DISTINCT {cfg.columns.customer_id}) AS customers
         FROM silver_orders
         """
@@ -246,15 +250,18 @@ def rec_aggregate_crosscheck(loader: DataLoader, cfg: AurumDatasetConfig | None 
             else f"Aggregate mismatch in: {mismatches}."
         ),
         sql=(
-            f"SELECT SUM({cfg.columns.revenue}), COUNT(DISTINCT {cfg.columns.resolve_business_key()}), "
+            f"SELECT SUM({cfg.columns.revenue}), COUNT(DISTINCT {_order_id_expression(cfg)}), "
             f"COUNT(DISTINCT {cfg.columns.customer_id}) FROM silver_orders"
         ),
         table="gold_metrics",
     )
 
 
-def run_reconciliation_layer(loader: DataLoader) -> list[CheckResult]:
-    cfg = load_dataset_config()
+def run_reconciliation_layer(
+    loader: DataLoader,
+    cfg: AurumDatasetConfig | None = None,
+) -> list[CheckResult]:
+    cfg = cfg or load_dataset_config()
     checks: list[Check] = []
     if loader.table_exists("bronze_orders") and loader.table_exists("silver_orders"):
         checks.append(Check(lambda: rec_count_unexplained_loss(loader, cfg), "L2-REC-COUNT", "Count Reconciliation: Unexplained Valid Row Loss", SILVER))

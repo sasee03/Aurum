@@ -8,6 +8,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
@@ -425,7 +426,6 @@ def test_post_runs_demo_path_unchanged_after_upload_added(client):
 def test_validate_raw_orders_frame_custom_config():
     from src.csv_ingest import validate_raw_orders_frame
     from src.config_loader import AurumDatasetConfig, DatasetInfo, TablesInfo, ColumnsInfo, MetricsInfo
-    import pandas as pd
     import pytest
     from src.csv_ingest import CsvSchemaMismatch
 
@@ -496,3 +496,87 @@ def test_validate_raw_orders_frame_custom_config():
     with pytest.raises(CsvSchemaMismatch) as exc_info:
         validate_raw_orders_frame(df_invalid, custom_cfg)
     assert exc_info.value.missing_columns == ["region"]
+
+
+def test_run_validation_from_raw_orders_custom_config_no_olist_fallback():
+    from src.config_loader import (
+        AurumDatasetConfig,
+        ColumnsInfo,
+        DatasetInfo,
+        MetricsInfo,
+        TablesInfo,
+    )
+    from src.csv_ingest import run_validation_from_raw_orders, validate_raw_orders_frame
+
+    custom_cfg = AurumDatasetConfig(
+        dataset=DatasetInfo(
+            name="Custom Orders",
+            currency="USD",
+            domain="retail",
+            geography_label="market",
+        ),
+        tables=TablesInfo(bronze="bronze_orders", silver="silver_orders", gold="gold_metrics"),
+        columns=ColumnsInfo(
+            primary_key="salelineid",
+            customer_id="buyerref",
+            timestamp="soldat",
+            quantity="units",
+            unit_price="priceeach",
+            geography="market",
+            revenue="linerevenue",
+            product_id="sku",
+            product_description="itemname",
+            order_id="orderref",
+            order_id_expression="{order_id}",
+            line_item_key=("salelineid", "sku", "buyerref", "soldat"),
+        ),
+        metrics=MetricsInfo(
+            revenue_formula="units * priceeach",
+            order_id_expression="{order_id}",
+            top_revenue_dimension="market",
+            top_revenue_label="market",
+            total_revenue_metric="total_revenue",
+            total_orders_metric="total_orders",
+            total_customers_metric="total_customers",
+            average_order_value_metric="average_order_value",
+            aggregate_revenue_metric="revenue",
+            total_quantity_metric="total_quantity",
+        ),
+    )
+
+    uploaded = pd.DataFrame(
+        {
+            "SaleLineId": ["L1", "L2"],
+            "OrderRef": ["O1", "O2"],
+            "Sku": ["A", "B"],
+            "ItemName": ["Alpha", "Beta"],
+            "BuyerRef": ["C1", "C2"],
+            "SoldAt": ["2026-01-01", "2026-01-02"],
+            "Units": [2, 3],
+            "PriceEach": [10.0, 30.0],
+            "Market": ["US", "CA"],
+        }
+    )
+    validated = validate_raw_orders_frame(uploaded, custom_cfg)
+    report = run_validation_from_raw_orders(validated, "custom_upload", custom_cfg)
+
+    assert report["run_id"] == "custom_upload"
+    assert report["dataset"] == "Custom Orders"
+    assert report["business_impact"]["expected_revenue"] == 110.0
+    assert report["business_impact"]["actual_revenue"] == 110.0
+
+    silver_checks = {check["check_id"]: check for check in report["checks"]["silver"]}
+    gold_checks = {check["check_id"]: check for check in report["checks"]["gold"]}
+    cross_checks = {check["check_id"]: check for check in report["checks"]["cross_layer"]}
+    detection_l2 = {
+        check["check_id"]: check
+        for check in report["detection_layers"]["layer_2_reconciliation"]
+    }
+
+    assert silver_checks["S7"]["status"] == "PASS"
+    assert gold_checks["G1"]["status"] == "PASS"
+    assert gold_checks["G2"]["status"] == "PASS"
+    assert cross_checks["X3"]["status"] == "PASS"
+    assert detection_l2["L2-REC-KEY"]["status"] == "PASS"
+    assert detection_l2["L2-REC-REV"]["status"] == "PASS"
+    assert detection_l2["L2-REC-AGG"]["status"] == "PASS"

@@ -350,9 +350,11 @@ def g10_country_coverage(loader: DataLoader, cfg: Optional[AurumDatasetConfig] =
 
 
 def validate_gold(
-    loader: DataLoader, upstream_status: Optional[str] = None
+    loader: DataLoader,
+    upstream_status: Optional[str] = None,
+    cfg: Optional[AurumDatasetConfig] = None,
 ) -> list[CheckResult]:
-    cfg = load_dataset_config()
+    cfg = cfg or load_dataset_config()
     return run_checks(
         [
             Check(lambda: g1_revenue_reconciliation(loader, cfg), "G1", "Revenue Reconciliation (within rounding tolerance)", GOLD),
