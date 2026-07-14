@@ -331,7 +331,7 @@ def test_generic_revenue_column_flows_through_full_validator_chain(monkeypatch):
         }
 
         assert set(bronze_results) == {f"B{i}" for i in range(1, 11)}
-        assert set(silver_results) == {f"S{i}" for i in range(1, 11)}
+        assert set(silver_results) == {f"S{i}" for i in range(1, 12)}
         assert set(gold_results) == {f"G{i}" for i in range(1, 11)}
         assert set(cross_results) == {f"X{i}" for i in range(1, 5)}
         assert silver_results["S7"].status == PASS

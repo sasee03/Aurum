@@ -568,15 +568,9 @@ def test_run_validation_from_raw_orders_custom_config_no_olist_fallback():
     silver_checks = {check["check_id"]: check for check in report["checks"]["silver"]}
     gold_checks = {check["check_id"]: check for check in report["checks"]["gold"]}
     cross_checks = {check["check_id"]: check for check in report["checks"]["cross_layer"]}
-    detection_l2 = {
-        check["check_id"]: check
-        for check in report["detection_layers"]["layer_2_reconciliation"]
-    }
-
     assert silver_checks["S7"]["status"] == "PASS"
+    assert silver_checks["S11"]["status"] == "PASS"
     assert gold_checks["G1"]["status"] == "PASS"
     assert gold_checks["G2"]["status"] == "PASS"
     assert cross_checks["X3"]["status"] == "PASS"
-    assert detection_l2["L2-REC-KEY"]["status"] == "PASS"
-    assert detection_l2["L2-REC-REV"]["status"] == "PASS"
-    assert detection_l2["L2-REC-AGG"]["status"] == "PASS"
+    assert len(report["detection_layers"]["layer_2_reconciliation"]) == 0
