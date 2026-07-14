@@ -18,7 +18,8 @@ def test_demo_report_contract_and_story():
     }
     assert required <= set(report)
     assert report["layer_status"] == {
-        "bronze": "PASS", "silver": "FAIL", "gold": "IMPACTED"
+        "bronze": "PASS", "silver": "FAIL", "gold": "IMPACTED",
+        "layer_1_rules": "WARN", "layer_3_anomaly": "INFORMATIONAL"
     }
     assert report["final_verdict"] == "NOT TRUSTED"
     assert report["first_failed_layer"] == "Bronze \u2192 Silver"

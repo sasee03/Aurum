@@ -20,8 +20,9 @@ IMPACTED = "IMPACTED"
 # a first-class outcome -- never a silent pass and never a fail. When emitted, the
 # `detail` field MUST carry a specific human-readable reason.
 SKIPPED = "SKIPPED"
+INFORMATIONAL = "INFORMATIONAL"
 
-CHECK_STATUSES = (PASS, WARN, FAIL, IMPACTED, SKIPPED)
+CHECK_STATUSES = (PASS, WARN, FAIL, IMPACTED, SKIPPED, INFORMATIONAL)
 
 # Layer names.
 BRONZE = "Bronze"

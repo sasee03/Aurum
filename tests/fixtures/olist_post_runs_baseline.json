@@ -1192,7 +1192,9 @@
   "layer_status": {
     "bronze": "PASS",
     "gold": "IMPACTED",
-    "silver": "FAIL"
+    "silver": "FAIL",
+    "layer_1_rules": "WARN",
+    "layer_3_anomaly": "INFORMATIONAL"
   },
   "pipeline": "Raw \u2192 Bronze \u2192 Silver \u2192 Gold",
   "project": "Aurum",
@@ -1237,5 +1239,5 @@
   "run_id": "golden_olist_baseline",
   "severity": "HIGH",
   "suggested_action": "Fix the Silver transformation rule (unit_price > 20.0 records are being filtered out) and rerun the ETL.",
-  "trust_score": 40
+  "trust_score": 35
 }

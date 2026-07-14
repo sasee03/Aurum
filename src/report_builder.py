@@ -29,6 +29,48 @@ REPORT_PATH = Path("reports/report.json")
 PIPELINE = "Raw \u2192 Bronze \u2192 Silver \u2192 Gold"
 
 
+def _is_blocking_check(check_id: str) -> bool:
+    if check_id.startswith(("B", "S", "G")) and not check_id.startswith(("L1", "L2", "L3", "X")):
+        return True
+    if check_id.startswith("L1"):
+        return any(s in check_id for s in ["-COMP-EMPTY", "-COMP-NULL", "-COMP-SRC", "-UNIQ-PK"])
+    return False
+
+
+def _compute_l1_status(results: list) -> str:
+    blocking = False
+    warning = False
+    for r in results:
+        status = r.status if hasattr(r, "status") else r.get("status")
+        cid = r.check_id if hasattr(r, "check_id") else r.get("check_id")
+        if status in ("FAIL", "IMPACTED"):
+            if _is_blocking_check(cid):
+                blocking = True
+            else:
+                warning = True
+        elif status == "WARN":
+            warning = True
+    if blocking:
+        return "FAIL"
+    if warning:
+        return "WARN"
+    return "PASS"
+
+
+def _compute_l3_status(results: list, core_status: dict) -> str:
+    from .contracts import INFORMATIONAL
+    if any(s in ("FAIL", "IMPACTED") for s in core_status.values()):
+        return INFORMATIONAL
+    warning = False
+    for r in results:
+        status = r.status if hasattr(r, "status") else r.get("status")
+        if status in ("FAIL", "IMPACTED", "WARN"):
+            warning = True
+    if warning:
+        return "WARN"
+    return "PASS"
+
+
 def _suggested_action(final_verdict: str, layer_status: dict, root_cause: dict) -> str:
     if final_verdict == TRUSTED:
         return "No action required. Pipeline output is trustworthy."
@@ -60,10 +102,16 @@ def build_report(
     silver_status = compute_layer_status(silver_results)
     gold_results = validate_gold(loader, upstream_status=silver_status, cfg=cfg)
 
-    layer_status = {
+    core_status = {
         "bronze": bronze_status,
         "silver": silver_status,
         "gold": compute_layer_status(gold_results),
+    }
+
+    layer_status = {
+        **core_status,
+        "layer_1_rules": _compute_l1_status(detection.layer_1_rules),
+        "layer_3_anomaly": _compute_l3_status(detection.layer_3_robust_anomaly, core_status),
     }
 
     # Custom checks execution
@@ -138,11 +186,12 @@ def build_report(
     # Skips must never buy a clean bill of health: a TRUSTED verdict with
     # incomplete coverage is downgraded to a caveated WARNING so no reader
     # mistakes "we couldn't check everything" for "everything is fine".
-    if final_verdict == TRUSTED and not coverage["full_coverage"]:
+    skipped_blocking = sum(1 for detail in coverage.get("skipped_details", []) if _is_blocking_check(detail.get("check_id", "")))
+    if final_verdict == TRUSTED and skipped_blocking > 0:
         final_verdict = WARNING
         severity = "MEDIUM"
         coverage["verdict_caveat"] = (
-            f"Coverage incomplete: {coverage['skipped']} check(s) skipped; "
+            f"Coverage incomplete: {skipped_blocking} blocking check(s) skipped; "
             "verdict downgraded from TRUSTED."
         )
 
