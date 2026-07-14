@@ -27,9 +27,12 @@ def test_load_olist_yaml_has_required_sections():
     assert cfg.dataset.currency == "BRL"
     assert cfg.dataset.domain == "retail"
     assert cfg.dataset.geography_label == "state"
+    assert cfg.tables.raw == "raw_orders"
     assert cfg.tables.bronze == "bronze_orders"
     assert cfg.tables.silver == "silver_orders"
-    assert cfg.tables.gold == "gold_metrics"
+    assert cfg.tables.gold.metrics == "gold_metrics"
+    assert cfg.tables.gold.country_revenue == "gold_country_revenue"
+    assert cfg.tables.gold.product_sales == "gold_product_sales"
     assert cfg.columns.primary_key == "invoice_no"
     assert cfg.columns.customer_id == "customer_id"
     assert cfg.columns.timestamp == "invoice_date"
@@ -58,9 +61,13 @@ def test_env_override(tmp_path, monkeypatch):
               domain: retail
               geography_label: region
             tables:
+              raw: raw_orders
               bronze: raw_bronze
               silver: raw_silver
-              gold: raw_gold
+              gold:
+                metrics: raw_gold_metrics
+                country_revenue: raw_gold_country
+                product_sales: raw_gold_product
             columns:
               primary_key: id
               customer_id: cust_id
@@ -106,9 +113,13 @@ def test_price_ceiling_custom(tmp_path):
               domain: retail
               geography_label: region
             tables:
+              raw: raw_orders
               bronze: raw_bronze
               silver: raw_silver
-              gold: raw_gold
+              gold:
+                metrics: raw_gold_metrics
+                country_revenue: raw_gold_country
+                product_sales: raw_gold_product
             columns:
               primary_key: id
               customer_id: cust_id
@@ -167,9 +178,13 @@ def test_missing_required_key_raises_clear_error(tmp_path):
               currency: BRL
               domain: retail
             tables:
+              raw: raw_orders
               bronze: bronze_orders
               silver: silver_orders
-              gold: gold_metrics
+              gold:
+                metrics: gold_metrics
+                country_revenue: gold_country_revenue
+                product_sales: gold_product_sales
             columns:
               primary_key: invoice_no
               customer_id: customer_id

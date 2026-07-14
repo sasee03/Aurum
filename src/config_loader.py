@@ -12,7 +12,8 @@ import yaml
 REQUIRED_SECTIONS = ("dataset", "tables", "columns", "metrics")
 
 _DATASET_FIELDS = ("name", "currency", "domain", "geography_label")
-_TABLE_FIELDS = ("bronze", "silver", "gold")
+_TABLE_FIELDS = ("raw", "bronze", "silver", "gold")
+_GOLD_TABLE_FIELDS = ("metrics", "country_revenue", "product_sales")
 _COLUMN_FIELDS = (
     "primary_key",
     "customer_id",
@@ -49,10 +50,18 @@ class DatasetInfo:
 
 
 @dataclass(frozen=True)
+class GoldTablesInfo:
+    metrics: str
+    country_revenue: str
+    product_sales: str
+
+
+@dataclass(frozen=True)
 class TablesInfo:
+    raw: str
     bronze: str
     silver: str
-    gold: str
+    gold: GoldTablesInfo
 
 
 @dataclass(frozen=True)
@@ -164,6 +173,9 @@ def _parse_raw_config(raw: Any, source: str) -> AurumDatasetConfig:
 
     _require_fields("dataset", dataset_raw, _DATASET_FIELDS)
     _require_fields("tables", tables_raw, _TABLE_FIELDS)
+    gold_raw = _require_mapping(tables_raw["gold"], "tables.gold")
+    _require_fields("tables.gold", gold_raw, _GOLD_TABLE_FIELDS)
+    
     _require_fields("columns", columns_raw, _COLUMN_FIELDS)
     _require_fields("metrics", metrics_raw, _METRIC_FIELDS)
 
@@ -175,9 +187,14 @@ def _parse_raw_config(raw: Any, source: str) -> AurumDatasetConfig:
             geography_label=str(dataset_raw["geography_label"]),
         ),
         tables=TablesInfo(
+            raw=str(tables_raw["raw"]),
             bronze=str(tables_raw["bronze"]),
             silver=str(tables_raw["silver"]),
-            gold=str(tables_raw["gold"]),
+            gold=GoldTablesInfo(
+                metrics=str(gold_raw["metrics"]),
+                country_revenue=str(gold_raw["country_revenue"]),
+                product_sales=str(gold_raw["product_sales"]),
+            ),
         ),
         columns=ColumnsInfo(
             primary_key=str(columns_raw["primary_key"]),

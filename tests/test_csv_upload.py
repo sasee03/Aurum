@@ -492,13 +492,18 @@ def test_post_runs_demo_path_unchanged_after_upload_added(client):
 
 def test_validate_raw_orders_frame_custom_config():
     from src.csv_ingest import validate_raw_orders_frame
-    from src.config_loader import AurumDatasetConfig, DatasetInfo, TablesInfo, ColumnsInfo, MetricsInfo
+    from src.config_loader import AurumDatasetConfig, DatasetInfo, TablesInfo, ColumnsInfo, MetricsInfo, GoldTablesInfo
     import pytest
     from src.csv_ingest import CsvSchemaMismatch
 
     custom_cfg = AurumDatasetConfig(
         dataset=DatasetInfo(name="Custom", currency="USD", domain="retail", geography_label="region"),
-        tables=TablesInfo(bronze="b", silver="s", gold="g"),
+        tables=TablesInfo(
+            raw="r",
+            bronze="b",
+            silver="s",
+            gold=GoldTablesInfo(metrics="g", country_revenue="gc", product_sales="gp")
+        ),
         columns=ColumnsInfo(
             primary_key="custom_id",
             customer_id="cust_uuid",
@@ -572,6 +577,7 @@ def test_run_validation_from_raw_orders_custom_config_no_olist_fallback():
         DatasetInfo,
         MetricsInfo,
         TablesInfo,
+        GoldTablesInfo,
     )
     from src.csv_ingest import run_validation_from_raw_orders, validate_raw_orders_frame
 
@@ -582,7 +588,16 @@ def test_run_validation_from_raw_orders_custom_config_no_olist_fallback():
             domain="retail",
             geography_label="market",
         ),
-        tables=TablesInfo(bronze="bronze_orders", silver="silver_orders", gold="gold_metrics"),
+        tables=TablesInfo(
+            raw="raw_orders",
+            bronze="bronze_orders",
+            silver="silver_orders",
+            gold=GoldTablesInfo(
+                metrics="gold_metrics",
+                country_revenue="gold_country_revenue",
+                product_sales="gold_product_sales"
+            )
+        ),
         columns=ColumnsInfo(
             primary_key="salelineid",
             customer_id="buyerref",

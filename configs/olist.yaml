@@ -5,9 +5,13 @@ dataset:
   geography_label: state
 
 tables:
+  raw: raw_orders
   bronze: bronze_orders
   silver: silver_orders
-  gold: gold_metrics
+  gold:
+    metrics: gold_metrics
+    country_revenue: gold_country_revenue
+    product_sales: gold_product_sales
 
 columns:
   primary_key: invoice_no

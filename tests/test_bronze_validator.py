@@ -82,9 +82,13 @@ def test_b7_dynamic_numeric_typing():
       domain: retail
       geography_label: market
     tables:
+      raw: raw_orders
       bronze: bronze_orders
       silver: silver_orders
-      gold: gold_metrics
+      gold:
+        metrics: gold_metrics
+        country_revenue: gold_country_revenue
+        product_sales: gold_product_sales
     columns:
       primary_key: pk
       order_id: ord

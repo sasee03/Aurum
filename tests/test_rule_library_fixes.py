@@ -13,6 +13,7 @@ from src.config_loader import (
     DatasetInfo,
     MetricsInfo,
     TablesInfo,
+    GoldTablesInfo,
 )
 from src.detection_stack import run_detection_stack
 from src.rule_library import _check_consistency_fk, _check_freshness
@@ -75,7 +76,16 @@ def test_detection_stack_layer_1_uses_custom_dataset_config_specs():
             domain="retail",
             geography_label="market",
         ),
-        tables=TablesInfo(bronze="bronze_orders", silver="silver_orders", gold="gold_metrics"),
+        tables=TablesInfo(
+            raw="raw_orders",
+            bronze="bronze_orders",
+            silver="silver_orders",
+            gold=GoldTablesInfo(
+                metrics="gold_metrics",
+                country_revenue="gold_country_revenue",
+                product_sales="gold_product_sales"
+            )
+        ),
         columns=ColumnsInfo(
             primary_key="SaleLineId",
             customer_id="BuyerRef",

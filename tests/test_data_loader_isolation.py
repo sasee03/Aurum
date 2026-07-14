@@ -133,9 +133,13 @@ def test_build_silver_custom_config():
       domain: retail
       geography_label: market
     tables:
+      raw: raw_orders
       bronze: bronze_orders
       silver: silver_orders
-      gold: gold_metrics
+      gold:
+        metrics: gold_metrics
+        country_revenue: gold_country_revenue
+        product_sales: gold_product_sales
     columns:
       primary_key: pk
       order_id: ord
@@ -200,9 +204,13 @@ def test_reconciliation_indexes_follow_custom_line_item_key():
       domain: retail
       geography_label: market
     tables:
+      raw: raw_orders
       bronze: bronze_orders
       silver: silver_orders
-      gold: gold_metrics
+      gold:
+        metrics: gold_metrics
+        country_revenue: gold_country_revenue
+        product_sales: gold_product_sales
     columns:
       primary_key: SaleLineId
       order_id: OrderRef
@@ -355,9 +363,13 @@ def test_build_gold_custom_config():
       domain: retail
       geography_label: market
     tables:
+      raw: raw_orders
       bronze: bronze_orders
       silver: silver_orders
-      gold: gold_metrics
+      gold:
+        metrics: gold_metrics
+        country_revenue: gold_country_revenue
+        product_sales: gold_product_sales
     columns:
       primary_key: pk
       order_id: ord
