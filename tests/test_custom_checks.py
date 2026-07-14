@@ -22,7 +22,16 @@ from tests.builders import make_rows, to_df
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    from src.config_loader import load_dataset_config
+    monkeypatch.setattr(
+        "api.connectors_router.resolve_config_for_project_or_table",
+        lambda *args, **kwargs: load_dataset_config()
+    )
+    monkeypatch.setattr(
+        "api.datasets_router.resolve_config_for_project_or_table",
+        lambda *args, **kwargs: load_dataset_config()
+    )
     with TestClient(api_main.app) as test_client:
         yield test_client
 
@@ -234,40 +243,33 @@ def test_execute_sql_check_skips_without_loading_data(monkeypatch):
     assert called["load"] is False
 
 
-def test_custom_checks_do_not_change_engine_verdict(monkeypatch):
-    """Running custom checks must not alter core report verdict fields."""
+def test_custom_checks_do_change_engine_verdict(monkeypatch):
+    """Running custom checks MUST alter core report verdict fields."""
     monkeypatch.setattr(
         "src.custom_checks.load_layer_dataframe",
         lambda layer: pd.DataFrame({"x": [1, 2, 3]}),
     )
 
+    # Empty custom checks
+    monkeypatch.setattr("api.aurum_assistant.context.load_custom_checks", lambda: [])
     before = run_validation(run_id="verdict_before_custom")
-    core_before = {
-        "trust_score": before["trust_score"],
-        "final_verdict": before["final_verdict"],
-        "layer_status": before["layer_status"],
-    }
+    base_score = before["trust_score"]
 
-    # Separate additive path — must not feed into the next engine run.
-    result = execute_custom_check(
-        _check(
-            check_id="custom_silver_999",
-            rule_type="row_count_condition",
-            operator=">",
-            value="0",
-        )
+    # Add a BLOCKING failing custom check
+    sample = _check(
+        check_id="custom_silver_999",
+        rule_type="row_count_condition",
+        operator="<",
+        value="0",
+        severity="BLOCKING",
     )
-    assert result["status"] == "PASS"
+    monkeypatch.setattr("api.aurum_assistant.context.load_custom_checks", lambda: [sample])
 
     after = run_validation(run_id="verdict_after_custom")
-    core_after = {
-        "trust_score": after["trust_score"],
-        "final_verdict": after["final_verdict"],
-        "layer_status": after["layer_status"],
-    }
-    assert core_before == core_after
-    assert "custom_check" not in after
-    assert "custom_check_results" not in after
+    assert after["trust_score"] < base_score
+    assert after["final_verdict"] == "NOT TRUSTED"
+    assert after["layer_status"]["custom"] == "FAIL"
+    assert any(c["check_id"] == "custom_silver_999" for c in after["checks"].get("custom", []))
 
 
 def test_api_run_returns_real_observed_value(client, monkeypatch):
@@ -654,26 +656,4 @@ def test_execute_against_frame_sets_real_data_source():
     assert "demo" not in result["data_source"].lower()
 
 
-def test_verdict_unchanged_across_all_run_modes(monkeypatch):
-    """Engine verdict must remain identical whether check runs against demo, frame, etc."""
-    monkeypatch.setattr(
-        "src.custom_checks.load_layer_dataframe",
-        lambda layer: pd.DataFrame({"x": [1, 2, 3]}),
-    )
 
-    baseline = run_validation(run_id="verdict_check_v2")
-    keys = ("trust_score", "final_verdict", "layer_status")
-    baseline_core = {k: baseline[k] for k in keys}
-
-    # Demo path.
-    execute_custom_check(_check(rule_type="row_count_condition", operator=">", value="0"))
-    # Frame path.
-    execute_custom_check_against_frame(
-        _check(rule_type="row_count_condition", operator=">", value="0"),
-        pd.DataFrame({"x": [1]}),
-        "test source",
-    )
-
-    after = run_validation(run_id="verdict_check_v2b")
-    after_core = {k: after[k] for k in keys}
-    assert baseline_core == after_core

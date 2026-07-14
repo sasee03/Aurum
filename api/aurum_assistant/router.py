@@ -101,8 +101,21 @@ class CustomCheckCreate(BaseModel):
     column: str
     operator: str
     value: Union[str, int, float]
-    severity: Literal["low", "medium", "high"] = "medium"
+    severity: Literal["low", "medium", "high", "INFORMATIONAL", "WARNING", "BLOCKING"] = "WARNING"
     description: str = ""
+
+    @classmethod
+    def __get_validators__(cls):
+        yield cls.validate_severity
+
+    @classmethod
+    def validate_severity(cls, v):
+        if hasattr(v, "severity"):
+            val = v.severity
+            mapping = {"low": "INFORMATIONAL", "medium": "WARNING", "high": "BLOCKING"}
+            if isinstance(val, str) and val.lower() in mapping:
+                v.severity = mapping[val.lower()]
+        return v
 
 
 class CustomCheckRunRequest(BaseModel):

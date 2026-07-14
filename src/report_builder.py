@@ -21,6 +21,7 @@ from .silver_validator import validate_silver
 from .resilience import build_coverage
 from .verdict_engine import compute_final_verdict, compute_layer_status
 from .engines.trust_engine import TrustScoringEngine
+from .contracts import CheckResult, PASS, FAIL, WARN, SKIPPED
 
 trust_engine = TrustScoringEngine()
 
@@ -65,6 +66,59 @@ def build_report(
         "gold": compute_layer_status(gold_results),
     }
 
+    # Custom checks execution
+    custom_results = []
+    try:
+        from api.aurum_assistant.context import load_custom_checks
+        custom_checks_cfg = load_custom_checks()
+    except Exception:
+        custom_checks_cfg = []
+
+    if custom_checks_cfg:
+        import pandas as pd
+        from src.custom_checks import evaluate_check_on_frame, LAYER_TABLES
+
+        for c in custom_checks_cfg:
+            layer = str(c.get("layer", "silver")).strip().lower()
+            table_name = LAYER_TABLES.get(layer)
+            df = loader.query(f"SELECT * FROM {table_name}") if table_name and loader.table_exists(table_name) else pd.DataFrame()
+            
+            res_dict = evaluate_check_on_frame(c, df)
+            
+            # Map severity
+            raw_severity = str(c.get("severity", "WARNING")).upper()
+            if raw_severity == "HIGH": severity = "BLOCKING"
+            elif raw_severity == "MEDIUM": severity = "WARNING"
+            elif raw_severity == "LOW": severity = "INFORMATIONAL"
+            else: severity = raw_severity
+
+            # Determine CheckResult status based on execution status and severity
+            exec_status = res_dict.get("status", SKIPPED)
+            final_status = exec_status
+            if exec_status == "FAIL":
+                if severity == "BLOCKING":
+                    final_status = FAIL
+                elif severity == "WARNING":
+                    final_status = WARN
+                else: # INFORMATIONAL
+                    final_status = PASS # or WARN? Let's use PASS but detail it. 
+
+            custom_results.append(
+                CheckResult(
+                    check_id=res_dict.get("check_id", ""),
+                    check_name=c.get("check_name", "Custom Check"),
+                    layer="Custom",
+                    status=final_status,
+                    observed=res_dict.get("observed_value"),
+                    expected=res_dict.get("expected_condition"),
+                    detail=res_dict.get("message", ""),
+                    extra={"severity": severity, "original_status": exec_status}
+                )
+            )
+
+    if custom_results:
+        layer_status["custom"] = compute_layer_status(custom_results)
+
     cross_results = validate_cross_layer(
         bronze_results, silver_results, gold_results, layer_status, cfg
     )
@@ -78,6 +132,7 @@ def build_report(
         + silver_results
         + gold_results
         + cross_results
+        + custom_results
         + detection.all_checks
     )
     # Skips must never buy a clean bill of health: a TRUSTED verdict with
@@ -129,6 +184,7 @@ def build_report(
             "silver": [r.to_dict() for r in silver_results],
             "gold": [r.to_dict() for r in gold_results],
             "cross_layer": [r.to_dict() for r in cross_results],
+            "custom": [r.to_dict() for r in custom_results] if custom_results else [],
         },
     }
 

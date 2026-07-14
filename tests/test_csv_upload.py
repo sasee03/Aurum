@@ -116,7 +116,11 @@ def test_upload_project_store_failure_returns_clear_500(client, monkeypatch):
 
 def _strip_volatile(report: dict) -> dict:
     """Normalize a report for golden comparison by dropping volatile fields."""
+    import copy
     trimmed = {key: value for key, value in report.items() if key not in VOLATILE_REPORT_KEYS}
+
+    if "checks" in trimmed and "custom" in trimmed["checks"]:
+        del trimmed["checks"]["custom"]
 
     def _walk(value):
         if isinstance(value, dict):
