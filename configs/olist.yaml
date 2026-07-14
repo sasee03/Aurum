@@ -22,6 +22,7 @@ columns:
   order_id: invoice_no
   order_id_expression: "REGEXP_REPLACE(invoice_no, '_[0-9]+$', '')"
   line_item_key: [invoice_no, stock_code, customer_id, invoice_date]
+  price_ceiling: 20
 
 metrics:
   revenue_formula: "quantity * unit_price"

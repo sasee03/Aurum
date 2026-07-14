@@ -289,8 +289,11 @@ def b10_future_invoice_dates(loader: DataLoader, cfg: Optional[AurumDatasetConfi
     )
 
 
-def validate_bronze(loader: DataLoader) -> list[CheckResult]:
-    cfg = load_dataset_config()
+def validate_bronze(
+    loader: DataLoader,
+    cfg: Optional[AurumDatasetConfig] = None,
+) -> list[CheckResult]:
+    cfg = cfg or load_dataset_config()
     core = run_checks(
         [
             Check(lambda: b1_source_to_bronze_count(loader, cfg), "B1", "Source to Bronze Row Count", BRONZE),

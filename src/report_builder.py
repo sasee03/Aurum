@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .contracts import TRUSTED, WARNING
-from .config_loader import load_dataset_config
+from .config_loader import load_dataset_config, AurumDatasetConfig
 from .cross_layer_validator import (
     build_business_impact,
     build_root_cause,
@@ -45,15 +45,19 @@ def _suggested_action(final_verdict: str, layer_status: dict, root_cause: dict) 
     return "Review flagged layers before publishing Gold outputs."
 
 
-def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
-    cfg = load_dataset_config()
-    detection = run_detection_stack(loader)
+def build_report(
+    loader: DataLoader,
+    run_id: str = "demo_run_001",
+    cfg: AurumDatasetConfig | None = None,
+) -> dict:
+    cfg = cfg or load_dataset_config()
+    detection = run_detection_stack(loader, cfg)
 
-    bronze_results = validate_bronze(loader)
-    silver_results = validate_silver(loader)
+    bronze_results = validate_bronze(loader, cfg)
+    silver_results = validate_silver(loader, cfg)
     bronze_status = compute_layer_status(bronze_results)
     silver_status = compute_layer_status(silver_results)
-    gold_results = validate_gold(loader, upstream_status=silver_status)
+    gold_results = validate_gold(loader, upstream_status=silver_status, cfg=cfg)
 
     layer_status = {
         "bronze": bronze_status,
@@ -62,7 +66,7 @@ def build_report(loader: DataLoader, run_id: str = "demo_run_001") -> dict:
     }
 
     cross_results = validate_cross_layer(
-        bronze_results, silver_results, gold_results, layer_status
+        bronze_results, silver_results, gold_results, layer_status, cfg
     )
 
     verdict = compute_final_verdict(layer_status)

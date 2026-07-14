@@ -21,11 +21,15 @@ from .contracts import (
     VALIDITY,
     WARN,
 )
-from .data_loader import DataLoader
+from .config_loader import AurumDatasetConfig, load_dataset_config
+from .data_loader import DataLoader, _quote_ident
 from .resilience import Check, run_checks, skipped_result
 from .engines.metadata_engine import UniversalMetadataEngine
 
-metadata_engine = UniversalMetadataEngine()
+def _ident(loader: DataLoader, name: str, spec: dict) -> str:
+    if not spec.get("_quote_identifiers", False):
+        return name
+    return _quote_ident(name).as_string(loader._pg_conn)
 
 
 def _result(
@@ -64,12 +68,14 @@ def _check_completeness_nulls(loader: DataLoader, table: str, spec: dict) -> Che
     null_counts = {}
     for col in spec.get("mandatory_columns", []):
         if col in loader.columns(table):
+            col_sql = _ident(loader, col, spec)
             null_counts[col] = int(
-                loader.scalar(f"SELECT COUNT(*) FROM {table} WHERE {col} IS NULL")
+                loader.scalar(f"SELECT COUNT(*) FROM {table} WHERE {col_sql} IS NULL")
             )
     total = sum(null_counts.values())
     status = PASS if total == 0 else FAIL
-    sql = f"SELECT COUNT(*) FROM {table} WHERE {spec['mandatory_columns'][0]} IS NULL"
+    first_col = _ident(loader, spec["mandatory_columns"][0], spec)
+    sql = f"SELECT COUNT(*) FROM {table} WHERE {first_col} IS NULL"
     return _result(
         f"L1-{table[:3].upper()}-COMP-NULL",
         "Mandatory Column Null Check",
@@ -119,12 +125,13 @@ def _check_validity_ranges(loader: DataLoader, table: str, spec: dict) -> list[C
     for col, rules in spec.get("range_checks", {}).items():
         if col not in loader.columns(table):
             continue
+        col_sql = _ident(loader, col, spec)
         strict_min = rules.get("strict_min", False)
         min_v = rules.get("min")
         if min_v is not None:
             op = "<=" if strict_min else "<"
             bad = int(loader.scalar(
-                f"SELECT COUNT(*) FROM {table} WHERE {col} {op} {min_v}"
+                f"SELECT COUNT(*) FROM {table} WHERE {col_sql} {op} {min_v}"
             ))
             status = PASS if bad == 0 else FAIL
             results.append(_result(
@@ -134,7 +141,7 @@ def _check_validity_ranges(loader: DataLoader, table: str, spec: dict) -> list[C
                 observed=bad, expected=0,
                 detail=f"No invalid {col} values." if bad == 0
                 else f"{bad:,} rows violate {col} range rule.",
-                sql=f"SELECT COUNT(*) FROM {table} WHERE {col} {op} {min_v}",
+                sql=f"SELECT COUNT(*) FROM {table} WHERE {col_sql} {op} {min_v}",
             ))
     return results
 
@@ -144,9 +151,10 @@ def _check_validity_dates(loader: DataLoader, table: str, spec: dict) -> list[Ch
     for col in spec.get("date_columns", []):
         if col not in loader.columns(table):
             continue
+        col_sql = _ident(loader, col, spec)
         bad = int(loader.scalar(
             f"SELECT COUNT(*) FROM {table} "
-            f"WHERE {col} IS NOT NULL AND TRY_CAST({col} AS DATE) IS NULL"
+            f"WHERE {col_sql} IS NOT NULL AND TRY_CAST({col_sql} AS DATE) IS NULL"
         ))
         status = PASS if bad == 0 else FAIL
         results.append(_result(
@@ -156,7 +164,7 @@ def _check_validity_dates(loader: DataLoader, table: str, spec: dict) -> list[Ch
             observed=bad, expected=0,
             detail=f"All {col} values parse as dates." if bad == 0
             else f"{bad:,} rows have unparseable {col}.",
-            sql=f"SELECT COUNT(*) FROM {table} WHERE TRY_CAST({col} AS DATE) IS NULL",
+            sql=f"SELECT COUNT(*) FROM {table} WHERE TRY_CAST({col_sql} AS DATE) IS NULL",
         ))
     return results
 
@@ -165,7 +173,7 @@ def _check_uniqueness_pk(loader: DataLoader, table: str, spec: dict) -> Optional
     pk = spec.get("primary_key", [])
     if not pk:
         return None
-    key_cols = ", ".join(pk)
+    key_cols = ", ".join(_ident(loader, col, spec) for col in pk)
     dup = int(loader.scalar(
         f"""
         SELECT COALESCE(SUM(cnt - 1), 0) FROM (
@@ -239,11 +247,13 @@ def _check_consistency_fk(loader: DataLoader, table: str, spec: dict) -> list[Ch
                 ),
             ))
             continue
+        col_sql = _ident(loader, col, spec)
+        ref_column_sql = _ident(loader, ref_column, spec)
         orphans = int(loader.scalar(
             f"""
             SELECT COUNT(*) FROM {table} child
-            LEFT JOIN {ref_table} ref ON child.{col} = ref.{ref_column}
-            WHERE child.{col} IS NOT NULL AND ref.{ref_column} IS NULL
+            LEFT JOIN {ref_table} ref ON child.{col_sql} = ref.{ref_column_sql}
+            WHERE child.{col_sql} IS NOT NULL AND ref.{ref_column_sql} IS NULL
             """
         ))
         status = PASS if orphans == 0 else FAIL
@@ -263,8 +273,8 @@ def _check_consistency_fk(loader: DataLoader, table: str, spec: dict) -> list[Ch
             ),
             sql=(
                 f"SELECT COUNT(*) FROM {table} child LEFT JOIN {ref_table} ref "
-                f"ON child.{col} = ref.{ref_column} "
-                f"WHERE child.{col} IS NOT NULL AND ref.{ref_column} IS NULL"
+                f"ON child.{col_sql} = ref.{ref_column_sql} "
+                f"WHERE child.{col_sql} IS NOT NULL AND ref.{ref_column_sql} IS NULL"
             ),
         ))
     return results
@@ -285,19 +295,20 @@ def _check_freshness(loader: DataLoader, table: str, spec: dict) -> list[CheckRe
 
     max_future_days = spec.get("max_future_days", 0)
     expected_freshness_days = spec.get("expected_freshness_days", 365)
+    date_col_sql = _ident(loader, date_col, spec)
 
     sql = (
-        f"SELECT MAX(TRY_CAST({date_col} AS DATE)) AS max_d, CURRENT_DATE AS run_date "
-        f"FROM {table} WHERE {date_col} IS NOT NULL"
+        f"SELECT MAX(TRY_CAST({date_col_sql} AS DATE)) AS max_d, CURRENT_DATE AS run_date "
+        f"FROM {table} WHERE {date_col_sql} IS NOT NULL"
     )
     bounds = loader.query(
         f"""
         SELECT
-            MAX(TRY_CAST({date_col} AS DATE)) AS max_d,
+            MAX(TRY_CAST({date_col_sql} AS DATE)) AS max_d,
             CURRENT_DATE AS run_date,
             CURRENT_DATE + INTERVAL '{max_future_days} days' AS future_limit,
             CURRENT_DATE - INTERVAL '{expected_freshness_days} days' AS stale_limit
-        FROM {table} WHERE {date_col} IS NOT NULL
+        FROM {table} WHERE {date_col_sql} IS NOT NULL
         """
     ).to_dict("records")[0]
     max_d = bounds["max_d"]
@@ -362,11 +373,12 @@ def _check_timeliness(loader: DataLoader, table: str, spec: dict) -> list[CheckR
     for col in spec.get("date_columns", []):
         if col not in loader.columns(table):
             continue
+        col_sql = _ident(loader, col, spec)
         row = loader.query(
             f"""
-            SELECT MIN(TRY_CAST({col} AS DATE)) AS min_d,
-                   MAX(TRY_CAST({col} AS DATE)) AS max_d
-            FROM {table} WHERE {col} IS NOT NULL
+            SELECT MIN(TRY_CAST({col_sql} AS DATE)) AS min_d,
+                   MAX(TRY_CAST({col_sql} AS DATE)) AS max_d
+            FROM {table} WHERE {col_sql} IS NOT NULL
             """
         ).to_dict("records")[0]
         if row["max_d"] is None:
@@ -376,7 +388,7 @@ def _check_timeliness(loader: DataLoader, table: str, spec: dict) -> list[CheckR
                 spec["layer"], table, TIMELINESS, WARN,
                 observed=None, expected=f"within {days} days",
                 detail="No parseable dates for timeliness check.",
-                sql=f"SELECT MAX({col}) FROM {table}",
+                sql=f"SELECT MAX({col_sql}) FROM {table}",
             ))
             continue
         span = (row["max_d"] - row["min_d"]).days if row["min_d"] else 0
@@ -388,20 +400,25 @@ def _check_timeliness(loader: DataLoader, table: str, spec: dict) -> list[CheckR
             observed=f"span={span}d", expected=f"<= {days}d",
             detail=f"Date span {span} days within window." if status == PASS
             else f"Date span {span} days exceeds {days}-day window.",
-            sql=f"SELECT MIN({col}), MAX({col}) FROM {table}",
+            sql=f"SELECT MIN({col_sql}), MAX({col_sql}) FROM {table}",
         ))
     return results
 
 
-def run_rule_library(loader: DataLoader) -> list[CheckResult]:
+def run_rule_library(
+    loader: DataLoader,
+    cfg: AurumDatasetConfig | None = None,
+) -> list[CheckResult]:
     """Run all Layer-1 config-driven checks for tables that exist.
 
     Each helper runs through the resilience seam so one bad table/column cannot
     abort the layer; order is preserved to keep the report stable.
     """
+    cfg = cfg or load_dataset_config()
+    engine = UniversalMetadataEngine(cfg)
     checks: list[Check] = []
-    for table in metadata_engine.get_all_tables():
-        spec = metadata_engine.get_table_spec(table)
+    for table in engine.get_all_tables():
+        spec = engine.get_table_spec(table)
         if not loader.table_exists(table):
             continue
         layer = spec["layer"]

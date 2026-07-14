@@ -193,8 +193,9 @@ def validate_cross_layer(
     silver_results: list[CheckResult],
     gold_results: list[CheckResult],
     layer_status: dict,
+    cfg: AurumDatasetConfig | None = None,
 ) -> list[CheckResult]:
-    cfg = load_dataset_config()
+    cfg = cfg or load_dataset_config()
     return run_checks(
         [
             Check(lambda: x1_source_to_bronze(bronze_results, cfg), "X1", "Source to Bronze Completeness", CROSS_LAYER),

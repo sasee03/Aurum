@@ -69,6 +69,7 @@ class ColumnsInfo:
     order_id: str
     order_id_expression: str
     line_item_key: tuple[str, str, str, str]
+    price_ceiling: Optional[float] = None
 
     def resolve_identifier(self) -> str:
         return self.primary_key
@@ -80,7 +81,7 @@ class ColumnsInfo:
         return self.line_item_key
 
     def resolve_raw_required_columns(self) -> list[str]:
-        return [
+        cols = [
             self.primary_key,
             self.product_id,
             self.product_description,
@@ -90,6 +91,9 @@ class ColumnsInfo:
             self.customer_id,
             self.geography,
         ]
+        if self.order_id not in cols:
+            cols.append(self.order_id)
+        return cols
 
 
 @dataclass(frozen=True)
@@ -180,6 +184,7 @@ def _parse_raw_config(raw: Any, source: str) -> AurumDatasetConfig:
             order_id=str(columns_raw["order_id"]),
             order_id_expression=str(columns_raw.get("order_id_expression", columns_raw["order_id"])),
             line_item_key=tuple(str(column) for column in columns_raw["line_item_key"]),
+            price_ceiling=float(columns_raw["price_ceiling"]) if columns_raw.get("price_ceiling") is not None else None,
         ),
         metrics=MetricsInfo(
             revenue_formula=str(metrics_raw["revenue_formula"]),

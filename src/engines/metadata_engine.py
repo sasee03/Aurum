@@ -7,12 +7,13 @@ It serves as the deterministic source of truth for the rule library.
 from __future__ import annotations
 
 from typing import Dict, Any, Optional
-from ..table_specs import TABLE_SPECS
+
+from ..config_loader import AurumDatasetConfig
+from ..table_specs import build_table_specs
 
 class UniversalMetadataEngine:
-    def __init__(self):
-        # We start by wrapping the deterministic static configuration
-        self.specs: Dict[str, Any] = TABLE_SPECS
+    def __init__(self, cfg: AurumDatasetConfig | None = None):
+        self.specs: Dict[str, Any] = build_table_specs(cfg)
 
     def get_table_spec(self, table_name: str) -> Optional[Dict[str, Any]]:
         """Return the metadata specification for a given table."""

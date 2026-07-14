@@ -445,8 +445,11 @@ def s11_silver_orphan_keys(loader: DataLoader, cfg: Optional[AurumDatasetConfig]
     )
 
 
-def validate_silver(loader: DataLoader) -> list[CheckResult]:
-    cfg = load_dataset_config()
+def validate_silver(
+    loader: DataLoader,
+    cfg: Optional[AurumDatasetConfig] = None,
+) -> list[CheckResult]:
+    cfg = cfg or load_dataset_config()
     return run_checks(
         [
             Check(lambda: s1_drop_percentage(loader, cfg), "S1", "Bronze to Silver Drop Percentage", SILVER),
