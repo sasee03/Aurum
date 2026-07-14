@@ -19,6 +19,7 @@ from src.app_state.store import (
     save_validation_run,
 )
 from src.csv_ingest import CsvSchemaMismatch, run_validation_from_raw_orders
+from src.config_loader import ConfigResolutionError, resolve_config_for_project_or_table
 from src.db_config import postgres_target_info
 from src.postgres_connector import (
     UserPostgresTarget,
@@ -68,6 +69,18 @@ def _schema_mismatch_response(exc: CsvSchemaMismatch) -> JSONResponse:
             "expected_columns": exc.expected_columns,
             "missing_columns": exc.missing_columns,
         },
+    )
+
+
+def _config_resolution_response(exc: ConfigResolutionError) -> JSONResponse:
+    status_code = {
+        "project_store_lookup_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
+        "dataset_config_lookup_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
+        "project_not_found": status.HTTP_404_NOT_FOUND,
+    }.get(exc.code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": exc.code, "message": str(exc)},
     )
 
 
@@ -210,11 +223,18 @@ def validate_postgres_table(body: PostgresValidateRequest) -> dict:
             },
         )
 
+    project_id = body.project_id or session.project_id
+    try:
+        cfg = resolve_config_for_project_or_table(project_id, body.table.strip())
+    except ConfigResolutionError as exc:
+        return _config_resolution_response(exc)
+
     try:
         frame = load_and_validate_user_table(
             session,
             schema=body.schema_name.strip(),
             table=body.table.strip(),
+            cfg=cfg,
         )
     except CsvSchemaMismatch as exc:
         return _schema_mismatch_response(exc)
@@ -224,12 +244,11 @@ def validate_postgres_table(body: PostgresValidateRequest) -> dict:
     source_table = body.table.strip()
     try:
         report = attach_trust_narrative(
-            run_validation_from_raw_orders(frame, run_id=run_id),
+            run_validation_from_raw_orders(frame, run_id=run_id, cfg=cfg),
             timeout_seconds=CONNECTOR_NARRATIVE_TIMEOUT_SECONDS,
         )
         # Source coordinates live on validation_runs — never inside the 17-key report.
         persisted_run_id = report.get("run_id", run_id)
-        project_id = body.project_id or session.project_id
         # Only attach connection_id when metadata was persisted (FK-safe).
         connection_id_for_run = (
             session.connection_id if get_data_connection(session.connection_id) else None

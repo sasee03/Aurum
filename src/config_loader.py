@@ -118,6 +118,14 @@ class AurumDatasetConfig:
     metrics: MetricsInfo
 
 
+class ConfigResolutionError(RuntimeError):
+    """Raised when a custom dataset config cannot be resolved safely."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 def default_config_path() -> Path:
     return Path(__file__).resolve().parents[1] / "configs" / "olist.yaml"
 
@@ -222,3 +230,80 @@ def load_dataset_config(path: Optional[os.PathLike[str] | str] = None) -> AurumD
         raise ValueError(f"Dataset config at {path} is not valid YAML: {exc}") from exc
 
     return _parse_raw_config(raw, str(path))
+
+
+def resolve_config_by_name(name: Optional[str]) -> Optional[AurumDatasetConfig]:
+    """Load the named config, returning None only when no matching file exists."""
+    if not name:
+        return None
+
+    normalized_name = str(name).strip().casefold()
+    try:
+        path = next(
+            (
+                candidate
+                for candidate in default_config_path().parent.glob("*.yaml")
+                if candidate.stem.casefold() == normalized_name
+            ),
+            None,
+        )
+    except Exception as exc:  # noqa: BLE001 - directory lookup failures must be loud
+        raise ConfigResolutionError(
+            "dataset_config_lookup_failed",
+            f"Could not search for dataset config '{name}': {exc}",
+        ) from exc
+    if path is None:
+        return None
+    try:
+        return load_dataset_config(path)
+    except Exception as exc:  # noqa: BLE001 - every matching-file failure must be loud
+        raise ConfigResolutionError(
+            "dataset_config_invalid",
+            f"Dataset config '{path}' exists but could not be loaded: {exc}",
+        ) from exc
+
+
+def resolve_config_for_project_or_table(
+    project_id: Optional[str],
+    table_or_file_name: Optional[str] = None,
+) -> AurumDatasetConfig:
+    """Resolve a required config for custom data; never fall back to Olist."""
+    if table_or_file_name:
+        config = resolve_config_by_name(Path(table_or_file_name).stem)
+        if config is not None:
+            return config
+
+    project = None
+    project_name = None
+    if project_id:
+        try:
+            from src.app_state.store import get_project
+
+            project = get_project(project_id)
+            project_name = project.get("name") if project is not None else None
+        except Exception as exc:  # noqa: BLE001 - store failures must not become Olist runs
+            raise ConfigResolutionError(
+                "project_store_lookup_failed",
+                f"Could not look up project '{project_id}' while resolving its dataset config: {exc}",
+            ) from exc
+
+        if project is None:
+            raise ConfigResolutionError(
+                "project_not_found",
+                f"Project '{project_id}' was not found while resolving its dataset config.",
+            )
+
+        config = resolve_config_by_name(project_name)
+        if config is not None:
+            return config
+
+    targets = []
+    if table_or_file_name:
+        targets.append(f"table/file '{table_or_file_name}'")
+    if project is not None:
+        targets.append(f"project '{project_name}'")
+    target = " or ".join(targets) or "the selected custom data"
+    raise ConfigResolutionError(
+        "dataset_config_not_found",
+        f"No dataset config exists for {target}; refusing to substitute the default Olist config.",
+    )

@@ -13,7 +13,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.main as api_main
+import src.config_loader as config_loader
 from src.app_state.db import get_connection
+from src.app_state.store import get_project
+from src.config_loader import ConfigResolutionError, load_dataset_config
 from src.csv_ingest import MAX_UPLOAD_ROWS, RAW_ORDERS_COLUMNS
 from src.db_config import db_connect_timeout
 from tests.builders import make_rows, to_df
@@ -38,7 +41,19 @@ def _reset_last_report():
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    def resolve_explicit_test_olist(project_id, _file_name):
+        if project_id and get_project(project_id) is None:
+            raise ConfigResolutionError(
+                "project_not_found",
+                f"Project '{project_id}' was not found while resolving its dataset config.",
+            )
+        return load_dataset_config()
+
+    monkeypatch.setattr(
+        "api.datasets_router.resolve_config_for_project_or_table",
+        resolve_explicit_test_olist,
+    )
     with _reset_last_report():
         with TestClient(api_main.app) as test_client:
             yield test_client
@@ -49,6 +64,54 @@ def _sqlite_validation_counts() -> tuple[int, int]:
         runs = conn.execute("SELECT COUNT(*) FROM validation_runs").fetchone()[0]
         reports = conn.execute("SELECT COUNT(*) FROM validation_reports").fetchone()[0]
     return int(runs), int(reports)
+
+
+def test_upload_without_custom_config_refuses_olist_before_parse(client, monkeypatch):
+    parse_called = False
+
+    def track_parse(*_args, **_kwargs):
+        nonlocal parse_called
+        parse_called = True
+
+    monkeypatch.setattr(
+        "api.datasets_router.resolve_config_for_project_or_table",
+        config_loader.resolve_config_for_project_or_table,
+    )
+    monkeypatch.setattr("api.datasets_router.parse_raw_orders_csv", track_parse)
+
+    response = client.post(
+        "/datasets/upload",
+        files={"file": ("no_such_config.csv", io.BytesIO(_csv_bytes()), "text/csv")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"] == "dataset_config_not_found"
+    assert "refusing to substitute" in response.json()["message"]
+    assert parse_called is False
+
+
+def test_upload_project_store_failure_returns_clear_500(client, monkeypatch):
+    def fail_resolution(*_args, **_kwargs):
+        raise ConfigResolutionError(
+            "project_store_lookup_failed",
+            "Could not look up project 'broken': store unavailable",
+        )
+
+    monkeypatch.setattr(
+        "api.datasets_router.resolve_config_for_project_or_table",
+        fail_resolution,
+    )
+    response = client.post(
+        "/datasets/upload",
+        files={"file": ("orders.csv", io.BytesIO(_csv_bytes()), "text/csv")},
+        data={"project_id": "broken"},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": "project_store_lookup_failed",
+        "message": "Could not look up project 'broken': store unavailable",
+    }
 
 
 def _strip_volatile(report: dict) -> dict:

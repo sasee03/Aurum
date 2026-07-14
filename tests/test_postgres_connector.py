@@ -14,9 +14,11 @@ from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 
 import api.main as api_main
+import src.config_loader as config_loader
 from src.app_state.db import get_connection
 from src.csv_ingest import MAX_UPLOAD_ROWS, RAW_ORDERS_COLUMNS
 from src.db_config import postgres_conninfo
+from src.config_loader import load_dataset_config
 from src.postgres_connector import (
     SESSION_TTL_SECONDS,
     UserPostgresTarget,
@@ -41,7 +43,11 @@ def _reset_last_report():
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    monkeypatch.setattr(
+        "api.connectors_router.resolve_config_for_project_or_table",
+        lambda _project_id, _table: load_dataset_config(),
+    )
     clear_session_connections()
     with _reset_last_report():
         with TestClient(api_main.app) as test_client:
@@ -58,6 +64,38 @@ def _sqlite_validation_counts() -> tuple[int, int]:
         runs = conn.execute("SELECT COUNT(*) FROM validation_runs").fetchone()[0]
         reports = conn.execute("SELECT COUNT(*) FROM validation_reports").fetchone()[0]
     return int(runs), int(reports)
+
+
+def test_connector_without_custom_config_refuses_olist_before_load(client, monkeypatch):
+    session = store_session_connection(
+        UserPostgresTarget(
+            host="localhost",
+            port=5433,
+            database="aurum",
+            username="aurum",
+            password="aurum",
+        )
+    )
+    load_table = MagicMock()
+    monkeypatch.setattr(
+        "api.connectors_router.resolve_config_for_project_or_table",
+        config_loader.resolve_config_for_project_or_table,
+    )
+    monkeypatch.setattr("api.connectors_router.load_and_validate_user_table", load_table)
+
+    response = client.post(
+        "/connectors/postgres/validate",
+        json={
+            "connection_id": session.connection_id,
+            "schema": "public",
+            "table": "no_such_config",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"] == "dataset_config_not_found"
+    assert "refusing to substitute" in response.json()["message"]
+    load_table.assert_not_called()
 
 
 def test_classify_wrong_password():
