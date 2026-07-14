@@ -29,8 +29,8 @@ def test_bronze_returns_exactly_10_checks():
     assert len(validate_bronze(DataLoader())) == 10
 
 
-def test_silver_returns_exactly_10_checks():
-    assert len(validate_silver(DataLoader())) == 10
+def test_silver_returns_exactly_11_checks():
+    assert len(validate_silver(DataLoader())) == 11
 
 
 def test_gold_returns_exactly_10_checks():
@@ -39,10 +39,10 @@ def test_gold_returns_exactly_10_checks():
     assert len(validate_gold(loader, upstream_status=silver_status)) == 10
 
 
-def test_report_has_10_checks_per_pipeline_layer():
+def test_report_has_expected_checks_per_pipeline_layer():
     checks = build_report(DataLoader())["checks"]
     assert len(checks["bronze"]) == 10
-    assert len(checks["silver"]) == 10
+    assert len(checks["silver"]) == 11
     assert len(checks["gold"]) == 10
 
 

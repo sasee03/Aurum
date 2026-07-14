@@ -10,6 +10,7 @@ from src.silver_validator import (
     s6_unit_price_positive,
     s8_valid_records_removed,
     s10_wrong_filter_detection,
+    s11_silver_orphan_keys,
 )
 
 CFG = load_dataset_config()
@@ -75,3 +76,21 @@ def test_s6_unit_price_nonpositive_fails():
     silver = to_silver(make_rows(10) + make_rows(1, start=11, unit_price=0.0))
     loader = loader_from(silver_orders=silver)
     assert s6_unit_price_positive(loader, CFG).status == FAIL
+
+
+def test_s11_silver_orphan_key_fails():
+    bronze = make_rows(1)
+    silver = to_silver(bronze + make_rows(1, start=2))
+    loader = loader_from(bronze_orders=to_df(bronze), silver_orders=silver)
+
+    result = s11_silver_orphan_keys(loader, CFG)
+
+    assert result.status == FAIL
+    assert result.observed == 1
+
+
+def test_s11_all_silver_keys_exist_in_bronze_passes():
+    rows = make_rows(2)
+    loader = loader_from(bronze_orders=to_df(rows), silver_orders=to_silver(rows))
+
+    assert s11_silver_orphan_keys(loader, CFG).status == PASS

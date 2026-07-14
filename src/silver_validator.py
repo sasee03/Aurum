@@ -417,6 +417,34 @@ def s10_wrong_filter_detection(loader: DataLoader, cfg: Optional[AurumDatasetCon
     )
 
 
+def s11_silver_orphan_keys(loader: DataLoader, cfg: Optional[AurumDatasetConfig] = None) -> CheckResult:
+    primary_key = cfg.columns.primary_key
+    orphan_keys = int(
+        loader.scalar(
+            f"""
+            SELECT COUNT(*) FROM silver_orders s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM bronze_orders b WHERE b.{primary_key} = s.{primary_key}
+            )
+            """
+        )
+    )
+    status = PASS if orphan_keys == 0 else FAIL
+    detail = (
+        "Every Silver primary key exists in Bronze."
+        if status == PASS
+        else f"{orphan_keys:,} Silver rows have primary keys not present in Bronze."
+    )
+    return CheckResult(
+        "S11", "Silver Orphan Primary Keys", SILVER, status,
+        observed=orphan_keys, expected=0, detail=detail,
+        evidence_query=(
+            "SELECT COUNT(*) FROM silver_orders s WHERE NOT EXISTS "
+            f"(SELECT 1 FROM bronze_orders b WHERE b.{primary_key} = s.{primary_key})"
+        ),
+    )
+
+
 def validate_silver(loader: DataLoader) -> list[CheckResult]:
     cfg = load_dataset_config()
     return run_checks(
@@ -431,6 +459,7 @@ def validate_silver(loader: DataLoader) -> list[CheckResult]:
             Check(lambda: s8_valid_records_removed(loader, cfg), "S8", "Valid Record Wrongly Removed", SILVER),
             Check(lambda: s9_record_loss_by_segment(loader, cfg), "S9", "Record-Loss by Segment", SILVER),
             Check(lambda: s10_wrong_filter_detection(loader, cfg), "S10", "Wrong Filter Detection", SILVER),
+            Check(lambda: s11_silver_orphan_keys(loader, cfg), "S11", "Silver Orphan Primary Keys", SILVER),
         ]
     )
 

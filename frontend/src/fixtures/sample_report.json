@@ -61,10 +61,10 @@
   "trust_score": 40,
   "trust_narrative": "Narrative Generation Failed: HTTPConnectionPool(host='localhost', port=11434): Max retries exceeded with url: /api/generate (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x000001D1626658B0>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it'))",
   "coverage": {
-    "total_checks": 75,
-    "passed": 56,
+    "total_checks": 72,
+    "passed": 54,
     "warned": 7,
-    "failed": 10,
+    "failed": 9,
     "impacted": 1,
     "skipped": 1,
     "skipped_details": [
@@ -641,104 +641,7 @@
         }
       }
     ],
-    "layer_2_reconciliation": [
-      {
-        "check_id": "L2-REC-COUNT",
-        "check_name": "Count Reconciliation: Unexplained Valid Row Loss",
-        "layer": "Silver",
-        "status": "FAIL",
-        "observed": {
-          "bronze_total": 112650,
-          "bronze_valid": 112650,
-          "silver_count": 9401,
-          "missing_valid": 103249,
-          "explained_removals": 0,
-          "unexplained_loss": 103249
-        },
-        "expected": {
-          "unexplained_loss": 0
-        },
-        "detail": "103,249 valid Bronze rows missing from Silver (0 invalid rows legitimately removed).",
-        "evidence_query": "SELECT COUNT(*) FROM bronze_orders b WHERE quantity > 0 AND unit_price > 0 AND invoice_no IS NOT NULL AND stock_code IS NOT NULL AND NOT EXISTS (SELECT 1 FROM silver_orders s WHERE s.invoice_no = b.invoice_no)",
-        "extra": {
-          "dimension": "completeness",
-          "detection_layer": "layer_2_reconciliation"
-        }
-      },
-      {
-        "check_id": "L2-REC-KEY",
-        "check_name": "Key-Set Reconciliation: Bronze \u2287 Silver, Silver \u2287 Gold keys",
-        "layer": "Silver",
-        "status": "PASS",
-        "observed": {
-          "silver_keys_not_in_bronze": 0,
-          "silver_distinct_invoices": 7772,
-          "gold_total_orders": 7772,
-          "gold_excess_over_silver": 0
-        },
-        "expected": {
-          "violations": 0
-        },
-        "detail": "Key sets are consistent across layers.",
-        "evidence_query": "SELECT COUNT(*) FROM silver_orders s WHERE NOT EXISTS (SELECT 1 FROM bronze_orders b WHERE b.invoice_no = s.invoice_no)",
-        "extra": {
-          "dimension": "consistency",
-          "detection_layer": "layer_2_reconciliation"
-        }
-      },
-      {
-        "check_id": "L2-REC-REV",
-        "check_name": "Revenue Reconciliation: Silver SUM vs Gold (within rounding tolerance)",
-        "layer": "Gold",
-        "status": "PASS",
-        "observed": {
-          "silver_revenue": 144643.12999999375,
-          "gold_revenue": 144643.12999999375,
-          "difference": 0.0,
-          "revenue_rounding_tolerance": 1.0
-        },
-        "expected": {
-          "difference": "<= 1.0 (reconciles within rounding tolerance of 1.0 currency unit(s) (float SUM drift; counts remain exact))"
-        },
-        "detail": "Silver revenue reconciles with Gold (reconciles within rounding tolerance of 1.0 currency unit(s) (float SUM drift; counts remain exact)).",
-        "evidence_query": "SELECT SUM(net_revenue) FROM silver_orders",
-        "extra": {
-          "dimension": "accuracy",
-          "detection_layer": "layer_2_reconciliation",
-          "table": "gold_metrics",
-          "revenue_rounding_tolerance": 1.0
-        }
-      },
-      {
-        "check_id": "L2-REC-AGG",
-        "check_name": "Aggregate Cross-Check: Recompute Gold from Silver",
-        "layer": "Gold",
-        "status": "PASS",
-        "observed": {
-          "silver": {
-            "revenue": 144643.12999999375,
-            "orders": 7772,
-            "customers": 7772
-          },
-          "gold": {
-            "total_revenue": 144643.12999999375,
-            "total_orders": 7772,
-            "total_customers": 7772
-          },
-          "mismatched_fields": []
-        },
-        "expected": {
-          "mismatched_fields": []
-        },
-        "detail": "All Gold aggregates match Silver recomputation (revenue within rounding tolerance).",
-        "evidence_query": "SELECT SUM(net_revenue), COUNT(DISTINCT REGEXP_REPLACE(invoice_no, '_[0-9]+$', '')), COUNT(DISTINCT customer_id) FROM silver_orders",
-        "extra": {
-          "dimension": "accuracy",
-          "detection_layer": "layer_2_reconciliation",
-          "table": "gold_metrics"
-        }
-      }
-    ],
+    "layer_2_reconciliation": [],
     "layer_3_robust_anomaly": [
       {
         "check_id": "L3-ANO-BRONZE",
@@ -1149,6 +1052,16 @@
           "suspected_filter": "unit_price > 20.0 records are being filtered out",
           "missing": 103249
         }
+      },
+      {
+        "check_id": "S11",
+        "check_name": "Silver Orphan Primary Keys",
+        "layer": "Silver",
+        "status": "PASS",
+        "observed": 0,
+        "expected": 0,
+        "detail": "Every Silver primary key exists in Bronze.",
+        "evidence_query": "SELECT COUNT(*) FROM silver_orders s WHERE NOT EXISTS (SELECT 1 FROM bronze_orders b WHERE b.invoice_no = s.invoice_no)"
       }
     ],
     "gold": [

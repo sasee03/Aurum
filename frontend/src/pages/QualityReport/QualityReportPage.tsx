@@ -35,18 +35,6 @@ function statusColor(value: string | null | undefined): string {
   return 'text-[#f1f5f9]';
 }
 
-/**
- * Affected orders = unexplained valid-row loss from the reconciliation layer.
- * Real value drawn verbatim from detection_layers.layer_2_reconciliation → L2-REC-COUNT.
- */
-function getAffectedOrders(report: AurumReport): number | null {
-  const recon = report.detection_layers?.layer_2_reconciliation ?? [];
-  const countCheck = recon.find((c) => c.check_id === 'L2-REC-COUNT');
-  const observed = countCheck?.observed as Record<string, unknown> | undefined;
-  const value = observed?.missing_valid ?? observed?.unexplained_loss;
-  return typeof value === 'number' ? value : null;
-}
-
 function downloadReportJson(report: AurumReport) {
   const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -130,7 +118,6 @@ export function QualityReportPage() {
     }
   }
 
-  const affectedOrders = report ? getAffectedOrders(report) : null;
   // suggested_action is a single deterministic string; split on newlines only
   // (do not fabricate multiple steps that the engine did not emit).
   const suggestedActions = report?.suggested_action
@@ -209,11 +196,6 @@ export function QualityReportPage() {
               <ReportRow label="Revenue impact">
                 <span className="text-[#ef4444]">
                   {formatBrl(report.business_impact?.estimated_loss)}
-                </span>
-              </ReportRow>
-              <ReportRow label="Affected orders">
-                <span className="text-[#f1f5f9]">
-                  {affectedOrders !== null ? affectedOrders.toLocaleString('en-US') : '—'}
                 </span>
               </ReportRow>
               <ReportRow label="Affected customers">
