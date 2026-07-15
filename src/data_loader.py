@@ -66,12 +66,12 @@ WHERE quantity > 0
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _CREATE_FROM_REGISTERED = re.compile(
-    r"^\s*CREATE\s+OR\s+REPLACE\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+AS\s+"
-    r"SELECT\s+\*\s+FROM\s+([A-Za-z_][A-Za-z0-9_]*)\s*;?\s*$",
+    r"^\s*CREATE\s+OR\s+REPLACE\s+TABLE\s+\"?([A-Za-z_][A-Za-z0-9_]*)\"?\s+AS\s+"
+    r"SELECT\s+\*\s+FROM\s+\"?([A-Za-z_][A-Za-z0-9_]*)\"?\s*;?\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 _CREATE_OR_REPLACE_AS = re.compile(
-    r"^\s*CREATE\s+OR\s+REPLACE\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+AS\s+",
+    r"^\s*CREATE\s+OR\s+REPLACE\s+TABLE\s+\"?([A-Za-z_][A-Za-z0-9_]*)\"?\s+AS\s+",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -138,8 +138,8 @@ def _translate_sql(query: str) -> str:
         "seg.bronze_valid) * 100)::numeric, 2)::double precision",
     )
     translated = re.sub(
-        r"CREATE\s+OR\s+REPLACE\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+AS",
-        r"DROP TABLE IF EXISTS \1; CREATE TABLE \1 AS",
+        r"CREATE\s+OR\s+REPLACE\s+TABLE\s+\"?([A-Za-z_][A-Za-z0-9_]*)\"?\s+AS",
+        r'DROP TABLE IF EXISTS "\1"; CREATE TABLE "\1" AS',
         translated,
         flags=re.IGNORECASE,
     )
@@ -155,7 +155,8 @@ class PostgresCompatConnection:
         self._loader = loader
         self._registered: dict[str, pd.DataFrame] = {}
 
-    def execute(self, query: str, params: Optional[list[Any]] = None):
+    def execute(self, query: str, params: Optional[list[Any]] = None, cfg: Optional[AurumDatasetConfig] = None):
+        cfg = cfg or load_dataset_config()
         match = _CREATE_FROM_REGISTERED.match(query)
         if match and match.group(2) in self._registered:
             table, registered_name = match.groups()
@@ -169,7 +170,7 @@ class PostgresCompatConnection:
         replace_match = _CREATE_OR_REPLACE_AS.match(query)
         if replace_match:
             return self._loader._execute_create_or_replace_as(
-                replace_match.group(1), query[replace_match.end():]
+                replace_match.group(1), query[replace_match.end():], cfg
             )
 
         cur = self._pg_conn.cursor()
@@ -194,6 +195,7 @@ class DataLoader:
         data_dir: Optional[Path] = DATA_DIR,
         conn: Optional[Any] = None,
         build: bool = True,
+        cfg: Optional[AurumDatasetConfig] = None,
     ) -> None:
         pg_conn = conn or psycopg.connect(
             postgres_conninfo(),
@@ -219,7 +221,7 @@ class DataLoader:
             self._install_helpers()
             DataLoader._active_loaders.add(self)
             if self.data_dir is not None and build:
-                self._load_from_disk()
+                self._load_from_disk(cfg or load_dataset_config())
         except BaseException:
             try:
                 self.close()
@@ -256,28 +258,29 @@ class DataLoader:
                 """
             )
 
-    def _load_from_disk(self) -> None:
+    def _load_from_disk(self, cfg: AurumDatasetConfig) -> None:
         self._drop_tables(
             [
-                "raw_orders",
-                "bronze_orders",
-                "silver_orders",
-                "gold_metrics",
-                "gold_country_revenue",
-                "gold_product_sales",
+                cfg.tables.raw,
+                cfg.tables.bronze,
+                cfg.tables.silver,
+                cfg.tables.gold.metrics,
+                cfg.tables.gold.country_revenue,
+                cfg.tables.gold.product_sales,
                 "historical_runs",
                 "order_payments",
                 "customers",
             ]
         )
-        cfg = load_dataset_config()
         raw_path = self.data_dir / "raw" / "raw_orders.csv"
         if not raw_path.exists():
             raise FileNotFoundError(
                 f"Missing {raw_path}. Run `python src/generate_data.py` first."
             )
-        self._materialize_frame("raw_orders", pd.read_csv(raw_path), temporary=False)
-        self.conn.execute("CREATE OR REPLACE TABLE bronze_orders AS SELECT * FROM raw_orders")
+        self._materialize_frame(cfg.tables.raw, pd.read_csv(raw_path), temporary=False)
+        bronze_table = _quote_ident(cfg.tables.bronze).as_string(self._pg_conn)
+        raw_table = _quote_ident(cfg.tables.raw).as_string(self._pg_conn)
+        self.conn.execute(f"CREATE OR REPLACE TABLE {bronze_table} AS SELECT * FROM {raw_table}", cfg=cfg)
         self.build_silver(cfg)
         self._create_reconciliation_indexes(cfg)
         self.build_gold(cfg)
@@ -289,8 +292,7 @@ class DataLoader:
             )
 
     def build_silver(self, cfg: Optional[AurumDatasetConfig] = None) -> None:
-        if cfg is None:
-            cfg = load_dataset_config()
+        cfg = cfg or load_dataset_config()
         pk = cfg.columns.primary_key
         order_id = cfg.columns.order_id
         prod_id = cfg.columns.product_id
@@ -312,8 +314,11 @@ class DataLoader:
         if order_id not in (pk, prod_id, prod_desc, qty, ts, price, cust_id, geo):
             extra_proj = f'\n            "{order_id}",'
 
+        silver_table = _quote_ident(cfg.tables.silver).as_string(self._pg_conn)
+        bronze_table = _quote_ident(cfg.tables.bronze).as_string(self._pg_conn)
+
         sql_query = f"""
-        CREATE OR REPLACE TABLE silver_orders AS
+        CREATE OR REPLACE TABLE {silver_table} AS
         SELECT
             "{pk}",{extra_proj}
             "{prod_id}",
@@ -324,15 +329,14 @@ class DataLoader:
             "{cust_id}",
             "{geo}",
             {revenue_expr} AS "{revenue_col}"
-        FROM bronze_orders
+        FROM {bronze_table}
         WHERE "{qty}" > 0
           AND "{price}" > 0{price_ceiling_cond};
         """
-        self.conn.execute(sql_query)
+        self.conn.execute(sql_query, cfg=cfg)
 
     def build_gold(self, cfg: Optional[AurumDatasetConfig] = None) -> None:
-        if cfg is None:
-            cfg = load_dataset_config()
+        cfg = cfg or load_dataset_config()
         
         cust_id = cfg.columns.customer_id
         revenue_col = cfg.columns.revenue
@@ -344,9 +348,12 @@ class DataLoader:
         total_cust = cfg.metrics.total_customers_metric
         aov = cfg.metrics.average_order_value_metric
 
+        gold_metrics = _quote_ident(cfg.tables.gold.metrics).as_string(self._pg_conn)
+        silver_table = _quote_ident(cfg.tables.silver).as_string(self._pg_conn)
+
         self.conn.execute(
             f"""
-            CREATE OR REPLACE TABLE gold_metrics AS
+            CREATE OR REPLACE TABLE {gold_metrics} AS
             SELECT
                 SUM("{revenue_col}") AS "{total_rev}",
                 COUNT(DISTINCT {order_id_expr}) AS "{total_ord}",
@@ -354,8 +361,8 @@ class DataLoader:
                 CASE WHEN COUNT(DISTINCT {order_id_expr}) = 0 THEN 0
                      ELSE SUM("{revenue_col}") / COUNT(DISTINCT {order_id_expr}) END
                      AS "{aov}"
-            FROM silver_orders;
-            """
+            FROM {silver_table};
+            """, cfg=cfg
         )
         geo = cfg.columns.geography
         rev = cfg.metrics.aggregate_revenue_metric
@@ -363,20 +370,23 @@ class DataLoader:
         qty = cfg.columns.quantity
         total_qty = cfg.metrics.total_quantity_metric
 
+        gold_country = _quote_ident(cfg.tables.gold.country_revenue).as_string(self._pg_conn)
+        gold_product = _quote_ident(cfg.tables.gold.product_sales).as_string(self._pg_conn)
+
         self.conn.execute(
             f"""
-            CREATE OR REPLACE TABLE gold_country_revenue AS
+            CREATE OR REPLACE TABLE {gold_country} AS
             SELECT "{geo}", SUM("{revenue_col}") AS "{rev}"
-            FROM silver_orders GROUP BY "{geo}";
-            """
+            FROM {silver_table} GROUP BY "{geo}";
+            """, cfg=cfg
         )
         self.conn.execute(
             f"""
-            CREATE OR REPLACE TABLE gold_product_sales AS
+            CREATE OR REPLACE TABLE {gold_product} AS
             SELECT "{prod_id}", SUM("{qty}") AS "{total_qty}",
                    SUM("{revenue_col}") AS "{rev}"
-            FROM silver_orders GROUP BY "{prod_id}";
-            """
+            FROM {silver_table} GROUP BY "{prod_id}";
+            """, cfg=cfg
         )
 
     # ------------------------------------------------------------- for tests
@@ -398,10 +408,8 @@ class DataLoader:
             for table in tables:
                 cur.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(_quote_ident(table)))
 
-    def _create_reconciliation_indexes(self, cfg: Optional[AurumDatasetConfig] = None) -> None:
+    def _create_reconciliation_indexes(self, cfg: AurumDatasetConfig) -> None:
         """Indexes for Silver anti-join checks S8/S10; additive, no result changes."""
-        if cfg is None:
-            cfg = load_dataset_config()
         line_item_key = sql.SQL(", ").join(
             _quote_ident(column) for column in cfg.columns.resolve_line_item_key()
         ).as_string(self._pg_conn)
@@ -409,10 +417,14 @@ class DataLoader:
         price = _quote_ident(cfg.columns.unit_price).as_string(self._pg_conn)
         order_id = _quote_ident(cfg.columns.order_id).as_string(self._pg_conn)
         product_id = _quote_ident(cfg.columns.product_id).as_string(self._pg_conn)
+
+        bronze_table = _quote_ident(cfg.tables.bronze).as_string(self._pg_conn)
+        silver_table = _quote_ident(cfg.tables.silver).as_string(self._pg_conn)
+
         statements = [
             f"""
             CREATE INDEX IF NOT EXISTS idx_bronze_valid_business_key
-            ON bronze_orders ({line_item_key})
+            ON {bronze_table} ({line_item_key})
             INCLUDE ({qty}, {price})
             WHERE {qty} > 0
               AND {price} > 0
@@ -421,17 +433,17 @@ class DataLoader:
             """,
             f"""
             CREATE INDEX IF NOT EXISTS idx_silver_business_key
-            ON silver_orders ({line_item_key})
+            ON {silver_table} ({line_item_key})
             """,
         ]
         with self._pg_conn.cursor() as cur:
             for statement in statements:
                 cur.execute(statement)
-            cur.execute("ANALYZE bronze_orders")
-            cur.execute("ANALYZE silver_orders")
+            cur.execute(sql.SQL("ANALYZE {}").format(_quote_ident(cfg.tables.bronze)))
+            cur.execute(sql.SQL("ANALYZE {}").format(_quote_ident(cfg.tables.silver)))
 
-    def _execute_create_or_replace_as(self, table: str, select_sql: str):
-        temporary = self._should_materialize_temporary(table, select_sql)
+    def _execute_create_or_replace_as(self, table: str, select_sql: str, cfg: AurumDatasetConfig):
+        temporary = self._should_materialize_temporary(table, select_sql, cfg)
         drop_target = (
             sql.Identifier("pg_temp", table) if temporary else _quote_ident(table)
         )
@@ -445,18 +457,18 @@ class DataLoader:
             cur.execute(create_prefix.as_string(self._pg_conn) + translated_select)
             return cur
 
-    def _should_materialize_temporary(self, table: str, select_sql: str) -> bool:
+    def _should_materialize_temporary(self, table: str, select_sql: str, cfg: AurumDatasetConfig) -> bool:
         if self._table_is_temporary(table):
             return True
         if not self._uses_temporary_tables:
             return False
         referenced_tables = [
-            "raw_orders",
-            "bronze_orders",
-            "silver_orders",
-            "gold_metrics",
-            "gold_country_revenue",
-            "gold_product_sales",
+            cfg.tables.raw,
+            cfg.tables.bronze,
+            cfg.tables.silver,
+            cfg.tables.gold.metrics,
+            cfg.tables.gold.country_revenue,
+            cfg.tables.gold.product_sales,
             "historical_runs",
             "order_payments",
             "customers",
@@ -578,7 +590,8 @@ class DataLoader:
 
 
 if __name__ == "__main__":
-    loader = DataLoader()
-    print("bronze:", loader.count("bronze_orders"))
-    print("silver:", loader.count("silver_orders"))
-    print("gold_revenue:", loader.scalar("SELECT total_revenue FROM gold_metrics"))
+    cfg = load_dataset_config()
+    loader = DataLoader(cfg=cfg)
+    print("bronze:", loader.count(cfg.tables.bronze))
+    print("silver:", loader.count(cfg.tables.silver))
+    print("gold_revenue:", loader.scalar(f"SELECT {cfg.metrics.total_revenue_metric} FROM {cfg.tables.gold.metrics}"))
