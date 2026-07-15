@@ -5,17 +5,15 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
-  FileText,
-  FileSpreadsheet,
-  Share2,
   CheckCircle2,
 } from 'lucide-react';
-import { toast } from 'react-hot-toast';
+
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { FlowBackButton } from '@/components/common/FlowBackButton';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
+import { SQLViewer } from '@/components/common/SQLViewer';
 import { Button } from '@/components/ui/Button';
 import { VerdictBadge } from '@/components/ui/Badge';
 import { useAppMode } from '@/context/AppModeContext';
@@ -47,32 +45,6 @@ function downloadReportJson(report: AurumReport) {
   URL.revokeObjectURL(url);
 }
 
-const PLANNED_EXPORT_BUTTON_CLASS =
-  'flex items-center gap-1.5 rounded-lg border border-[#252637] bg-[#13141e] px-3 py-1.5 text-xs font-semibold text-[#6b7280] opacity-50 cursor-not-allowed';
-
-function showPlannedExportToast(kind: string) {
-  toast(`${kind} export coming soon — use JSON export for now.`, { icon: 'ℹ️' });
-}
-
-interface PlannedExportButtonProps {
-  icon: ReactNode;
-  label: string;
-  kind: string;
-}
-
-function PlannedExportButton({ icon, label, kind }: PlannedExportButtonProps) {
-  return (
-    <button
-      type="button"
-      title={`${kind} export coming soon`}
-      aria-label={`${label} — coming soon`}
-      onClick={() => showPlannedExportToast(kind)}
-      className={PLANNED_EXPORT_BUTTON_CLASS}
-    >
-      {icon} {label}
-    </button>
-  );
-}
 
 interface RowProps {
   label: string;
@@ -103,7 +75,7 @@ export function QualityReportPage() {
   const report = data?.report;
   const runIdParam = searchParams.get('runId') ?? undefined;
   const activeRunId = runIdParam ?? report?.run_id;
-  const reportBadgeMode = data?.source === 'user_upload' ? 'user_upload' : displayMode;
+  const reportBadgeMode = data?.source ?? displayMode;
   const back = getFlowBackTarget(`/projects/${id}/report/quality`, id, activeRunId);
 
   async function loadByRunId() {
@@ -124,6 +96,23 @@ export function QualityReportPage() {
     ? report.suggested_action.split('\n').map((s) => s.trim()).filter(Boolean)
     : [];
 
+  const allChecks = report?.checks
+    ? [
+        ...(report.checks.bronze || []),
+        ...(report.checks.silver || []),
+        ...(report.checks.gold || []),
+        ...(report.checks.cross_layer || []),
+      ].filter((c) => c.evidence_query)
+    : [];
+  
+  // Deduplicate by check_id
+  const seenIds = new Set<string>();
+  const checksWithEvidence = allChecks.filter((c) => {
+    if (seenIds.has(c.check_id)) return false;
+    seenIds.add(c.check_id);
+    return true;
+  });
+
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
       <ProjectSubNav runId={activeRunId} />
@@ -143,9 +132,6 @@ export function QualityReportPage() {
             >
               <Download size={14} /> JSON
             </button>
-            <PlannedExportButton icon={<FileText size={14} />} label="PDF" kind="PDF" />
-            <PlannedExportButton icon={<FileSpreadsheet size={14} />} label="Excel" kind="Excel" />
-            <PlannedExportButton icon={<Share2 size={14} />} label="Share" kind="Share" />
           </div>
         )}
       </div>
@@ -241,6 +227,36 @@ export function QualityReportPage() {
                     </li>
                   ))}
                 </ul>
+              </div>
+            )}
+
+            {/* Evidence Queries */}
+            {checksWithEvidence.length > 0 && (
+              <div className="rounded-xl border border-[#252637] bg-[#13141e] p-5 space-y-4">
+                <h3 className="text-xs font-semibold uppercase tracking-widest text-[#6b7280]">
+                  Check Evidence SQL
+                </h3>
+                {checksWithEvidence.map((check) => (
+                  <details
+                    key={check.check_id}
+                    className="group border border-[#252637] rounded-lg overflow-hidden"
+                  >
+                    <summary className="flex items-center gap-2 px-4 py-3 cursor-pointer select-none text-sm font-medium text-[#f1f5f9] hover:bg-[#1a1b28]">
+                      <ChevronRight
+                        size={16}
+                        className="transition-transform group-open:rotate-90 text-[#6b7280]"
+                      />
+                      <span>{check.check_id}</span>
+                      <span className="text-xs text-[#6b7280]">({check.layer})</span>
+                    </summary>
+                    <div className="p-4 border-t border-[#252637] bg-[#0d0e14]">
+                      <SQLViewer
+                        title={`EVIDENCE — ${check.check_id}`}
+                        code={check.evidence_query!}
+                      />
+                    </div>
+                  </details>
+                ))}
               </div>
             )}
 

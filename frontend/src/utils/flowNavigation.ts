@@ -21,7 +21,7 @@ export function getFlowBackTarget(
   if (pathname.includes('/remediate')) {
     return { path: withRun(`${base}/report/quality`), label: 'Back to Report' };
   }
-  if (pathname.includes('/report/quality') || pathname.includes('/report/transform') || pathname.includes('/report/contracts')) {
+  if (pathname.includes('/report/quality')) {
     return { path: withRun(`${base}/report/trust`), label: 'Back to Trust Scoring' };
   }
   if (pathname.includes('/report/trust')) {
@@ -57,8 +57,6 @@ export function getFlowBackTarget(
   if (pathname.includes('/dashboard')) {
     return { path: '/', label: 'Back to Home' };
   }
-  if (pathname.includes('/lineage')) {
-    return { path: withRun(`${base}/report/quality`), label: 'Back to Report' };
-  }
+
   return null;
 }

@@ -30,7 +30,7 @@ export interface AppModeState {
 
 export const MODE_LABELS: Record<Exclude<DataSourceMode, 'loading'>, string> = {
   live: 'Live API',
-  verified_snapshot: 'Verified Snapshot',
+  verified_snapshot: 'Verified Snapshot — not live',
   planned: 'Planned',
   user_upload: 'Uploaded CSV',
 };

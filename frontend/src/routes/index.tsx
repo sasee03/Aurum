@@ -17,7 +17,6 @@ import { QualityReportPage } from '@/pages/QualityReport/QualityReportPage';
 import { RunHistoryPage } from '@/pages/RunHistory/RunHistoryPage';
 import { CustomChecksPage } from '@/pages/CustomChecks/CustomChecksPage';
 import { DocumentationPage } from '@/pages/Documentation/DocumentationPage';
-import { PlannedFeaturePage } from '@/pages/Planned/PlannedFeaturePage';
 import { RemediationPage } from '@/pages/Remediation/RemediationPage';
 import { AuditPage } from '@/pages/Audit/AuditPage';
 
@@ -43,33 +42,6 @@ const router = createBrowserRouter([
       { path: 'projects/:id/report/impact', element: <ImpactAnalysisPage /> },
       { path: 'projects/:id/report/trust', element: <TrustScoringPage /> },
       { path: 'projects/:id/report/quality', element: <QualityReportPage /> },
-      {
-        path: 'projects/:id/report/transform',
-        element: (
-          <PlannedFeaturePage
-            title="Transformation Verification"
-            detail="Inspect and verify the transformation logic applied at each medallion layer. Evidence for the current run is available in the quality report."
-          />
-        ),
-      },
-      {
-        path: 'projects/:id/report/contracts',
-        element: (
-          <PlannedFeaturePage
-            title="Business Contract Engine"
-            detail="Define and enforce business rules across your data pipeline. Rule outcomes for the current run are included in the quality report."
-          />
-        ),
-      },
-      {
-        path: 'projects/:id/lineage',
-        element: (
-          <PlannedFeaturePage
-            title="Lineage Explorer"
-            detail="Trace any number in the report back to its origin across pipeline layers. The current report includes first_failed_layer and evidence SQL."
-          />
-        ),
-      },
       { path: 'projects/:id/remediate', element: <RemediationPage /> },
       { path: 'settings/audit', element: <AuditPage /> },
     ],
