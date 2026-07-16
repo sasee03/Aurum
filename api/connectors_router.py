@@ -11,6 +11,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 import api.main as api_main
+import psycopg
+from psycopg import sql
+
 from src.app_state.store import (
     get_data_connection,
     get_project,
@@ -33,6 +36,7 @@ from src.postgres_connector import (
     store_session_connection,
     test_user_postgres,
 )
+from src.metadata_discovery import discover_table_metadata
 from src.report_builder import attach_trust_narrative
 
 router = APIRouter(tags=["connectors"])
@@ -205,6 +209,56 @@ def postgres_tables(
     return {"connection_id": connection_id, "schema": schema, "tables": tables}
 
 
+@router.get("/connectors/postgres/tables/{table}/preview")
+def preview_postgres_table(
+    table: str,
+    connection_id: str = Query(...),
+    schema: Optional[str] = Query(None),
+) -> dict:
+    """Preview a user table directly from the remote Postgres instance, before validation."""
+    session = get_session_connection(connection_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "connection_not_found",
+                "message": (
+                    "Connection session expired or unknown. "
+                    "Re-test the connection (password is not persisted)."
+                ),
+            },
+        )
+    try:
+        with open_session_connection(session) as conn:
+            # 1. Gather rich metadata (columns, types, row count, nullability)
+            metadata = discover_table_metadata(conn, schema_name=schema or "public", table_name=table)
+
+            # 2. Fetch a real sample of rows
+            # Using dict_row to match column names to values cleanly
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                # Default schema to 'public' if not provided to avoid ambiguity errors
+                qualified_name = sql.SQL("{}.{}").format(
+                    sql.Identifier(schema or "public"),
+                    sql.Identifier(table)
+                )
+                cur.execute(sql.SQL("SELECT * FROM {} LIMIT 50").format(qualified_name))
+                sample_data = cur.fetchall()
+
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"connected": False, "error": classify_connect_error(exc)},
+        )
+
+    return {
+        "connection_id": connection_id,
+        "schema": schema,
+        "table": table,
+        "metadata": metadata,
+        "data": sample_data
+    }
+
+
 @router.post("/connectors/postgres/validate")
 def validate_postgres_table(body: PostgresValidateRequest) -> dict:
     """Read a user table into memory, validate Olist shape, run the upload pipeline."""
@@ -243,8 +297,9 @@ def validate_postgres_table(body: PostgresValidateRequest) -> dict:
     source_schema = body.schema_name.strip()
     source_table = body.table.strip()
     try:
+        report, session_schema = run_validation_from_raw_orders(frame, run_id=run_id, cfg=cfg)
         report = attach_trust_narrative(
-            run_validation_from_raw_orders(frame, run_id=run_id, cfg=cfg),
+            report,
             timeout_seconds=CONNECTOR_NARRATIVE_TIMEOUT_SECONDS,
         )
         # Source coordinates live on validation_runs — never inside the 17-key report.
@@ -261,6 +316,7 @@ def validate_postgres_table(body: PostgresValidateRequest) -> dict:
             connection_id=connection_id_for_run,
             source_schema=source_schema,
             source_table=source_table,
+            session_schema=session_schema,
         )
         save_validation_report(persisted_run_id, report)
     except Exception:  # noqa: BLE001

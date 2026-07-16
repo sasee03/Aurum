@@ -16,8 +16,10 @@ import {
   testPostgresConnection,
   uploadDatasetCsv,
   validatePostgresTable,
+  previewPostgresTable,
   type CsvUploadMismatch,
   type PostgresTableEntry,
+  type PreviewData,
 } from '@/lib/aurumApi';
 import connectorsData from '@/mocks/connectors.json';
 import type { Connector } from '@/types';
@@ -273,6 +275,8 @@ function PostgresPanel({ projectId }: { projectId: string }) {
   const [loadingMeta, setLoadingMeta] = useState(false);
   const [validating, setValidating] = useState(false);
   const [mismatch, setMismatch] = useState<CsvUploadMismatch | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewData, setPreviewData] = useState<PreviewData | null>(null);
 
   async function handleTest() {
     if (!host.trim() || !port.trim() || !database.trim() || !username.trim()) {
@@ -293,6 +297,7 @@ function PostgresPanel({ projectId }: { projectId: string }) {
     setSelectedSchema('');
     setSelectedTable('');
     setMismatch(null);
+    setPreviewData(null);
 
     try {
       const result = await testPostgresConnection({
@@ -347,6 +352,7 @@ function PostgresPanel({ projectId }: { projectId: string }) {
     setSelectedTable('');
     setTables([]);
     setMismatch(null);
+    setPreviewData(null);
     if (!connectionId || !nextSchema) return;
     setLoadingMeta(true);
     try {
@@ -356,6 +362,24 @@ function PostgresPanel({ projectId }: { projectId: string }) {
       toast.error('Failed to list tables. Re-test the connection.');
     } finally {
       setLoadingMeta(false);
+    }
+  }
+
+  async function handlePreview() {
+    if (!connectionId || !selectedSchema || !selectedTable) {
+      toast.error('Select a schema and table first.');
+      return;
+    }
+    setPreviewing(true);
+    setPreviewData(null);
+    setMismatch(null);
+    try {
+      const data = await previewPostgresTable(connectionId, selectedSchema, selectedTable);
+      setPreviewData(data);
+    } catch {
+      toast.error('Failed to preview table data.');
+    } finally {
+      setPreviewing(false);
     }
   }
 
@@ -511,6 +535,7 @@ function PostgresPanel({ projectId }: { projectId: string }) {
                 onChange={(e) => {
                   setSelectedTable(e.target.value);
                   setMismatch(null);
+                  setPreviewData(null);
                 }}
               >
                 <option value="">Select a table</option>
@@ -558,16 +583,65 @@ function PostgresPanel({ projectId }: { projectId: string }) {
             </div>
           )}
 
-          <Button
-            variant="primary"
-            className="w-full"
-            isLoading={validating}
-            disabled={!selectedTable || validating}
-            rightIcon={<ArrowRight size={16} />}
-            onClick={handleValidate}
-          >
-            {validating ? 'Validation in progress' : 'Validate this table'}
-          </Button>
+          {previewData && (
+            <div className="rounded-xl border border-[#252637] bg-[#1a1b28] overflow-hidden">
+              <div className="flex items-center justify-between bg-[#252637]/50 px-4 py-2 border-b border-[#252637]">
+                <span className="text-xs font-semibold text-[#f1f5f9]">
+                  {previewData.schema}.{previewData.table}
+                </span>
+                <span className="text-xs text-[#94a3b8]">
+                  {previewData.metadata.row_count} rows • {previewData.metadata.column_count} columns
+                </span>
+              </div>
+              <div className="overflow-x-auto max-h-[300px] scrollbar-thin scrollbar-thumb-[#6b7280]">
+                <table className="w-full text-left text-xs whitespace-nowrap">
+                  <thead className="sticky top-0 bg-[#13141e] border-b border-[#252637] text-[#94a3b8]">
+                    <tr>
+                      {previewData.metadata.columns.map((col) => (
+                        <th key={col.name} className="px-4 py-2 font-semibold border-r border-[#252637] last:border-r-0">
+                          {col.name}
+                          <span className="block text-[10px] text-[#6b7280] font-normal">{col.data_type}</span>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#252637]">
+                    {previewData.data.map((row, i) => (
+                      <tr key={i} className="hover:bg-[#252637]/30 transition-colors">
+                        {previewData.metadata.columns.map((col) => (
+                          <td key={col.name} className="px-4 py-2 border-r border-[#252637] last:border-r-0 text-[#f1f5f9]">
+                            {row[col.name] !== null ? String(row[col.name]) : <span className="text-[#6b7280] italic">null</span>}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center gap-3">
+            <Button
+              variant="secondary"
+              className="flex-1"
+              isLoading={previewing}
+              disabled={!selectedTable || validating}
+              onClick={handlePreview}
+            >
+              <Eye size={16} className="mr-2" /> {previewing ? 'Loading Preview' : 'Preview Table'}
+            </Button>
+            <Button
+              variant="primary"
+              className="flex-1"
+              isLoading={validating}
+              disabled={!selectedTable || validating}
+              rightIcon={<ArrowRight size={16} />}
+              onClick={handleValidate}
+            >
+              {validating ? 'Validation in progress' : 'Validate this table'}
+            </Button>
+          </div>
         </div>
       )}
     </div>

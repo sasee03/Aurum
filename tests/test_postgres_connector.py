@@ -661,9 +661,73 @@ def test_validate_count_timeout_honest_422(client, monkeypatch):
             "table": "orders",
         },
     )
-    
+
     assert response.status_code == 422
     body = response.json()
     assert body["schema_match"] is False
     assert "Table row count could not be determined" in body["error"]
     assert "too large" in body["error"]
+
+
+def test_preview_endpoint(client):
+    """
+    Test the preview endpoint hits a real Postgres table, validates actual content,
+    and returns correct column types directly from the database connection.
+    """
+    import psycopg
+    from uuid import uuid4
+    from src.postgres_connector import UserPostgresTarget, build_user_conninfo
+
+    target = UserPostgresTarget(
+        host="localhost",
+        port=5433,
+        database="aurum",
+        username="aurum",
+        password="aurum",
+    )
+    session = store_session_connection(target)
+    conninfo = build_user_conninfo(target)
+
+    table_name = f"test_preview_{uuid4().hex[:8]}"
+
+    try:
+        with psycopg.connect(conninfo, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"CREATE TABLE {table_name} (id INT, name TEXT)")
+                cur.execute(f"INSERT INTO {table_name} VALUES (1, 'Alice'), (2, 'Bob')")
+
+        response = client.get(
+            f"/connectors/postgres/tables/{table_name}/preview?connection_id={session.connection_id}&schema=public"
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["connection_id"] == session.connection_id
+        assert body["schema"] == "public"
+        assert body["table"] == table_name
+
+        # Verify metadata
+        metadata = body["metadata"]
+        assert metadata["row_count"] == 2
+        assert metadata["column_count"] == 2
+
+        # Verify types
+        columns = {c["name"]: c for c in metadata["columns"]}
+        assert columns["id"]["data_type"] == "integer"
+        assert columns["name"]["data_type"] == "text"
+
+        # Verify actual data returned
+        data = body["data"]
+        assert len(data) == 2
+
+        # Find Alice row
+        alice_row = next(row for row in data if row["id"] == 1)
+        assert alice_row["name"] == "Alice"
+
+    finally:
+        try:
+            with psycopg.connect(conninfo, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"DROP TABLE IF EXISTS {table_name}")
+        except Exception:
+            pass

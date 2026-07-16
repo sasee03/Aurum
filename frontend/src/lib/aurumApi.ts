@@ -283,6 +283,36 @@ export class CsvUploadError extends Error {
   }
 }
 
+export interface PreviewData {
+  connection_id: string;
+  schema: string;
+  table: string;
+  metadata: {
+    row_count: number;
+    column_count: number;
+    columns: {
+      name: string;
+      data_type: string;
+      nullable: boolean;
+    }[];
+  };
+  data: any[];
+}
+
+export async function previewPostgresTable(
+  connection_id: string,
+  schema: string,
+  table: string
+): Promise<PreviewData> {
+  const params = new URLSearchParams({
+    connection_id,
+  });
+  if (schema) {
+    params.set('schema', schema);
+  }
+  return request(`/connectors/postgres/tables/${encodeURIComponent(table)}/preview?${params.toString()}`);
+}
+
 export async function uploadDatasetCsv(file: File, projectId?: string): Promise<AurumReport> {
   const form = new FormData();
   form.append('file', file);

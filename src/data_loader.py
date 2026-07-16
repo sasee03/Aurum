@@ -212,6 +212,7 @@ class DataLoader:
         self._schema = f"aurum_session_{uuid4().hex}"
         self._closed = False
         self._uses_temporary_tables = False
+        self.retain_schema_on_close = False
         # Tie schema cleanup to schema creation: if anything after the schema is
         # created fails during setup, drop it here and re-raise. Otherwise the
         # partially-built loader is never returned, run_validation's finally
@@ -561,12 +562,13 @@ class DataLoader:
             return
         self._closed = True
         try:
-            with self._pg_conn.cursor() as cur:
-                cur.execute(
-                    sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
-                        _quote_ident(self._schema)
+            if not getattr(self, "retain_schema_on_close", False):
+                with self._pg_conn.cursor() as cur:
+                    cur.execute(
+                        sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
+                            _quote_ident(self._schema)
+                        )
                     )
-                )
         finally:
             self.conn.close()
             DataLoader._active_loaders.discard(self)

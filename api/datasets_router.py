@@ -122,9 +122,8 @@ async def upload_dataset(
 
     run_id = f"upload_{uuid.uuid4().hex[:12]}"
     try:
-        report = attach_trust_narrative(
-            run_validation_from_raw_orders(frame, run_id=run_id, cfg=cfg)
-        )
+        report, session_schema = run_validation_from_raw_orders(frame, run_id=run_id, cfg=cfg)
+        report = attach_trust_narrative(report)
         persisted_run_id = report.get("run_id", run_id)
         save_validation_run(
             persisted_run_id,
@@ -132,6 +131,7 @@ async def upload_dataset(
             mode="upload",
             project_id=project_id or None,
             display_name=file.filename,
+            session_schema=session_schema,
         )
         save_validation_report(persisted_run_id, report)
     except Exception:  # noqa: BLE001

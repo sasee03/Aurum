@@ -207,13 +207,15 @@ def run_validation_from_raw_orders(
     df: pd.DataFrame,
     run_id: str,
     cfg: Optional[AurumDatasetConfig] = None,
-) -> dict:
+) -> tuple[dict, str]:
     """Build a full validation report from an in-memory raw_orders frame."""
     if cfg is None:
         cfg = load_dataset_config()
     loader = DataLoader.from_frames({"raw_orders": df})
     try:
         materialize_upload_pipeline(loader, cfg)
-        return build_report(loader, run_id=run_id, cfg=cfg)
+        report = build_report(loader, run_id=run_id, cfg=cfg)
+        loader.retain_schema_on_close = True
+        return report, loader.session_schema
     finally:
         loader.close()

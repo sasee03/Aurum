@@ -640,7 +640,7 @@ def test_run_validation_from_raw_orders_custom_config_no_olist_fallback():
         }
     )
     validated = validate_raw_orders_frame(uploaded, custom_cfg)
-    report = run_validation_from_raw_orders(validated, "custom_upload", custom_cfg)
+    report, _ = run_validation_from_raw_orders(validated, "custom_upload", custom_cfg)
 
     assert report["run_id"] == "custom_upload"
     assert report["dataset"] == "Custom Orders"
