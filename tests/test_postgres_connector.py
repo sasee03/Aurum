@@ -354,7 +354,7 @@ def test_validate_oversized_table_honest_422(client):
     assert "500,000" in body["error"]
 
 
-def test_validate_success_persists_connector_mode(client):
+def test_validate_success_persists_connector_mode(client, schema_tracker):
     session = store_session_connection(
         UserPostgresTarget(
             host="localhost",
@@ -380,6 +380,7 @@ def test_validate_success_persists_connector_mode(client):
         )
     assert response.status_code == 200
     report = response.json()
+    schema_tracker.track_run(report["run_id"])
     assert report["run_id"].startswith("connector_")
     assert "checks" in report
 
@@ -435,7 +436,7 @@ def test_validate_post_parse_failure_returns_clean_error(client, monkeypatch):
     assert reports_after == reports_before
 
 
-def test_connector_validation_bounds_optional_narrative_wait(client):
+def test_connector_validation_bounds_optional_narrative_wait(client, schema_tracker):
     session = store_session_connection(
         UserPostgresTarget(
             host="localhost",
@@ -464,10 +465,11 @@ def test_connector_validation_bounds_optional_narrative_wait(client):
         )
 
     assert response.status_code == 200
+    schema_tracker.track_run(response.json()["run_id"])
     assert attach_narrative.call_args.kwargs["timeout_seconds"] == 15
 
 
-def test_validate_returns_exactly_17_key_report(client):
+def test_validate_returns_exactly_17_key_report(client, schema_tracker):
     """Connector validate must return the 17-key contract — source coords stay on the run row."""
     from tests.test_api import EXPECTED_REPORT_KEYS
     from src.app_state.store import get_validation_run
@@ -497,6 +499,7 @@ def test_validate_returns_exactly_17_key_report(client):
         )
     assert response.status_code == 200
     report = response.json()
+    schema_tracker.track_run(report["run_id"])
     assert set(report.keys()) == set(EXPECTED_REPORT_KEYS)
     assert "source_schema" not in report
     assert "source_table" not in report

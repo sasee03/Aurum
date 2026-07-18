@@ -200,6 +200,7 @@ def materialize_upload_pipeline(
     loader.conn.execute("CREATE OR REPLACE TABLE bronze_orders AS SELECT * FROM raw_orders")
     loader.build_silver(cfg)
     loader._create_reconciliation_indexes(cfg)
+    loader.build_silver_assessment(cfg)
     loader.build_gold(cfg)
 
 

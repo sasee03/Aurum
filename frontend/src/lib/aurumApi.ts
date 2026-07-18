@@ -418,3 +418,23 @@ export async function validatePostgresTable(payload: {
   }
   return body as AurumReport;
 }
+
+export interface SilverAssessmentRow {
+  row_status: 'RETAINED' | 'EXCLUDED' | 'INVALID';
+  reason: string;
+  [key: string]: any;
+}
+
+export interface SilverAssessment {
+  summary: {
+    total: number;
+    retained: number;
+    invalid: number;
+    excluded: number;
+  };
+  flagged_rows: SilverAssessmentRow[];
+}
+
+export async function getSilverAssessment(runId: string): Promise<SilverAssessment> {
+  return request<SilverAssessment>(`/runs/${encodeURIComponent(runId)}/silver-assessment`);
+}

@@ -243,7 +243,7 @@ def test_execute_sql_check_skips_without_loading_data(monkeypatch):
     assert called["load"] is False
 
 
-def test_custom_checks_do_change_engine_verdict(monkeypatch):
+def test_custom_checks_do_change_engine_verdict(monkeypatch, schema_tracker):
     """Running custom checks MUST alter core report verdict fields."""
     monkeypatch.setattr(
         "src.custom_checks.load_layer_dataframe",
@@ -252,7 +252,8 @@ def test_custom_checks_do_change_engine_verdict(monkeypatch):
 
     # Empty custom checks
     monkeypatch.setattr("api.aurum_assistant.context.load_custom_checks", lambda: [])
-    before = run_validation(run_id="verdict_before_custom")
+    before, schema_before = run_validation(run_id="verdict_before_custom")
+    schema_tracker.add(schema_before)
     base_score = before["trust_score"]
 
     # Add a BLOCKING failing custom check
@@ -265,7 +266,8 @@ def test_custom_checks_do_change_engine_verdict(monkeypatch):
     )
     monkeypatch.setattr("api.aurum_assistant.context.load_custom_checks", lambda: [sample])
 
-    after = run_validation(run_id="verdict_after_custom")
+    after, schema_after = run_validation(run_id="verdict_after_custom")
+    schema_tracker.add(schema_after)
     assert after["trust_score"] < base_score
     assert after["final_verdict"] == "NOT TRUSTED"
     assert after["layer_status"]["custom"] == "FAIL"
@@ -560,7 +562,9 @@ def test_connector_run_expired_session_honest_skipped(client, monkeypatch):
     assert "expired" in body["message"].lower() or "unknown" in body["message"].lower()
 
 
-def test_run_with_file_different_csv_shows_identity_disclaimer(client, monkeypatch):
+def test_run_with_file_different_csv_shows_identity_disclaimer(
+    client, monkeypatch, schema_tracker
+):
     """Real upload run_id + different re-attached CSV: disclaimer, not rejection."""
     sample = _check(rule_type="row_count_condition", operator=">", value="0")
     monkeypatch.setattr("api.aurum_assistant.router.load_custom_checks", lambda: [sample])
@@ -574,6 +578,7 @@ def test_run_with_file_different_csv_shows_identity_disclaimer(client, monkeypat
     )
     assert upload.status_code == 200, upload.text
     run_id = upload.json()["run_id"]
+    schema_tracker.track_run(run_id)
 
     response = client.post(
         "/custom-checks/run-with-file",
@@ -588,7 +593,7 @@ def test_run_with_file_different_csv_shows_identity_disclaimer(client, monkeypat
     assert run_id in body["data_source"]
 
 
-def test_connector_fresh_session_reauth_succeeds(client, monkeypatch):
+def test_connector_fresh_session_reauth_succeeds(client, monkeypatch, schema_tracker):
     """Fresh connection_id with persisted metadata re-runs check against connector run."""
     sample = _check(rule_type="row_count_condition", operator=">", value="0")
     monkeypatch.setattr("api.aurum_assistant.router.load_custom_checks", lambda: [sample])
@@ -621,6 +626,7 @@ def test_connector_fresh_session_reauth_succeeds(client, monkeypatch):
         )
     assert validated.status_code == 200, validated.text
     connector_run_id = validated.json()["run_id"]
+    schema_tracker.track_run(connector_run_id)
 
     fresh_session = store_session_connection(
         UserPostgresTarget("localhost", 5433, "aurum", "aurum", "aurum"),
@@ -654,6 +660,5 @@ def test_execute_against_frame_sets_real_data_source():
     assert result["status"] == "PASS"
     assert result["data_source"] == "Uploaded file: test.csv (run upload_abc)"
     assert "demo" not in result["data_source"].lower()
-
 
 

@@ -175,12 +175,109 @@ def trigger_run(request: Optional[RunRequest] = None) -> dict:
 
     global _last_report
     run_id = request.run_id if request is not None else "demo_run_001"
-    report = attach_trust_narrative(run_validation(run_id=run_id))
+    report, session_schema = run_validation(run_id=run_id)
+    report = attach_trust_narrative(report)
     _last_report = report
     persisted_run_id = report.get("run_id", run_id)
-    save_validation_run(persisted_run_id, status="completed", mode="demo")
+    save_validation_run(persisted_run_id, status="completed", mode="demo", session_schema=session_schema, dataset_config="olist")
     save_validation_report(persisted_run_id, report)
     return report
+
+@app.get("/runs/{run_id}/silver-assessment")
+def get_silver_assessment(run_id: str) -> dict:
+    from src.app_state.store import get_validation_run
+    from psycopg.rows import dict_row
+    from psycopg import sql
+    from src.config_loader import resolve_config_by_name
+
+    run = get_validation_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found.")
+
+    schema = run.get("session_schema")
+    if not schema:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No session schema retained for this run."
+        )
+
+    config_name = run.get("dataset_config")
+    if not config_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No dataset_config retained for this run."
+        )
+
+    cfg = resolve_config_by_name(config_name)
+    if not cfg:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Could not resolve dataset config '{config_name}'."
+        )
+
+    unit_price_col = cfg.columns.unit_price
+    quantity_col = cfg.columns.quantity
+    primary_key_col = cfg.columns.primary_key
+    product_id_col = cfg.columns.product_id
+    price_ceiling = cfg.columns.price_ceiling
+    excluded_reason = (
+        f"{unit_price_col} > {price_ceiling}"
+        if price_ceiling is not None
+        else "Valid Bronze row is missing from Silver"
+    )
+
+    try:
+        with psycopg.connect(postgres_conninfo(), connect_timeout=db_connect_timeout()) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
+
+                cur.execute("SELECT to_regclass('silver_row_assessment')")
+                if cur.fetchone()["to_regclass"] is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="silver_row_assessment view not found in session schema."
+                    )
+
+                cur.execute("""
+                    SELECT
+                        COUNT(*) as total,
+                        COALESCE(SUM(CASE WHEN is_valid AND is_in_silver THEN 1 ELSE 0 END), 0) as retained,
+                        COALESCE(SUM(CASE WHEN NOT is_valid THEN 1 ELSE 0 END), 0) as invalid,
+                        COALESCE(SUM(CASE WHEN is_valid AND NOT is_in_silver THEN 1 ELSE 0 END), 0) as excluded
+                    FROM silver_row_assessment
+                """)
+                counts = cur.fetchone()
+
+                query = f"""
+                    SELECT *,
+                    CASE
+                        WHEN NOT is_valid THEN 'INVALID'
+                        WHEN is_valid AND NOT is_in_silver THEN 'EXCLUDED'
+                    END AS row_status,
+                    CASE
+                        WHEN {primary_key_col} IS NULL THEN '{primary_key_col} is null'
+                        WHEN {product_id_col} IS NULL THEN '{product_id_col} is null'
+                        WHEN {quantity_col} <= 0 AND {unit_price_col} <= 0 THEN '{quantity_col} <= 0 and {unit_price_col} <= 0'
+                        WHEN {quantity_col} <= 0 THEN '{quantity_col} <= 0'
+                        WHEN {unit_price_col} <= 0 THEN '{unit_price_col} <= 0'
+                        WHEN is_valid AND NOT is_in_silver THEN '{excluded_reason}'
+                    END AS reason
+                    FROM silver_row_assessment
+                    WHERE (NOT is_valid) OR (is_valid AND NOT is_in_silver)
+                    LIMIT 20
+                """
+                cur.execute(query)
+                flagged_rows = cur.fetchall()
+
+                return {
+                    "summary": counts,
+                    "flagged_rows": flagged_rows
+                }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to query silver_row_assessment: {e}")
+        raise HTTPException(status_code=500, detail="Failed to query assessment view.")
 
 
 @app.get("/reports/latest")

@@ -125,6 +125,7 @@ class AurumDatasetConfig:
     tables: TablesInfo
     columns: ColumnsInfo
     metrics: MetricsInfo
+    config_name: str = "olist"
 
 
 class ConfigResolutionError(RuntimeError):
@@ -223,6 +224,7 @@ def _parse_raw_config(raw: Any, source: str) -> AurumDatasetConfig:
             aggregate_revenue_metric=str(metrics_raw["aggregate_revenue_metric"]),
             total_quantity_metric=str(metrics_raw["total_quantity_metric"]),
         ),
+        config_name=Path(source).stem,
     )
 
 

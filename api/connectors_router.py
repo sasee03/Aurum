@@ -317,6 +317,7 @@ def validate_postgres_table(body: PostgresValidateRequest) -> dict:
             source_schema=source_schema,
             source_table=source_table,
             session_schema=session_schema,
+            dataset_config=cfg.config_name,
         )
         save_validation_report(persisted_run_id, report)
     except Exception:  # noqa: BLE001

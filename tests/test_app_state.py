@@ -13,6 +13,7 @@ from src.app_state.db import get_connection
 from src.app_state.store import (
     create_project,
     get_project,
+    get_validation_run,
     get_report_by_run_id,
     list_projects,
     list_validation_runs,
@@ -160,7 +161,7 @@ def test_post_runs_persists_report_and_get_by_run_id(app_state_db, monkeypatch):
     }
 
     _mock_pg_connect(monkeypatch)
-    monkeypatch.setattr(api_main, "run_validation", lambda run_id="demo_run_001": sample_report)
+    monkeypatch.setattr(api_main, "run_validation", lambda run_id="demo_run_001": (sample_report, "aurum_session_demo"))
     monkeypatch.setattr(
         api_main,
         "attach_trust_narrative",
@@ -178,6 +179,11 @@ def test_post_runs_persists_report_and_get_by_run_id(app_state_db, monkeypatch):
         assert by_id.status_code == 200
         assert by_id.json()["run_id"] == "persist_run_001"
         assert by_id.json()["trust_score"] == 40
+
+    saved_run = get_validation_run("persist_run_001")
+    assert saved_run is not None
+    assert saved_run["session_schema"] == "aurum_session_demo"
+    assert saved_run["dataset_config"] == "olist"
 
 
 def test_get_report_by_run_id_not_found(app_state_db):

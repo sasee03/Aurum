@@ -132,6 +132,7 @@ async def upload_dataset(
             project_id=project_id or None,
             display_name=file.filename,
             session_schema=session_schema,
+            dataset_config=cfg.config_name,
         )
         save_validation_report(persisted_run_id, report)
     except Exception:  # noqa: BLE001

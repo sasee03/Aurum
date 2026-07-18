@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS validation_runs (
     source_table TEXT,
     display_name TEXT,
     session_schema TEXT,
+    dataset_config TEXT,
     FOREIGN KEY (project_id) REFERENCES projects(id),
     FOREIGN KEY (connection_id) REFERENCES data_connections(id)
 );
@@ -84,6 +85,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "validation_runs", "source_table", "source_table TEXT")
     _ensure_column(conn, "validation_runs", "display_name", "display_name TEXT")
     _ensure_column(conn, "validation_runs", "session_schema", "session_schema TEXT")
+    _ensure_column(conn, "validation_runs", "dataset_config", "dataset_config TEXT")
     conn.commit()
 
 

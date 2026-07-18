@@ -296,7 +296,7 @@ def test_upload_oversized_file_bytes_honest_rejection(client, monkeypatch):
     )
 
 
-def test_upload_duplicate_business_key_runs_engine_s3_check(client):
+def test_upload_duplicate_business_key_runs_engine_s3_check(client, schema_tracker):
     response = client.post(
         "/datasets/upload",
         files={
@@ -309,19 +309,21 @@ def test_upload_duplicate_business_key_runs_engine_s3_check(client):
     )
     assert response.status_code == 200
     report = response.json()
+    schema_tracker.track_run(report["run_id"])
     silver_checks = report["checks"]["silver"]
     s3 = next(check for check in silver_checks if check["check_id"] == "S3")
     assert s3["observed"]["bronze_duplicates"] >= 1
     assert s3["observed"]["silver_duplicates"] >= 1
 
 
-def test_upload_matching_csv_returns_report(client):
+def test_upload_matching_csv_returns_report(client, schema_tracker):
     response = client.post(
         "/datasets/upload",
         files={"file": ("orders.csv", io.BytesIO(_csv_bytes()), "text/csv")},
     )
     assert response.status_code == 200
     report = response.json()
+    schema_tracker.track_run(report["run_id"])
     assert report["run_id"].startswith("upload_")
     assert report["final_verdict"]
     assert "checks" in report
@@ -332,7 +334,7 @@ def test_upload_matching_csv_returns_report(client):
     assert match["display_name"] == "orders.csv"
 
 
-def test_upload_accepts_alphanumeric_customer_id_identifier(client):
+def test_upload_accepts_alphanumeric_customer_id_identifier(client, schema_tracker):
     response = client.post(
         "/datasets/upload",
         files={
@@ -345,6 +347,7 @@ def test_upload_accepts_alphanumeric_customer_id_identifier(client):
     )
     assert response.status_code == 200
     report = response.json()
+    schema_tracker.track_run(report["run_id"])
     assert report["run_id"].startswith("upload_")
     assert report["final_verdict"]
     assert "checks" in report
@@ -445,13 +448,14 @@ def test_upload_refused_when_db_unreachable(client, monkeypatch):
     assert elapsed <= db_connect_timeout() + 2
 
 
-def test_upload_persists_upload_mode(client):
+def test_upload_persists_upload_mode(client, schema_tracker):
     response = client.post(
         "/datasets/upload",
         files={"file": ("orders.csv", io.BytesIO(_csv_bytes()), "text/csv")},
     )
     assert response.status_code == 200
     run_id = response.json()["run_id"]
+    schema_tracker.track_run(run_id)
 
     runs = client.get("/runs")
     assert runs.status_code == 200
@@ -459,10 +463,11 @@ def test_upload_persists_upload_mode(client):
     assert matched["mode"] == "upload"
 
 
-def test_upload_does_not_change_reports_latest(client):
+def test_upload_does_not_change_reports_latest(client, schema_tracker):
     """Upload persists by run_id; GET /reports/latest must remain the demo report."""
     demo = client.post("/runs", json={"run_id": "latest_guard_demo"})
     assert demo.status_code == 200
+    schema_tracker.track_run("latest_guard_demo")
     demo_report = demo.json()
 
     latest_before = client.get("/reports/latest")
@@ -475,6 +480,7 @@ def test_upload_does_not_change_reports_latest(client):
     )
     assert upload.status_code == 200
     assert upload.json()["run_id"].startswith("upload_")
+    schema_tracker.track_run(upload.json()["run_id"])
 
     latest_after = client.get("/reports/latest")
     assert latest_after.status_code == 200
@@ -482,11 +488,12 @@ def test_upload_does_not_change_reports_latest(client):
     assert api_main._last_report == demo_report
 
 
-def test_post_runs_demo_path_unchanged_after_upload_added(client):
+def test_post_runs_demo_path_unchanged_after_upload_added(client, schema_tracker):
     """Golden regression: POST /runs matches captured Olist baseline."""
     baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
     response = client.post("/runs", json={"run_id": GOLDEN_RUN_ID})
     assert response.status_code == 200
+    schema_tracker.track_run(GOLDEN_RUN_ID)
     assert _strip_volatile(response.json()) == _strip_volatile(baseline)
 
 
@@ -570,7 +577,7 @@ def test_validate_raw_orders_frame_custom_config():
     assert exc_info.value.missing_columns == ["region"]
 
 
-def test_run_validation_from_raw_orders_custom_config_no_olist_fallback():
+def test_run_validation_from_raw_orders_custom_config_no_olist_fallback(schema_tracker):
     from src.config_loader import (
         AurumDatasetConfig,
         ColumnsInfo,
@@ -640,7 +647,8 @@ def test_run_validation_from_raw_orders_custom_config_no_olist_fallback():
         }
     )
     validated = validate_raw_orders_frame(uploaded, custom_cfg)
-    report, _ = run_validation_from_raw_orders(validated, "custom_upload", custom_cfg)
+    report, schema = run_validation_from_raw_orders(validated, "custom_upload", custom_cfg)
+    schema_tracker.add(schema)
 
     assert report["run_id"] == "custom_upload"
     assert report["dataset"] == "Custom Orders"

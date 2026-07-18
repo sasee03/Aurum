@@ -111,20 +111,22 @@ def test_health_passes_connect_timeout(client, monkeypatch):
     assert captured.get("connect_timeout") == 2
 
 
-def test_post_runs_returns_full_17_key_report(client):
+def test_post_runs_returns_full_17_key_report(client, schema_tracker):
     response = client.post("/runs", json={"run_id": "api_test_run"})
     assert response.status_code == 200
     report = response.json()
+    schema_tracker.track_run(report["run_id"])
     assert set(report.keys()) == set(EXPECTED_REPORT_KEYS)
     assert "coverage" in report
     assert isinstance(report["coverage"], dict)
     assert "full_coverage" in report["coverage"]
 
 
-def test_report_includes_skipped_status(client):
+def test_report_includes_skipped_status(client, schema_tracker):
     response = client.post("/runs", json={"run_id": "api_skipped_status"})
     assert response.status_code == 200
     report = response.json()
+    schema_tracker.track_run(report["run_id"])
     assert "SKIPPED" in CHECK_STATUSES
     check_statuses = {
         check["status"]
@@ -134,10 +136,11 @@ def test_report_includes_skipped_status(client):
     assert "SKIPPED" in check_statuses or report["coverage"].get("skipped", 0) >= 1
 
 
-def test_post_runs_persists_demo_mode(client):
+def test_post_runs_persists_demo_mode(client, schema_tracker):
     """POST /runs validates the prepared Olist demo — mode must be 'demo', not 'live'."""
     response = client.post("/runs", json={"run_id": "mode_label_check"})
     assert response.status_code == 200
+    schema_tracker.track_run("mode_label_check")
 
     runs = client.get("/runs")
     assert runs.status_code == 200
@@ -145,25 +148,28 @@ def test_post_runs_persists_demo_mode(client):
     assert matched["mode"] == "demo"
 
 
-def test_latest_matches_post_runs(client):
+def test_latest_matches_post_runs(client, schema_tracker):
     post = client.post("/runs", json={"run_id": "parity_run_001"})
     assert post.status_code == 200
+    schema_tracker.track_run("parity_run_001")
     latest = client.get("/reports/latest")
     assert latest.status_code == 200
     assert latest.json() == post.json()
 
 
-def test_report_by_id_works_for_latest_matching_id(client):
+def test_report_by_id_works_for_latest_matching_id(client, schema_tracker):
     post = client.post("/runs", json={"run_id": "by_id_test"})
     assert post.status_code == 200
+    schema_tracker.track_run("by_id_test")
     by_id = client.get("/reports/by_id_test")
     assert by_id.status_code == 200
     assert by_id.json() == post.json()
 
 
-def test_report_by_id_wrong_run_id_returns_404(client):
+def test_report_by_id_wrong_run_id_returns_404(client, schema_tracker):
     post = client.post("/runs", json={"run_id": "correct_id"})
     assert post.status_code == 200
+    schema_tracker.track_run("correct_id")
     wrong = client.get("/reports/wrong_id")
     assert wrong.status_code == 404
     assert "not found" in wrong.json()["detail"].lower()

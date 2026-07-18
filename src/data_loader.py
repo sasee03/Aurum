@@ -187,6 +187,13 @@ class PostgresCompatConnection:
         self._pg_conn.close()
 
 
+def valid_predicate(cfg: AurumDatasetConfig, table_alias: str = "") -> str:
+    prefix = f"{table_alias}." if table_alias else ""
+    return (
+        f"{prefix}{cfg.columns.quantity} > 0 AND {prefix}{cfg.columns.unit_price} > 0 "
+        f"AND {prefix}{cfg.columns.primary_key} IS NOT NULL AND {prefix}{cfg.columns.product_id} IS NOT NULL"
+    )
+
 class DataLoader:
     _active_loaders: "weakref.WeakSet[DataLoader]" = weakref.WeakSet()
 
@@ -284,6 +291,7 @@ class DataLoader:
         self.conn.execute(f"CREATE OR REPLACE TABLE {bronze_table} AS SELECT * FROM {raw_table}", cfg=cfg)
         self.build_silver(cfg)
         self._create_reconciliation_indexes(cfg)
+        self.build_silver_assessment(cfg)
         self.build_gold(cfg)
 
         hist_path = self.data_dir / "historical" / "historical_runs.csv"
@@ -318,6 +326,8 @@ class DataLoader:
         silver_table = _quote_ident(cfg.tables.silver).as_string(self._pg_conn)
         bronze_table = _quote_ident(cfg.tables.bronze).as_string(self._pg_conn)
 
+        valid_pred = valid_predicate(cfg)
+
         sql_query = f"""
         CREATE OR REPLACE TABLE {silver_table} AS
         SELECT
@@ -331,8 +341,38 @@ class DataLoader:
             "{geo}",
             {revenue_expr} AS "{revenue_col}"
         FROM {bronze_table}
-        WHERE "{qty}" > 0
-          AND "{price}" > 0{price_ceiling_cond};
+        WHERE {valid_pred}{price_ceiling_cond};
+        """
+        self.conn.execute(sql_query, cfg=cfg)
+
+    def build_silver_assessment(self, cfg: Optional[AurumDatasetConfig] = None) -> None:
+        cfg = cfg or load_dataset_config()
+        bronze_table = _quote_ident(cfg.tables.bronze).as_string(self._pg_conn)
+        silver_table = _quote_ident(cfg.tables.silver).as_string(self._pg_conn)
+
+        business_key = (
+            cfg.columns.primary_key,
+            cfg.columns.product_id,
+            cfg.columns.customer_id,
+            cfg.columns.timestamp,
+        )
+        key_match = " AND ".join(
+            f"s.{_quote_ident(column).as_string(self._pg_conn)} IS NOT DISTINCT FROM b.{_quote_ident(column).as_string(self._pg_conn)}"
+            for column in business_key
+        )
+
+        valid_pred = valid_predicate(cfg, table_alias="b")
+
+        sql_query = f"""
+        CREATE OR REPLACE VIEW silver_row_assessment AS
+        SELECT
+            b.*,
+            ({valid_pred}) AS is_valid,
+            EXISTS (
+                SELECT 1 FROM {silver_table} s
+                WHERE {key_match}
+            ) AS is_in_silver
+        FROM {bronze_table} b;
         """
         self.conn.execute(sql_query, cfg=cfg)
 

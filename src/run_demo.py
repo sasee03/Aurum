@@ -106,7 +106,7 @@ def print_summary(report: dict) -> None:
     _print()
 
 
-def run_validation(run_id: str = "demo_run_001") -> dict:
+def run_validation(run_id: str = "demo_run_001") -> tuple[dict, str]:
     """Run the full pipeline against Postgres and return the report dict.
 
     Side-effect-free core shared by the demo script and the API layer: it
@@ -118,16 +118,20 @@ def run_validation(run_id: str = "demo_run_001") -> dict:
         generate()
     loader = DataLoader()
     try:
-        return build_report(loader, run_id=run_id)
+        report = build_report(loader, run_id=run_id)
+        loader.retain_schema_on_close = True
+        return report, loader.session_schema
     finally:
         loader.close()
 
 
 def main() -> dict:
-    report = attach_trust_narrative(run_validation())
+    report, schema = run_validation()
+    report = attach_trust_narrative(report)
     path = write_report(report)
     print_summary(report)
     print(f"Report written to {path}")
+    print(f"Session schema retained for inspection: {schema}")
     
     _print("\n--------------------------------------------------")
     _print("HYBRID METADATA DISCOVERY (silver_orders)")

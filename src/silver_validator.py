@@ -22,9 +22,9 @@ import pandas as pd
 
 from .baseline import column_stats, tolerance_band
 
-from .contracts import CheckResult, FAIL, PASS, SILVER, WARN
+from .contracts import CheckResult, FAIL, PASS, SILVER, WARN, SKIPPED
 
-from .data_loader import DataLoader, _quote_ident
+from .data_loader import DataLoader, _quote_ident, valid_predicate
 
 from .resilience import Check, run_checks
 
@@ -33,18 +33,6 @@ from .config_loader import load_dataset_config, AurumDatasetConfig
 
 
 
-
-
-
-def _valid_predicate(cfg: AurumDatasetConfig) -> str:
-
-    return (
-
-        f"{cfg.columns.quantity} > 0 AND {cfg.columns.unit_price} > 0 "
-
-        f"AND {cfg.columns.primary_key} IS NOT NULL AND {cfg.columns.product_id} IS NOT NULL"
-
-    )
 
 
 
@@ -57,12 +45,6 @@ EXPECTED_MAX_DROP = 10.0
 
 
 # Olist line items use quantity=1; the planted Silver bug filters on unit_price.
-
-HIGH_PRICE_THRESHOLD = 20.0
-
-
-
-
 
 def _business_key_match(
 
@@ -662,7 +644,7 @@ def s8_valid_records_removed(loader: DataLoader, cfg: Optional[AurumDatasetConfi
 
 
 
-    valid_predicate = _valid_predicate(cfg)
+    valid_predicate_str = valid_predicate(cfg)
 
     business_key = (
 
@@ -678,7 +660,7 @@ def s8_valid_records_removed(loader: DataLoader, cfg: Optional[AurumDatasetConfi
 
     valid_total = int(
 
-        loader.scalar(f"SELECT COUNT(*) FROM {bronze_table} WHERE {valid_predicate}")
+        loader.scalar(f"SELECT COUNT(*) FROM {bronze_table} WHERE {valid_predicate_str}")
 
     )
 
@@ -692,7 +674,7 @@ def s8_valid_records_removed(loader: DataLoader, cfg: Optional[AurumDatasetConfi
 
             f"""
             SELECT COUNT(*) FROM {bronze_table} b
-            WHERE {valid_predicate}
+            WHERE {valid_predicate_str}
               AND NOT EXISTS (
                 SELECT 1 FROM {silver_table} s WHERE {key_match}
               )
@@ -736,7 +718,7 @@ def s8_valid_records_removed(loader: DataLoader, cfg: Optional[AurumDatasetConfi
 
             f"SELECT COUNT(*) FROM {cfg.tables.bronze} b WHERE "
 
-            f"{valid_predicate} AND NOT EXISTS "
+            f"{valid_predicate_str} AND NOT EXISTS "
 
             f"(SELECT 1 FROM {cfg.tables.silver} s WHERE {evidence_key_match})"
 
@@ -756,6 +738,15 @@ def s9_record_loss_by_segment(loader: DataLoader, cfg: Optional[AurumDatasetConf
 
     cfg = cfg or load_dataset_config()
 
+    threshold = cfg.columns.price_ceiling
+    if threshold is None:
+        return CheckResult(
+            "S9", "Record-Loss by Segment", SILVER, SKIPPED,
+            observed="n/a", expected="No price ceiling configured",
+            detail="price_ceiling not configured for this dataset.",
+            evidence_query="",
+        )
+
     raw_table = _quote_ident(cfg.tables.raw).as_string(loader._pg_conn)
 
     bronze_table = _quote_ident(cfg.tables.bronze).as_string(loader._pg_conn)
@@ -770,27 +761,27 @@ def s9_record_loss_by_segment(loader: DataLoader, cfg: Optional[AurumDatasetConf
 
 
 
-    valid_predicate = _valid_predicate(cfg)
+    valid_predicate_str = valid_predicate(cfg)
 
     price_col = cfg.columns.unit_price
 
     segment_sql = f"""
     WITH valid_bronze AS (
-        SELECT * FROM {bronze_table} WHERE {valid_predicate}
+        SELECT * FROM {bronze_table} WHERE {valid_predicate_str}
     ),
     seg AS (
         SELECT
-            CASE WHEN {price_col} > {HIGH_PRICE_THRESHOLD}
-                 THEN '{price_col} > {HIGH_PRICE_THRESHOLD}'
-                 ELSE '{price_col} <= {HIGH_PRICE_THRESHOLD}' END AS segment,
+            CASE WHEN {price_col} > {threshold}
+                 THEN '{price_col} > {threshold}'
+                 ELSE '{price_col} <= {threshold}' END AS segment,
             COUNT(*) AS bronze_valid
         FROM valid_bronze GROUP BY 1
     ),
     sil AS (
         SELECT
-            CASE WHEN {price_col} > {HIGH_PRICE_THRESHOLD}
-                 THEN '{price_col} > {HIGH_PRICE_THRESHOLD}'
-                 ELSE '{price_col} <= {HIGH_PRICE_THRESHOLD}' END AS segment,
+            CASE WHEN {price_col} > {threshold}
+                 THEN '{price_col} > {threshold}'
+                 ELSE '{price_col} <= {threshold}' END AS segment,
             COUNT(*) AS silver_count
         FROM {silver_table} GROUP BY 1
     )
@@ -852,6 +843,15 @@ def s10_wrong_filter_detection(loader: DataLoader, cfg: Optional[AurumDatasetCon
 
     cfg = cfg or load_dataset_config()
 
+    threshold = cfg.columns.price_ceiling
+    if threshold is None:
+        return CheckResult(
+            "S10", "Wrong Filter Detection", SILVER, SKIPPED,
+            observed="n/a", expected="No price ceiling configured",
+            detail="price_ceiling not configured for this dataset.",
+            evidence_query="",
+        )
+
     raw_table = _quote_ident(cfg.tables.raw).as_string(loader._pg_conn)
 
     bronze_table = _quote_ident(cfg.tables.bronze).as_string(loader._pg_conn)
@@ -878,7 +878,7 @@ def s10_wrong_filter_detection(loader: DataLoader, cfg: Optional[AurumDatasetCon
 
     )
 
-    valid_predicate = _valid_predicate(cfg)
+    valid_predicate_str = valid_predicate(cfg)
 
     key_match = _business_key_match(business_key)
 
@@ -889,7 +889,7 @@ def s10_wrong_filter_detection(loader: DataLoader, cfg: Optional[AurumDatasetCon
         f"""
         SELECT MIN({cfg.columns.unit_price}) AS min_price, MAX({cfg.columns.unit_price}) AS max_price, COUNT(*) AS n
         FROM {bronze_table} b
-        WHERE {valid_predicate}
+        WHERE {valid_predicate_str}
           AND NOT EXISTS (
             SELECT 1 FROM {silver_table} s WHERE {key_match}
           )
@@ -915,9 +915,9 @@ def s10_wrong_filter_detection(loader: DataLoader, cfg: Optional[AurumDatasetCon
 
     min_price = float(stats["min_price"])
 
-    if min_price > HIGH_PRICE_THRESHOLD:
+    if min_price > threshold:
 
-        suspected = f"{cfg.columns.unit_price} > {HIGH_PRICE_THRESHOLD} records are being filtered out"
+        suspected = f"{cfg.columns.unit_price} > {threshold} records are being filtered out"
 
         detail = (
 
@@ -943,7 +943,7 @@ def s10_wrong_filter_detection(loader: DataLoader, cfg: Optional[AurumDatasetCon
 
             f"SELECT MIN({cfg.columns.unit_price}), MAX({cfg.columns.unit_price}), COUNT(*) FROM {cfg.tables.bronze} b WHERE "
 
-            f"{valid_predicate} AND NOT EXISTS "
+            f"{valid_predicate_str} AND NOT EXISTS "
 
             f"(SELECT 1 FROM {cfg.tables.silver} s WHERE {evidence_key_match})"
 

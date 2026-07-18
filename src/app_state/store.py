@@ -111,6 +111,7 @@ def save_validation_run(
     source_table: Optional[str] = None,
     display_name: Optional[str] = None,
     session_schema: Optional[str] = None,
+    dataset_config: Optional[str] = None,
 ) -> None:
     started = started_at or _utc_now()
     finished = finished_at or _utc_now()
@@ -120,8 +121,8 @@ def save_validation_run(
             INSERT OR REPLACE INTO validation_runs (
                 run_id, project_id, connection_id, status, mode,
                 started_at, finished_at, error_message,
-                source_schema, source_table, display_name, session_schema
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_schema, source_table, display_name, session_schema, dataset_config
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -136,6 +137,7 @@ def save_validation_run(
                 source_table,
                 display_name,
                 session_schema,
+                dataset_config,
             ),
         )
         if project_id:
@@ -154,7 +156,7 @@ def get_validation_run(run_id: str) -> Optional[dict[str, Any]]:
             SELECT
                 run_id, project_id, connection_id, status, mode,
                 started_at, finished_at, error_message,
-                source_schema, source_table, display_name, session_schema
+                source_schema, source_table, display_name, session_schema, dataset_config
             FROM validation_runs
             WHERE run_id = ?
             """,
@@ -181,6 +183,7 @@ def get_validation_run(run_id: str) -> Optional[dict[str, Any]]:
             started_at=row["started_at"],
         ),
         "session_schema": row["session_schema"],
+        "dataset_config": row["dataset_config"],
     }
 
 
@@ -227,6 +230,7 @@ def list_validation_runs() -> list[dict[str, Any]]:
                 r.source_table,
                 r.display_name,
                 r.session_schema,
+                r.dataset_config,
                 rep.report_json
             FROM validation_runs r
             LEFT JOIN validation_reports rep ON rep.run_id = r.run_id
@@ -265,6 +269,7 @@ def list_validation_runs() -> list[dict[str, Any]]:
                     started_at=row["started_at"],
                 ),
                 "session_schema": row["session_schema"],
+                "dataset_config": row["dataset_config"],
                 "trust_score": trust_score,
                 "final_verdict": final_verdict,
             }
