@@ -39,3 +39,7 @@ data/historical/historical_runs.csv
 
 # Aurum SQLite app state (projects, runs, reports)
 data/app_state.sqlite
+
+# Build Artifacts
+frontend/tsconfig.app.tsbuildinfo
+reports/report.json
