@@ -2,16 +2,20 @@
 
 export class ApiError extends Error {
   readonly userMessage: string;
+  readonly httpStatus?: number;
+  readonly errorCode?: string;
 
-  constructor(userMessage: string) {
+  constructor(userMessage: string, httpStatus?: number, errorCode?: string) {
     super(userMessage);
     this.name = 'ApiError';
     this.userMessage = userMessage;
+    this.httpStatus = httpStatus;
+    this.errorCode = errorCode;
   }
 }
 
 export const API_UNAVAILABLE =
-  'Service temporarily unavailable. Showing cached demo data where available.';
+  'Could not reach the server. Please check your connection or try again later.';
 
 export const CUSTOM_CHECKS_UNAVAILABLE =
   'Custom check service unavailable. Demo preview mode.';

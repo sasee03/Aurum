@@ -21,6 +21,7 @@ import {
   type PostgresTableEntry,
   type PreviewData,
 } from '@/lib/aurumApi';
+import { calmApiMessage } from '@/utils/apiErrors';
 import connectorsData from '@/mocks/connectors.json';
 import type { Connector } from '@/types';
 
@@ -117,7 +118,7 @@ function CsvPanel({ projectId }: { projectId: string }) {
       if (err instanceof CsvUploadError) {
         setMismatch(err.mismatch);
       } else {
-        toast.error('Upload failed. Check the backend and database.');
+        toast.error(calmApiMessage(err, 'Upload failed. Check the backend and database.'));
       }
     } finally {
       setUploading(false);
@@ -409,7 +410,7 @@ function PostgresPanel({ projectId }: { projectId: string }) {
       if (err instanceof CsvUploadError) {
         setMismatch(err.mismatch);
       } else {
-        toast.error('Validation failed. Check the backend and database.');
+        toast.error(calmApiMessage(err, 'Validation failed. Check the backend and database.'));
       }
     } finally {
       setValidating(false);

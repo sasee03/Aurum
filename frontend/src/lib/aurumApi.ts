@@ -11,6 +11,41 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 const FETCH_TIMEOUT_MS = 8_000;
 const CONNECTOR_VALIDATION_TIMEOUT_MS = 5 * 60_000;
 
+export async function parseApiError(res: Response, parsedBody?: any): Promise<ApiError> {
+  let body = parsedBody;
+  if (body === undefined) {
+    try {
+      body = await res.json();
+    } catch {
+      body = null;
+    }
+  }
+
+  const status = res.status;
+  if (body && typeof body === 'object') {
+    const errorCode = typeof body.error === 'string'
+      ? body.error
+      : (body.detail && typeof body.detail === 'object' && typeof body.detail.error === 'string' ? body.detail.error : undefined);
+    let message = '';
+
+    if (typeof body.message === 'string') {
+      message = body.message;
+    } else if (body.detail && typeof body.detail === 'object' && typeof body.detail.message === 'string') {
+      message = body.detail.message;
+    } else if (typeof body.detail === 'string') {
+      message = body.detail;
+    } else if (typeof body.error === 'string') {
+      message = body.error;
+    }
+
+    if (message) {
+      return new ApiError(message, status, errorCode);
+    }
+  }
+
+  return new ApiError(`Request failed (HTTP ${status})`, status);
+}
+
 export interface HealthResponse {
   status: 'ok' | 'degraded';
   database: 'ok' | 'unreachable';
@@ -23,7 +58,7 @@ async function fetchWithTimeout(
   timeoutMs = FETCH_TIMEOUT_MS,
 ): Promise<Response> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const isFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData;
   try {
     return await fetch(`${API_BASE}${path}`, {
@@ -33,15 +68,17 @@ async function fetchWithTimeout(
         : { 'Content-Type': 'application/json', ...init?.headers },
       signal: controller.signal,
     });
+  } catch {
+    throw new ApiError(API_UNAVAILABLE);
   } finally {
-    window.clearTimeout(timer);
+    clearTimeout(timer);
   }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetchWithTimeout(path, init);
   if (!res.ok) {
-    throw new ApiError(API_UNAVAILABLE);
+    throw await parseApiError(res);
   }
   return res.json() as Promise<T>;
 }
@@ -56,7 +93,7 @@ export async function healthCheck(): Promise<HealthResponse> {
   if (res.status === 503 && body.status === 'degraded') {
     return body;
   }
-  throw new ApiError(API_UNAVAILABLE);
+  throw await parseApiError(res, body);
 }
 
 export async function runValidation(runId = 'demo_run_001'): Promise<AurumReport> {
@@ -118,7 +155,7 @@ export async function createProject(payload: CreateProjectPayload): Promise<ApiP
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
-    throw new ApiError(API_UNAVAILABLE);
+    throw await parseApiError(res);
   }
   return res.json() as Promise<ApiProject>;
 }
@@ -250,7 +287,7 @@ export async function runCustomCheckWithFile(
     60_000,
   );
   if (!res.ok) {
-    throw new ApiError(API_UNAVAILABLE);
+    throw await parseApiError(res);
   }
   return res.json() as Promise<CustomCheckRunResult>;
 }
@@ -323,12 +360,19 @@ export async function uploadDatasetCsv(file: File, projectId?: string): Promise<
     method: 'POST',
     body: form,
   }, 60_000);
-  const body = await res.json();
+
+  let body = null;
+  try {
+    body = await res.json();
+  } catch {
+    // Body is empty or not JSON
+  }
+
   if (res.status === 422 && body?.schema_match === false) {
     throw new CsvUploadError(body as CsvUploadMismatch);
   }
   if (!res.ok) {
-    throw new ApiError(API_UNAVAILABLE);
+    throw await parseApiError(res, body);
   }
   return body as AurumReport;
 }
@@ -373,7 +417,7 @@ export async function testPostgresConnection(
   }, 15_000);
   const body = (await res.json()) as PostgresTestResult;
   if (!res.ok && !('connected' in body)) {
-    throw new ApiError(API_UNAVAILABLE);
+    throw await parseApiError(res, body);
   }
   return body;
 }
@@ -409,12 +453,19 @@ export async function validatePostgresTable(payload: {
     method: 'POST',
     body: JSON.stringify(payload),
   }, CONNECTOR_VALIDATION_TIMEOUT_MS);
-  const body = await res.json();
+
+  let body = null;
+  try {
+    body = await res.json();
+  } catch {
+    // Body is empty or not JSON
+  }
+
   if (res.status === 422 && body?.schema_match === false) {
     throw new CsvUploadError(body as CsvUploadMismatch);
   }
   if (!res.ok) {
-    throw new ApiError(API_UNAVAILABLE);
+    throw await parseApiError(res, body);
   }
   return body as AurumReport;
 }
