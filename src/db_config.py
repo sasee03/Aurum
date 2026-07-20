@@ -131,7 +131,7 @@ _promotion_pool: Optional[psycopg_pool.ConnectionPool] = None
 
 def _configure_pool_conn(conn):
     with conn.cursor() as cur:
-        cur.execute("SET statement_timeout = %s", (os.getenv("DB_STATEMENT_TIMEOUT", "10s"),))
+        cur.execute("SELECT set_config('statement_timeout', %s, false)", (os.getenv("DB_STATEMENT_TIMEOUT", "10s"),))
 
 
 def init_pools():
