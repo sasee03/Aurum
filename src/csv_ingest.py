@@ -12,20 +12,7 @@ from src.data_loader import DataLoader
 from src.report_builder import build_report
 from src.config_loader import load_dataset_config, AurumDatasetConfig
 
-# Must match data/raw/raw_orders.csv header (Olist raw ingest shape).
-RAW_ORDERS_COLUMNS: tuple[str, ...] = (
-    "invoice_no",
-    "stock_code",
-    "description",
-    "quantity",
-    "invoice_date",
-    "unit_price",
-    "customer_id",
-    "country",
-)
 
-TEXT_COLUMNS: tuple[str, ...] = ("invoice_no", "stock_code", "description", "country")
-NUMERIC_COLUMNS: tuple[str, ...] = ("quantity", "unit_price")
 
 # Upload limits — reject before parsing huge payloads into memory.
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
@@ -45,7 +32,10 @@ class CsvSchemaMismatch(Exception):
     ):
         self.missing_columns = missing_columns
         self.extra_columns = extra_columns or []
-        self.expected_columns = expected_columns if expected_columns is not None else list(RAW_ORDERS_COLUMNS)
+        if expected_columns is None:
+            self.expected_columns = load_dataset_config().columns.resolve_raw_required_columns()
+        else:
+            self.expected_columns = expected_columns
         self.error = error or "This file doesn't match the expected schema."
         super().__init__(self.error)
 
@@ -109,11 +99,6 @@ def validate_numeric_column(column: str, series: pd.Series, expected_columns: li
     coerced = pd.to_numeric(series, errors="coerce")
     if series.notna().any() and coerced.isna().any():
         raise _schema_error(f"{column} must be a numeric value", expected_columns=expected_columns)
-
-
-def validate_invoice_no_text(series: pd.Series, expected_columns: list[str] | None = None) -> None:
-    """Raise CsvSchemaMismatch if invoice_no was inferred as numeric (Olist uses text ids)."""
-    validate_text_column("invoice_no", series, expected_columns=expected_columns)
 
 
 def validate_column_dtypes(df: pd.DataFrame, cfg: AurumDatasetConfig) -> None:
@@ -197,7 +182,7 @@ def materialize_upload_pipeline(
     """Bronze → Silver → Gold on a loader that already has raw_orders materialized."""
     if cfg is None:
         cfg = load_dataset_config()
-    loader.conn.execute("CREATE OR REPLACE TABLE bronze_orders AS SELECT * FROM raw_orders")
+    loader.conn.execute(f"CREATE OR REPLACE TABLE {cfg.tables.bronze} AS SELECT * FROM {cfg.tables.raw}")
     loader.build_silver(cfg)
     loader._create_reconciliation_indexes(cfg)
     loader.build_silver_assessment(cfg)
@@ -212,7 +197,7 @@ def run_validation_from_raw_orders(
     """Build a full validation report from an in-memory raw_orders frame."""
     if cfg is None:
         cfg = load_dataset_config()
-    loader = DataLoader.from_frames({"raw_orders": df})
+    loader = DataLoader.from_frames({cfg.tables.raw: df})
     try:
         materialize_upload_pipeline(loader, cfg)
         report = build_report(loader, run_id=run_id, cfg=cfg)

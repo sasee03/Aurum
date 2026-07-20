@@ -3,10 +3,13 @@
 import os
 
 from src.db_config import (
+    PipelineLayer,
     db_connect_timeout,
+    load_layer_schemas,
     load_postgres_config,
     postgres_conninfo,
     postgres_target_info,
+    resolve_layer_schema,
 )
 
 
@@ -101,3 +104,25 @@ def test_postgres_target_info_from_database_url(monkeypatch):
     assert target["port"] == 5432
     assert target["database"] == "aurum_db"
     assert "secret" not in str(target)
+
+
+def test_layer_schema_defaults_to_demo_topology(monkeypatch):
+    for key in (
+        "AURUM_SCHEMA_SOURCE",
+        "AURUM_SCHEMA_BRONZE",
+        "AURUM_SCHEMA_SILVER",
+        "AURUM_SCHEMA_GOLD",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    schemas = load_layer_schemas()
+    assert schemas.source == "source"
+    assert schemas.bronze == "bronze"
+    assert resolve_layer_schema(PipelineLayer.SILVER, schemas) == "silver"
+    assert resolve_layer_schema("gold", schemas) == "gold"
+
+
+def test_layer_schema_env_redirects_without_code_change(monkeypatch):
+    monkeypatch.setenv("AURUM_SCHEMA_SILVER", "silver_demo_2")
+
+    assert resolve_layer_schema(PipelineLayer.SILVER) == "silver_demo_2"

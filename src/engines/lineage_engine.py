@@ -9,14 +9,17 @@ from __future__ import annotations
 from typing import Optional, Dict, Any, List
 from ..contracts import FAIL, IMPACTED, PASS
 
+from src.config_loader import load_dataset_config
+
 class LineageIntelligenceEngine:
     def __init__(self):
+        cfg = load_dataset_config()
         # Deterministic table-level data flow DAG
         self.edges = [
-            ("bronze_orders", "silver_orders"),
-            ("silver_orders", "gold_metrics"),
-            ("silver_orders", "gold_country_revenue"),
-            ("silver_orders", "gold_product_sales")
+            (cfg.tables.bronze, cfg.tables.silver),
+            (cfg.tables.silver, cfg.tables.gold.metrics),
+            (cfg.tables.silver, cfg.tables.gold.country_revenue),
+            (cfg.tables.silver, cfg.tables.gold.product_sales)
         ]
         
     def get_downstream_impact(self, table_name: str) -> set[str]:

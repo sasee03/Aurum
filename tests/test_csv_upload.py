@@ -17,7 +17,8 @@ import src.config_loader as config_loader
 from src.app_state.db import get_connection
 from src.app_state.store import get_project
 from src.config_loader import ConfigResolutionError, load_dataset_config
-from src.csv_ingest import MAX_UPLOAD_ROWS, RAW_ORDERS_COLUMNS
+from src.csv_ingest import MAX_UPLOAD_ROWS
+from src.config_loader import load_dataset_config
 from src.db_config import db_connect_timeout
 from tests.builders import make_rows, to_df
 
@@ -155,7 +156,8 @@ def _numeric_invoice_no_csv_bytes() -> bytes:
 
 
 def _headers_only_csv_bytes() -> bytes:
-    return (",".join(RAW_ORDERS_COLUMNS) + "\n").encode("utf-8")
+    raw_cols = load_dataset_config().columns.resolve_raw_required_columns()
+    return (",".join(raw_cols) + "\n").encode("utf-8")
 
 
 def _blank_required_field_csv_bytes(column: str = "unit_price") -> bytes:
@@ -197,7 +199,7 @@ def _assert_upload_rejected(client, payload: bytes, filename: str, expected_erro
     body = response.json()
     assert body["schema_match"] is False
     assert body["missing_columns"] == []
-    assert body["expected_columns"] == list(RAW_ORDERS_COLUMNS)
+    assert body["expected_columns"] == load_dataset_config().columns.resolve_raw_required_columns()
     assert body["error"] == expected_error
 
     runs_after, reports_after = _sqlite_validation_counts()
@@ -225,7 +227,7 @@ def test_upload_numeric_invoice_no_honest_rejection(client):
     body = response.json()
     assert body["schema_match"] is False
     assert body["missing_columns"] == []
-    assert body["expected_columns"] == list(RAW_ORDERS_COLUMNS)
+    assert body["expected_columns"] == load_dataset_config().columns.resolve_raw_required_columns()
     assert body["error"] == "invoice_no must be a text/string value, not numeric"
 
     runs_after, reports_after = _sqlite_validation_counts()
@@ -366,7 +368,7 @@ def test_upload_mismatched_csv_honest_rejection(client):
     body = response.json()
     assert body["schema_match"] is False
     assert body["missing_columns"] == ["country"]
-    assert body["expected_columns"] == list(RAW_ORDERS_COLUMNS)
+    assert body["expected_columns"] == load_dataset_config().columns.resolve_raw_required_columns()
     assert "schema" in body["error"].lower()
 
     runs_after, reports_after = _sqlite_validation_counts()

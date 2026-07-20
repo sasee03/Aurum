@@ -18,121 +18,14 @@ VALID_ROW_PREDICATE = (
     "AND invoice_no IS NOT NULL AND stock_code IS NOT NULL"
 )
 
-TABLE_SPECS: dict[str, dict] = {
-    "raw_orders": {
-        "layer": BRONZE,
-        "label": "Raw Source",
-        "primary_key": ["invoice_no"],
-        "mandatory_columns": [
-            "invoice_no", "stock_code", "quantity", "unit_price",
-            "invoice_date", "customer_id", "country",
-        ],
-        "range_checks": {
-            "unit_price": {"min": 0, "strict_min": True},
-        },
-        "date_columns": ["invoice_date"],
-        "date_column": "invoice_date",
-        "max_future_days": 0,
-        "expected_freshness_days": 365,
-        "timeliness_days": 365,
-    },
-    "bronze_orders": {
-        "layer": BRONZE,
-        "label": "Bronze",
-        "primary_key": ["invoice_no"],
-        "mandatory_columns": [
-            "invoice_no", "stock_code", "quantity", "unit_price",
-            "invoice_date", "customer_id", "country",
-        ],
-        "range_checks": {
-            "quantity": {"min": None, "max": None},  # profile only at Bronze
-            "unit_price": {"min": 0, "strict_min": False},
-        },
-        "date_columns": ["invoice_date"],
-        "date_column": "invoice_date",
-        "max_future_days": 0,
-        "expected_freshness_days": 365,
-        "timeliness_days": 365,
-        "source_table": "raw_orders",
-    },
-    "silver_orders": {
-        "layer": SILVER,
-        "label": "Silver",
-        "primary_key": ["invoice_no"],
-        "mandatory_columns": [
-            "invoice_no", "stock_code", "quantity", "unit_price",
-            "invoice_date", "customer_id", "country",
-        ],
-        "range_checks": {
-            "quantity": {"min": 0, "strict_min": True},
-            "unit_price": {"min": 0, "strict_min": True},
-        },
-        "date_columns": ["invoice_date"],
-        "date_column": "invoice_date",
-        "max_future_days": 0,
-        "expected_freshness_days": 365,
-        "timeliness_days": 365,
-        "parent_table": "bronze_orders",
-        "parent_key": "invoice_no",
-        "child_key": "invoice_no",
-        # FK to customers dimension — check runs only when customers table exists.
-        # Catches orphan keys, NOT coherent swaps between valid keys (known limitation).
-        "foreign_keys": [
-            {
-                "column": "customer_id",
-                "ref_table": "customers",
-                "ref_column": "customer_id",
-            }
-        ],
-    },
-    "gold_metrics": {
-        "layer": GOLD,
-        "label": "Gold Metrics",
-        "primary_key": [],
-        "mandatory_columns": [
-            "total_revenue", "total_orders", "total_customers", "average_order_value",
-        ],
-        "range_checks": {
-            "total_revenue": {"min": 0, "strict_min": False},
-            "total_orders": {"min": 0, "strict_min": False},
-            "total_customers": {"min": 0, "strict_min": False},
-        },
-        "date_columns": [],
-        "reconcile_from": "silver_orders",
-    },
-    # Optional child table — FK checks run only when this table exists (bug zoo).
-    "order_payments": {
-        "layer": BRONZE,
-        "label": "Order Payments",
-        "primary_key": ["payment_id"],
-        "mandatory_columns": ["payment_id", "invoice_no", "amount"],
-        "range_checks": {"amount": {"min": 0, "strict_min": True}},
-        "date_columns": [],
-        "foreign_keys": [
-            {
-                "column": "invoice_no",
-                "ref_table": "bronze_orders",
-                "ref_column": "invoice_no",
-            }
-        ],
-    },
-}
+
 
 
 def build_table_specs(cfg: AurumDatasetConfig | None = None) -> dict[str, dict]:
     """Return Layer-1 table specs, using dataset config when provided."""
     if cfg is None:
-        return deepcopy(TABLE_SPECS)
-    if (
-        cfg.columns.primary_key == "invoice_no"
-        and cfg.columns.product_id == "stock_code"
-        and cfg.columns.customer_id == "customer_id"
-        and cfg.columns.timestamp == "invoice_date"
-        and cfg.columns.quantity == "quantity"
-        and cfg.columns.unit_price == "unit_price"
-        and cfg.columns.geography == "country"
-    ):
-        return deepcopy(TABLE_SPECS)
+        from .config_loader import load_dataset_config
+        cfg = load_dataset_config()
     raw_columns = cfg.columns.resolve_raw_required_columns()
     silver_columns = list(raw_columns)
     if cfg.columns.revenue not in silver_columns:
@@ -140,9 +33,9 @@ def build_table_specs(cfg: AurumDatasetConfig | None = None) -> dict[str, dict]:
 
     line_item_key = list(cfg.columns.resolve_line_item_key())
     return {
-        "raw_orders": {
+        cfg.tables.raw: {
             "_quote_identifiers": True,
-            "layer": BRONZE,
+            "layer": "raw",
             "label": "Raw Source",
             "primary_key": [cfg.columns.primary_key],
             "business_key": line_item_key,
@@ -156,7 +49,7 @@ def build_table_specs(cfg: AurumDatasetConfig | None = None) -> dict[str, dict]:
             "expected_freshness_days": 365,
             "timeliness_days": 365,
         },
-        "bronze_orders": {
+        cfg.tables.bronze: {
             "_quote_identifiers": True,
             "layer": BRONZE,
             "label": "Bronze",
@@ -172,9 +65,9 @@ def build_table_specs(cfg: AurumDatasetConfig | None = None) -> dict[str, dict]:
             "max_future_days": 0,
             "expected_freshness_days": 365,
             "timeliness_days": 365,
-            "source_table": "raw_orders",
+            "source_table": cfg.tables.raw,
         },
-        "silver_orders": {
+        cfg.tables.silver: {
             "_quote_identifiers": True,
             "layer": SILVER,
             "label": "Silver",
@@ -191,12 +84,18 @@ def build_table_specs(cfg: AurumDatasetConfig | None = None) -> dict[str, dict]:
             "max_future_days": 0,
             "expected_freshness_days": 365,
             "timeliness_days": 365,
-            "parent_table": "bronze_orders",
+            "parent_table": cfg.tables.bronze,
             "parent_key": cfg.columns.primary_key,
             "child_key": cfg.columns.primary_key,
-            "foreign_keys": [],
+            "foreign_keys": [
+                {
+                    "column": cfg.columns.customer_id,
+                    "ref_table": "customers",
+                    "ref_column": cfg.columns.customer_id,
+                }
+            ],
         },
-        "gold_metrics": {
+        cfg.tables.gold.metrics: {
             "_quote_identifiers": True,
             "layer": GOLD,
             "label": "Gold Metrics",
@@ -213,6 +112,22 @@ def build_table_specs(cfg: AurumDatasetConfig | None = None) -> dict[str, dict]:
                 cfg.metrics.total_customers_metric: {"min": 0, "strict_min": False},
             },
             "date_columns": [],
-            "reconcile_from": "silver_orders",
+            "reconcile_from": cfg.tables.silver,
+        },
+        "order_payments": {
+            "layer": BRONZE,
+            "label": "Order Payments",
+            "primary_key": ["payment_id"],
+            "mandatory_columns": ["payment_id", cfg.columns.primary_key, "amount"],
+            "range_checks": {"amount": {"min": 0, "strict_min": True}},
+            "date_columns": [],
+            "foreign_keys": [
+                {
+                    "column": cfg.columns.primary_key,
+                    "ref_table": cfg.tables.bronze,
+                    "ref_column": cfg.columns.primary_key,
+                }
+            ],
         },
     }
+

@@ -137,12 +137,6 @@ def _translate_sql(query: str) -> str:
         "ROUND(((1 - COALESCE(sil.silver_count, 0)::double precision / "
         "seg.bronze_valid) * 100)::numeric, 2)::double precision",
     )
-    translated = re.sub(
-        r"CREATE\s+OR\s+REPLACE\s+TABLE\s+\"?([A-Za-z_][A-Za-z0-9_]*)\"?\s+AS",
-        r'DROP TABLE IF EXISTS "\1"; CREATE TABLE "\1" AS',
-        translated,
-        flags=re.IGNORECASE,
-    )
     translated = translated.replace("?", "%s")
     return translated
 

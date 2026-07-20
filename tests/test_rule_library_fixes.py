@@ -17,7 +17,7 @@ from src.config_loader import (
 )
 from src.detection_stack import run_detection_stack
 from src.rule_library import _check_consistency_fk, _check_freshness
-from src.table_specs import TABLE_SPECS, build_table_specs
+from src.table_specs import build_table_specs
 
 
 def test_future_date_shift_fails_freshness_check():
@@ -26,7 +26,7 @@ def test_future_date_shift_fails_freshness_check():
     future = (date.today() + timedelta(days=30)).isoformat()
     df["invoice_date"] = future
     loader = loader_from(bronze_orders=df)
-    spec = dict(TABLE_SPECS["bronze_orders"])
+    spec = dict(build_table_specs()["bronze_orders"])
     results = _check_freshness(loader, "bronze_orders", spec)
     assert len(results) == 1
     assert results[0].check_id == "L1-BRO-TIME-FRESH"
@@ -40,7 +40,7 @@ def test_stale_dates_warn_freshness_check():
     stale = (date.today() - timedelta(days=10)).isoformat()
     df["invoice_date"] = stale
     loader = loader_from(bronze_orders=df)
-    spec = dict(TABLE_SPECS["bronze_orders"])
+    spec = dict(build_table_specs()["bronze_orders"])
     spec["expected_freshness_days"] = 3
     results = _check_freshness(loader, "bronze_orders", spec)
     assert len(results) == 1
@@ -60,7 +60,7 @@ def test_orphan_customer_fk_fails_when_dimension_exists():
         silver_orders=silver,
         customers=customers,
     )
-    spec = dict(TABLE_SPECS["silver_orders"])
+    spec = dict(build_table_specs()["silver_orders"])
     results = _check_consistency_fk(loader, "silver_orders", spec)
     fk_hits = [r for r in results if r.check_id == "L1-SIL-CONS-FK-CUST"]
     assert len(fk_hits) == 1
@@ -148,7 +148,15 @@ def test_detection_stack_layer_1_uses_custom_dataset_config_specs():
             }
         ]
     )
-    loader = loader_from(raw_orders=raw, bronze_orders=raw, silver_orders=silver, gold_metrics=gold)
+    loader = loader_from(
+        raw_orders=raw, 
+        bronze_orders=raw, 
+        silver_orders=silver, 
+        gold_metrics=gold,
+        gold_country_revenue=pd.DataFrame({"Market": ["US"], "LineRevenue": [10.0]}),
+        gold_product_sales=pd.DataFrame({"Sku": ["A"], "LineRevenue": [10.0]}),
+        customers=pd.DataFrame({"BuyerRef": ["C1", "C2"]})
+    )
 
     results = run_detection_stack(loader, cfg).layer_1_rules
     assert results
@@ -158,6 +166,9 @@ def test_detection_stack_layer_1_uses_custom_dataset_config_specs():
         "L1-SIL-COMP-NULL",
         "L1-GOL-COMP-NULL",
     }
+    skipped = [r for r in results if r.status == "SKIPPED"]
+    if skipped:
+        print(f"\nSKIPPED RULES: {[r.to_dict() for r in skipped]}")
     assert all(result.status != "SKIPPED" for result in results)
     assert "invoice_no" not in str([result.to_dict() for result in results])
     assert "stock_code" not in str([result.to_dict() for result in results])

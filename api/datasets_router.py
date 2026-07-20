@@ -12,7 +12,6 @@ import api.main as api_main
 from src.app_state.store import save_validation_report, save_validation_run
 from src.config_loader import ConfigResolutionError, resolve_config_for_project_or_table
 from src.csv_ingest import (
-    RAW_ORDERS_COLUMNS,
     CsvSchemaMismatch,
     parse_raw_orders_csv,
     run_validation_from_raw_orders,
@@ -96,7 +95,7 @@ async def upload_dataset(
             content={
                 "schema_match": False,
                 "error": "Only CSV uploads are supported.",
-                "expected_columns": list(RAW_ORDERS_COLUMNS),
+                "expected_columns": [],
                 "missing_columns": [],
             },
         )

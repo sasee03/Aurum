@@ -13,7 +13,7 @@ import psycopg
 from psycopg import Connection, sql
 
 from .db_config import postgres_conninfo
-from .table_specs import TABLE_SPECS
+from .table_specs import build_table_specs
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -66,7 +66,7 @@ def classify_layer(schema_name: str, table_name: str) -> str:
     if "gold" in lowered:
         return "gold"
 
-    spec = TABLE_SPECS.get(table_name)
+    spec = build_table_specs().get(table_name)
     if spec:
         hinted = str(spec.get("layer", "")).lower()
         if hinted in {"bronze", "silver", "gold"}:
@@ -322,7 +322,7 @@ def discover_table_metadata(
         "candidate_keys": candidate_keys,
         "columns": column_profiles,
     }
-    return merge_table_spec_overrides(table, TABLE_SPECS)
+    return merge_table_spec_overrides(table, build_table_specs())
 
 
 def discover_table_metadata_lightweight(

@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from enum import Enum
 from urllib.parse import urlparse
+from typing import Optional
 
 from dotenv import load_dotenv
+import psycopg_pool
 
 load_dotenv()
 
@@ -43,8 +46,43 @@ class PostgresConfig:
         )
 
 
+class PipelineLayer(str, Enum):
+    SOURCE = "source"
+    BRONZE = "bronze"
+    SILVER = "silver"
+    GOLD = "gold"
+
+
+@dataclass(frozen=True)
+class LayerSchemas:
+    source: str = "source"
+    bronze: str = "bronze"
+    silver: str = "silver"
+    gold: str = "gold"
+
+    def schema_for(self, layer: PipelineLayer | str) -> str:
+        layer_value = layer.value if isinstance(layer, PipelineLayer) else layer
+        try:
+            return getattr(self, layer_value)
+        except AttributeError as exc:
+            raise ValueError(f"Unknown pipeline layer: {layer_value}") from exc
+
+
 def _env(primary: str, legacy: str, default: str) -> str:
     return os.getenv(primary) or os.getenv(legacy) or default
+
+
+def load_layer_schemas() -> LayerSchemas:
+    return LayerSchemas(
+        source=os.getenv("AURUM_SCHEMA_SOURCE", "source"),
+        bronze=os.getenv("AURUM_SCHEMA_BRONZE", "bronze"),
+        silver=os.getenv("AURUM_SCHEMA_SILVER", "silver"),
+        gold=os.getenv("AURUM_SCHEMA_GOLD", "gold"),
+    )
+
+
+def resolve_layer_schema(layer: PipelineLayer | str, schemas: LayerSchemas | None = None) -> str:
+    return (schemas or load_layer_schemas()).schema_for(layer)
 
 
 def load_postgres_config() -> PostgresConfig:
@@ -85,3 +123,74 @@ def postgres_target_info() -> dict[str, str | int]:
         return {"host": host, "port": port, "database": dbname}
     cfg = load_postgres_config()
     return {"host": cfg.host, "port": cfg.port, "database": cfg.dbname}
+
+_ingestion_pool: Optional[psycopg_pool.ConnectionPool] = None
+_generated_sql_pool: Optional[psycopg_pool.ConnectionPool] = None
+_promotion_pool: Optional[psycopg_pool.ConnectionPool] = None
+
+
+def _configure_pool_conn(conn):
+    with conn.cursor() as cur:
+        cur.execute("SET statement_timeout = %s", (os.getenv("DB_STATEMENT_TIMEOUT", "10s"),))
+
+
+def init_pools():
+    global _ingestion_pool, _generated_sql_pool, _promotion_pool
+    if _ingestion_pool is not None:
+        return
+
+    cfg = load_postgres_config()
+
+    def _conninfo_for(user: str, password: str) -> str:
+        return (
+            f"host={cfg.host} "
+            f"port={cfg.port} "
+            f"dbname={cfg.dbname} "
+            f"user={user} "
+            f"password={password}"
+        )
+
+    _ingestion_pool = psycopg_pool.ConnectionPool(
+        _conninfo_for("aurum_ingestion", "aurum_ingestion"),
+        kwargs={"autocommit": True},
+        configure=_configure_pool_conn,
+        min_size=1,
+        max_size=5,
+        open=True
+    )
+    _generated_sql_pool = psycopg_pool.ConnectionPool(
+        _conninfo_for("aurum_generated_sql", "aurum_generated_sql"),
+        kwargs={"autocommit": True},
+        configure=_configure_pool_conn,
+        min_size=1,
+        max_size=5,
+        open=True
+    )
+    _promotion_pool = psycopg_pool.ConnectionPool(
+        _conninfo_for("aurum_promotion", "aurum_promotion"),
+        kwargs={"autocommit": True},
+        configure=_configure_pool_conn,
+        min_size=1,
+        max_size=5,
+        open=True
+    )
+
+def get_ingestion_pool() -> psycopg_pool.ConnectionPool:
+    if _ingestion_pool is None:
+        init_pools()
+    assert _ingestion_pool is not None
+    return _ingestion_pool
+
+
+def get_generated_sql_pool() -> psycopg_pool.ConnectionPool:
+    if _generated_sql_pool is None:
+        init_pools()
+    assert _generated_sql_pool is not None
+    return _generated_sql_pool
+
+
+def get_promotion_pool() -> psycopg_pool.ConnectionPool:
+    if _promotion_pool is None:
+        init_pools()
+    assert _promotion_pool is not None
+    return _promotion_pool

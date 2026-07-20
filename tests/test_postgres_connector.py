@@ -16,7 +16,8 @@ from psycopg.conninfo import conninfo_to_dict
 import api.main as api_main
 import src.config_loader as config_loader
 from src.app_state.db import get_connection
-from src.csv_ingest import MAX_UPLOAD_ROWS, RAW_ORDERS_COLUMNS
+from src.csv_ingest import MAX_UPLOAD_ROWS
+from src.config_loader import load_dataset_config
 from src.db_config import postgres_conninfo
 from src.config_loader import load_dataset_config
 from src.postgres_connector import (
@@ -317,7 +318,7 @@ def test_validate_schema_mismatch_honest_422(client):
     body = response.json()
     assert body["schema_match"] is False
     assert body["missing_columns"] == ["country"]
-    assert body["expected_columns"] == list(RAW_ORDERS_COLUMNS)
+    assert body["expected_columns"] == load_dataset_config().columns.resolve_raw_required_columns()
     assert "schema" in body["error"].lower()
 
 

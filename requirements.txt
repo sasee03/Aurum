@@ -11,3 +11,5 @@ streamlit==1.36.0
 pytest==8.2.2
 PyYAML>=6.0
 requests
+sqlglot==26.33.0
+psycopg-pool==3.2.8

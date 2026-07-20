@@ -17,7 +17,7 @@ from src.metadata_discovery import (
     merge_table_spec_overrides,
     profile_columns,
 )
-from src.table_specs import TABLE_SPECS
+from src.table_specs import build_table_specs
 
 
 @pytest.fixture
@@ -261,9 +261,9 @@ def test_merge_table_spec_overrides_adds_static_spec_without_overwriting():
         "row_count": 10,
         "column_count": 3,
     }
-    merged = merge_table_spec_overrides(discovered, TABLE_SPECS)
+    merged = merge_table_spec_overrides(discovered, build_table_specs())
     assert merged["row_count"] == 10
-    assert merged["spec_overrides"] == TABLE_SPECS["bronze_orders"]
+    assert merged["spec_overrides"] == build_table_specs()["bronze_orders"]
     assert merged is not discovered
 
 

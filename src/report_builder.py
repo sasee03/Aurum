@@ -124,11 +124,15 @@ def build_report(
 
     if custom_checks_cfg:
         import pandas as pd
-        from src.custom_checks import evaluate_check_on_frame, LAYER_TABLES
-
+        from src.custom_checks import evaluate_check_on_frame
+        
         for c in custom_checks_cfg:
             layer = str(c.get("layer", "silver")).strip().lower()
-            table_name = LAYER_TABLES.get(layer)
+            table_name = {
+                "bronze": cfg.tables.bronze,
+                "silver": cfg.tables.silver,
+                "gold": cfg.tables.gold.metrics,
+            }.get(layer, cfg.tables.silver)
             df = loader.query(f"SELECT * FROM {table_name}") if table_name and loader.table_exists(table_name) else pd.DataFrame()
             
             res_dict = evaluate_check_on_frame(c, df)

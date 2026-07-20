@@ -24,12 +24,7 @@ import pandas as pd
 from src.app_state.store import get_data_connection
 from src.data_loader import DataLoader
 
-# Layer → fixed table in the validation session schema. No free-form table names.
-LAYER_TABLES: dict[str, str] = {
-    "bronze": "bronze_orders",
-    "silver": "silver_orders",
-    "gold": "gold_metrics",
-}
+from src.config_loader import AurumDatasetConfig, load_dataset_config
 
 DEMO_DATA_SOURCE = "Olist demo validation session"
 DEMO_SCOPE_NOTE = (
@@ -109,16 +104,24 @@ def _compare(left: float, operator: str, right: float) -> bool:
     return ops[operator]
 
 
-def resolve_layer_table(layer: str) -> Optional[str]:
-    return LAYER_TABLES.get(str(layer).strip().lower())
+def resolve_layer_table(layer: str, cfg: Optional[AurumDatasetConfig] = None) -> Optional[str]:
+    cfg = cfg or load_dataset_config()
+    layer = str(layer).strip().lower()
+    if layer == "bronze":
+        return cfg.tables.bronze
+    if layer == "silver":
+        return cfg.tables.silver
+    if layer == "gold":
+        return cfg.tables.gold.metrics
+    return None
 
 
-def load_layer_dataframe(layer: str) -> pd.DataFrame:
+def load_layer_dataframe(layer: str, cfg: Optional[AurumDatasetConfig] = None) -> pd.DataFrame:
     """Build a short-lived demo validation session and return the layer table.
 
     Closes the DataLoader before returning so session schemas do not leak.
     """
-    table = resolve_layer_table(layer)
+    table = resolve_layer_table(layer, cfg)
     if table is None:
         raise ValueError(f"unknown layer '{layer}'")
 
@@ -435,7 +438,7 @@ def run_info_for_check(run_id: str) -> Optional[dict[str, Any]]:
     return get_validation_run(run_id)
 
 
-def build_layer_frame_from_raw(raw_frame, layer: str):
+def build_layer_frame_from_raw(raw_frame, layer: str, cfg: Optional[AurumDatasetConfig] = None):
     """Build bronze/silver/gold from a raw_orders frame for check execution.
 
     Uses DataLoader.from_frames() so the pipeline runs in-memory without touching
@@ -443,10 +446,11 @@ def build_layer_frame_from_raw(raw_frame, layer: str):
     """
     from src.csv_ingest import materialize_upload_pipeline
 
-    table_name = LAYER_TABLES.get(str(layer).strip().lower(), "silver_orders")
-    loader = DataLoader.from_frames({"raw_orders": raw_frame})
+    cfg = cfg or load_dataset_config()
+    table_name = resolve_layer_table(layer, cfg) or cfg.tables.silver
+    loader = DataLoader.from_frames({cfg.tables.raw: raw_frame})
     try:
-        materialize_upload_pipeline(loader)
+        materialize_upload_pipeline(loader, cfg)
         return loader.query(f"SELECT * FROM {table_name}")
     finally:
         loader.close()
