@@ -267,7 +267,7 @@ def test_raw_table_name_resolves_declared_dataset_config(tmp_path, monkeypatch):
     olist_path.write_text(default_config_path().read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.setattr(config_loader, "default_config_path", lambda: olist_path)
 
-    cfg = resolve_config_for_project_or_table("indium", "raw_orders")
+    cfg = resolve_config_for_project_or_table(None, "raw_orders")
 
     assert cfg.config_name == "olist"
     assert cfg.tables.raw == "raw_orders"
