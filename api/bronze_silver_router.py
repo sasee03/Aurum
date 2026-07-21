@@ -65,6 +65,27 @@ def call_llm_stubbed(prompt: str) -> str:
     This function currently returns a hardcoded mock CTE response 
     for end-to-end pipeline testing without a live LLM daemon.
     """
+    import time
+    if "TIMEOUT_TEST" in prompt:
+        time.sleep(OLLAMA_TIMEOUT + 1)
+        
+    if not hasattr(call_llm_stubbed, "retry_count"):
+        call_llm_stubbed.retry_count = 0
+    call_llm_stubbed.retry_count += 1
+        
+    if "RETRY_TEST" in prompt and call_llm_stubbed.retry_count % 2 == 1:
+        return "MALFORMED SQL"
+
+    # Extract the run_id from the prompt for the mock
+    run_id_match = re.search(r"_candidate_(run_[a-f0-9]+)", prompt)
+    run_id = run_id_match.group(1) if run_id_match else "run_mock"
+
+    if "NO_CTE_TEST" in prompt:
+        return "SELECT 1;"
+
+    if "TOO_MANY_CTE_TEST" in prompt:
+        schemas = load_layer_schemas()
+        return f"CREATE TABLE {schemas.silver_candidates}.src_orders_TOO_MANY_CTE_TEST_candidate_{run_id} AS WITH step_1 AS (SELECT 1), step_2 AS (SELECT 2), step_3 AS (SELECT 3) SELECT * FROM step_3;"
     # Extract the run_id from the prompt for the mock
     run_id_match = re.search(r"_candidate_(run_[a-f0-9]+)", prompt)
     run_id = run_id_match.group(1) if run_id_match else "run_mock"
@@ -187,31 +208,43 @@ SELECT * FROM step_3;
 """
 
     # 4. Call Ollama (Stubbed for now, awaiting sassee's integration)
-    raw_response = call_llm_stubbed(prompt)
-
-    # 5. Parse and strip markdown
-    stripped_sql = strip_markdown(raw_response)
+    import concurrent.futures
+    max_attempts = 2
+    last_error = None
     
-    # 6. Pre-flight structural check (P0 AST safety gate, before saving for review)
-    try:
-        validate_generated_sql(stripped_sql, run_id=run_id)
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Generated SQL failed safety validation: {e}")
+    for attempt in range(max_attempts):
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(call_llm_stubbed, prompt)
+                raw_response = future.result(timeout=OLLAMA_TIMEOUT)
+
+            # 5. Parse and strip markdown
+            stripped_sql = strip_markdown(raw_response)
+            
+            # 6. Pre-flight structural check (P0 AST safety gate, before saving for review)
+            validate_generated_sql(stripped_sql, run_id=run_id, expected_step_count=len(rules))
+            
+            last_error = None
+            break
+        except concurrent.futures.TimeoutError:
+            last_error = f"LLM generation timed out after {OLLAMA_TIMEOUT} seconds."
+            # Immediately raise, do not retry on timeout for UX reasons
+            raise HTTPException(status_code=504, detail=last_error)
+        except Exception as e:
+            last_error = f"Generated SQL failed safety validation: {e}"
+            if attempt == max_attempts - 1:
+                raise HTTPException(status_code=422, detail=last_error)
 
     # 7. Build planned changes summary (P2.4)
-    # Simple summary based on rules list and CTE detection
-    cte_count = len(re.findall(r'step_\d+\s+AS\s*\(', stripped_sql, flags=re.IGNORECASE))
-    
-    if cte_count == len(rules):
-        summary_text = f"Successfully planned {cte_count} sequential steps matching your {len(rules)} rules. Each rule will be applied cumulatively."
-    else:
-        summary_text = f"Warning: The AI generated {cte_count} SQL steps for your {len(rules)} rules. Cumulative attribution per rule might not perfectly align."
+    # CTE count matches rule count because validate_generated_sql enforced it
+    cte_count = len(rules)
+    summary_text = f"Successfully planned {cte_count} sequential steps matching your {len(rules)} rules. Each rule will be applied cumulatively."
 
     planned_changes = {
         "summary": summary_text,
         "rules": [f"Step {i+1}: {r}" for i, r in enumerate(rules)],
         "cte_steps_detected": cte_count,
-        "attribution_safe": cte_count == len(rules)
+        "attribution_safe": True
     }
 
     # 8. Persist for review
@@ -248,10 +281,11 @@ def review_sql(run_id: str):
         raise HTTPException(status_code=404, detail="Run ID not found.")
         
     sql_text = row[1]
+    planned_changes = json.loads(row[2])
     
     # Validate the SQL again right before returning for review to be absolutely certain
     try:
-        validated_sql = validate_generated_sql(sql_text, run_id=run_id)
+        validated_sql = validate_generated_sql(sql_text, run_id=run_id, expected_step_count=len(planned_changes.get("rules", [])))
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"SQL failed structural validation: {e}")
 
