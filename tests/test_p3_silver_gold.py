@@ -91,8 +91,7 @@ def test_generate_and_review():
     assert "message" in resp.json()
 
 def test_execute_toctou_safety(mock_db_and_llm, monkeypatch):
-    # Mock out execution
-    monkeypatch.setattr(router, "execute_candidate_sql", lambda sql, conn, run_id: None)
+    monkeypatch.setattr(router, "execute_candidate_sql", lambda sql, conn, expected_schema, run_id: None)
     monkeypatch.setattr(router, "promote_candidate_table", lambda **kwargs: None)
     
     # Mock pool connection for preview

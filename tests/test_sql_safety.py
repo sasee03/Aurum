@@ -1,7 +1,14 @@
 """Unit tests for AST structural safety gate."""
 
 import pytest
-from src.sql_safety import validate_generated_sql, SqlSafetyViolation
+from src.sql_safety import validate_generated_sql as _validate_generated_sql, SqlSafetyViolation
+from src.db_config import load_layer_schemas
+
+schemas = load_layer_schemas()
+
+def validate_generated_sql(sql_str: str, **kwargs):
+    kwargs.setdefault('expected_schema', schemas.silver_candidates)
+    return _validate_generated_sql(sql_str, **kwargs)
 
 
 RUN_ID = "run_20260721"

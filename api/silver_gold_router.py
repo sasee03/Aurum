@@ -281,7 +281,7 @@ GROUP BY DATE(order_date);
             stripped_sql = strip_markdown(raw_response)
             
             # P0 AST safety gate, explicitly NO step count enforcement for Gold
-            validate_generated_sql(stripped_sql, run_id=run_id, expected_step_count=None)
+            validate_generated_sql(stripped_sql, expected_schema=schemas.gold_candidates, run_id=run_id, expected_step_count=None)
             
             last_error = None
             break
@@ -331,7 +331,8 @@ def review_gold_sql(run_id: str):
     sql_text = row[1]
     
     try:
-        validated_sql = validate_generated_sql(sql_text, run_id=run_id, expected_step_count=None)
+        schemas = load_layer_schemas()
+        validated_sql = validate_generated_sql(sql_text, expected_schema=schemas.gold_candidates, run_id=run_id, expected_step_count=None)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"SQL failed structural validation: {e}")
 
@@ -372,7 +373,7 @@ def execute_gold_sql(run_id: str, payload: ExecuteGoldPayload):
     # 2. Execution and Ownership Transfer (aurum_generated_sql -> aurum_promotion)
     try:
         with get_generated_sql_pool().connection() as conn:
-            execute_candidate_sql(sql_text, conn, run_id=run_id)
+            execute_candidate_sql(sql_text, conn, expected_schema=schemas.gold_candidates, run_id=run_id)
             conn.commit()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to execute candidate SQL: {e}")

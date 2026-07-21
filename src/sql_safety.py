@@ -54,6 +54,7 @@ def _validate_candidate_name(table_name: str, run_id: str | None) -> None:
 def validate_generated_sql(
     sql_str: str,
     *,
+    expected_schema: str,
     run_id: str | None = None,
     layer_schemas: LayerSchemas | None = None,
     expected_step_count: int | None = None,
@@ -112,13 +113,9 @@ def validate_generated_sql(
 
         schemas = layer_schemas or load_layer_schemas()
         schema_name = schema_node.name
-        allowed_schemas = {
-            schemas.silver_candidates,
-            schemas.gold_candidates,
-        }
-        if schema_name not in allowed_schemas:
+        if schema_name != expected_schema:
             raise SqlSafetyViolation(
-                f"Target schema must be one of {sorted(allowed_schemas)}, found: {schema_name}"
+                f"Target schema must be {expected_schema}, found: {schema_name}"
             )
 
     if expected_step_count is not None:
@@ -134,12 +131,12 @@ def validate_generated_sql(
 
     return stmt.sql(dialect="postgres")
 
-def execute_candidate_sql(sql_str: str, conn, run_id: str | None = None) -> None:
+def execute_candidate_sql(sql_str: str, conn, expected_schema: str, run_id: str | None = None) -> None:
     """Execute LLM-generated SQL and immediately transfer ownership of the created candidate table."""
     import psycopg.sql as psql
     
     # 1. Validate the SQL (will raise SqlSafetyViolation if malicious/invalid)
-    validated_sql = validate_generated_sql(sql_str, run_id=run_id)
+    validated_sql = validate_generated_sql(sql_str, expected_schema=expected_schema, run_id=run_id)
     
     # 2. Extract target table and schema for the ALTER statement
     stmt = sqlglot.parse_one(validated_sql, read="postgres")

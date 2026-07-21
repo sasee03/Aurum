@@ -222,7 +222,7 @@ SELECT * FROM step_3;
             stripped_sql = strip_markdown(raw_response)
             
             # 6. Pre-flight structural check (P0 AST safety gate, before saving for review)
-            validate_generated_sql(stripped_sql, run_id=run_id, expected_step_count=len(rules))
+            validate_generated_sql(stripped_sql, expected_schema=schemas.silver_candidates, run_id=run_id, expected_step_count=len(rules))
             
             last_error = None
             break
@@ -285,7 +285,8 @@ def review_sql(run_id: str):
     
     # Validate the SQL again right before returning for review to be absolutely certain
     try:
-        validated_sql = validate_generated_sql(sql_text, run_id=run_id, expected_step_count=len(planned_changes.get("rules", [])))
+        schemas = load_layer_schemas()
+        validated_sql = validate_generated_sql(sql_text, expected_schema=schemas.silver_candidates, run_id=run_id, expected_step_count=len(planned_changes.get("rules", [])))
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"SQL failed structural validation: {e}")
 
@@ -362,7 +363,7 @@ def execute_sql(run_id: str):
     # 2. Execution and Ownership Transfer (aurum_generated_sql -> aurum_promotion)
     try:
         with get_generated_sql_pool().connection() as conn:
-            execute_candidate_sql(sql_text, conn, run_id=run_id)
+            execute_candidate_sql(sql_text, conn, expected_schema=schemas.silver_candidates, run_id=run_id)
             conn.commit()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to execute candidate SQL: {e}")
