@@ -59,10 +59,23 @@ class LineageIntelligenceEngine:
             
         # Dynamically find upstream layer using the table-level graph
         upstream_layer = None
+        cfg = load_dataset_config()
+        
         for upstream, downstream in self.edges:
-            # If the failing layer name (e.g. "silver") matches the downstream table (e.g. "silver_orders")
-            if first_fail in downstream:
-                upstream_layer = upstream.split("_")[0]
+            # Match downstream to the failing layer name (e.g. "silver" matches cfg.tables.silver)
+            is_match = False
+            if first_fail == "silver" and downstream == cfg.tables.silver:
+                is_match = True
+            elif first_fail == "gold" and downstream in (cfg.tables.gold.metrics, cfg.tables.gold.country_revenue, cfg.tables.gold.product_sales):
+                is_match = True
+                
+            if is_match:
+                if upstream == cfg.tables.bronze:
+                    upstream_layer = "bronze"
+                elif upstream == cfg.tables.silver:
+                    upstream_layer = "silver"
+                elif upstream == cfg.tables.raw:
+                    upstream_layer = "raw"
                 break
                 
         if upstream_layer:

@@ -3,13 +3,11 @@
 import os
 
 from src.db_config import (
-    PipelineLayer,
     db_connect_timeout,
     load_layer_schemas,
     load_postgres_config,
     postgres_conninfo,
     postgres_target_info,
-    resolve_layer_schema,
 )
 
 
@@ -118,11 +116,12 @@ def test_layer_schema_defaults_to_demo_topology(monkeypatch):
     schemas = load_layer_schemas()
     assert schemas.source == "source"
     assert schemas.bronze == "bronze"
-    assert resolve_layer_schema(PipelineLayer.SILVER, schemas) == "silver"
-    assert resolve_layer_schema("gold", schemas) == "gold"
+    assert schemas.silver == "silver"
+    assert schemas.gold == "gold"
+    assert schemas.silver_candidates == "silver_candidates"
 
 
 def test_layer_schema_env_redirects_without_code_change(monkeypatch):
     monkeypatch.setenv("AURUM_SCHEMA_SILVER", "silver_demo_2")
-
-    assert resolve_layer_schema(PipelineLayer.SILVER) == "silver_demo_2"
+    schemas = load_layer_schemas()
+    assert schemas.silver == "silver_demo_2"

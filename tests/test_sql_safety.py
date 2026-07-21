@@ -13,14 +13,14 @@ def test_valid_select_query():
     assert "SELECT" in result
 
 def test_valid_ctas_query():
-    sql = f"CREATE TABLE silver.my_candidate_{RUN_ID} AS SELECT * FROM bronze.orders;"
+    sql = f"CREATE TABLE silver_candidates.my_candidate_{RUN_ID} AS SELECT * FROM bronze.orders;"
     result = validate_generated_sql(sql, run_id=RUN_ID)
     assert "CREATE TABLE" in result
     assert f"my_candidate_{RUN_ID}" in result
 
 def test_ctas_with_chained_ctes():
     sql = f"""
-    CREATE TABLE silver.complex_candidate_{RUN_ID} AS
+    CREATE TABLE silver_candidates.complex_candidate_{RUN_ID} AS
     WITH step_1 AS (SELECT * FROM a),
          step_2 AS (SELECT * FROM step_1)
     SELECT * FROM step_2;
@@ -60,12 +60,12 @@ def test_reject_ctas_to_bronze_schema():
 
 def test_reject_drop_operation():
     sql = "DROP TABLE users;"
-    with pytest.raises(SqlSafetyViolation, match="Forbidden SQL keyword found"):
+    with pytest.raises(SqlSafetyViolation, match="Statement must be SELECT or CREATE TABLE AS"):
         validate_generated_sql(sql)
 
 def test_reject_drop_inside_cte():
     sql = "WITH step AS (DROP TABLE users) SELECT * FROM step;"
-    with pytest.raises(SqlSafetyViolation, match="Forbidden SQL keyword found"):
+    with pytest.raises(SqlSafetyViolation, match="Forbidden operation found: Drop"):
         validate_generated_sql(sql)
 
 def test_reject_delete_operation():

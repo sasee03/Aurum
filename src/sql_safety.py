@@ -7,7 +7,7 @@ import re
 import sqlglot
 from sqlglot import exp
 
-from src.db_config import LayerSchemas, PipelineLayer, load_layer_schemas, resolve_layer_schema
+from src.db_config import LayerSchemas, load_layer_schemas
 
 
 class SqlSafetyViolation(Exception):
@@ -18,10 +18,7 @@ class SqlSafetyViolation(Exception):
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _CANDIDATE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*_candidate_[A-Za-z0-9_]+$")
 _COMMENT_RE = re.compile(r"(--|/\*)")
-_FORBIDDEN_KEYWORDS_RE = re.compile(
-    r"\b(DROP|DELETE|UPDATE|TRUNCATE|ALTER|GRANT|REVOKE|COPY|INSERT|MERGE|CALL|DO|VACUUM|ANALYZE|INTO)\b",
-    re.IGNORECASE,
-)
+
 _IF_NOT_EXISTS_RE = re.compile(r"\bIF\s+NOT\s+EXISTS\b", re.IGNORECASE)
 _FORBIDDEN_NODES = (
     exp.Drop,
@@ -65,8 +62,6 @@ def validate_generated_sql(
         raise SqlSafetyViolation("Empty SQL statement.")
     if _COMMENT_RE.search(sql_str):
         raise SqlSafetyViolation("SQL comments are not allowed in generated SQL.")
-    if _FORBIDDEN_KEYWORDS_RE.search(sql_str):
-        raise SqlSafetyViolation("Forbidden SQL keyword found.")
     if _IF_NOT_EXISTS_RE.search(sql_str):
         raise SqlSafetyViolation("CREATE TABLE IF NOT EXISTS is not allowed for candidates.")
 
@@ -87,6 +82,9 @@ def validate_generated_sql(
 
     if not isinstance(stmt, exp.Create) and not _is_select_like(stmt):
         raise SqlSafetyViolation(f"Statement must be SELECT or CREATE TABLE AS, found: {type(stmt).__name__}")
+        
+    if _is_select_like(stmt) and stmt.args.get("into"):
+        raise SqlSafetyViolation("SELECT INTO is not allowed. Use CREATE TABLE AS SELECT.")
 
     for node_type in _FORBIDDEN_NODES:
         for node in stmt.find_all(node_type):
@@ -114,8 +112,8 @@ def validate_generated_sql(
         schemas = layer_schemas or load_layer_schemas()
         schema_name = schema_node.name
         allowed_schemas = {
-            resolve_layer_schema(PipelineLayer.SILVER, schemas),
-            resolve_layer_schema(PipelineLayer.GOLD, schemas),
+            schemas.silver_candidates,
+            schemas.gold_candidates,
         }
         if schema_name not in allowed_schemas:
             raise SqlSafetyViolation(
@@ -123,3 +121,32 @@ def validate_generated_sql(
             )
 
     return stmt.sql(dialect="postgres")
+
+def execute_candidate_sql(sql_str: str, conn, run_id: str | None = None) -> None:
+    """Execute LLM-generated SQL and immediately transfer ownership of the created candidate table."""
+    import psycopg.sql as psql
+    
+    # 1. Validate the SQL (will raise SqlSafetyViolation if malicious/invalid)
+    validated_sql = validate_generated_sql(sql_str, run_id=run_id)
+    
+    # 2. Extract target table and schema for the ALTER statement
+    stmt = sqlglot.parse_one(validated_sql, read="postgres")
+    
+    if isinstance(stmt, exp.Create):
+        this = stmt.args.get("this")
+        target_schema = this.args.get("db").name
+        target_table = this.name
+    else:
+        # If it's just a SELECT (which is allowed by validate_generated_sql for preview),
+        # we don't have a table to hand off.
+        with conn.cursor() as cur:
+            cur.execute(validated_sql)
+        return
+
+    with conn.cursor() as cur:
+        # Execute the validated LLM statement to create the table
+        cur.execute(validated_sql)
+        # Immediately transfer ownership to aurum_promotion
+        cur.execute(psql.SQL("ALTER TABLE {}.{} OWNER TO aurum_promotion").format(
+            psql.Identifier(target_schema), psql.Identifier(target_table)
+        ))

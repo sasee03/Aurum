@@ -46,11 +46,7 @@ class PostgresConfig:
         )
 
 
-class PipelineLayer(str, Enum):
-    SOURCE = "source"
-    BRONZE = "bronze"
-    SILVER = "silver"
-    GOLD = "gold"
+
 
 
 @dataclass(frozen=True)
@@ -59,13 +55,8 @@ class LayerSchemas:
     bronze: str = "bronze"
     silver: str = "silver"
     gold: str = "gold"
-
-    def schema_for(self, layer: PipelineLayer | str) -> str:
-        layer_value = layer.value if isinstance(layer, PipelineLayer) else layer
-        try:
-            return getattr(self, layer_value)
-        except AttributeError as exc:
-            raise ValueError(f"Unknown pipeline layer: {layer_value}") from exc
+    silver_candidates: str = "silver_candidates"
+    gold_candidates: str = "gold_candidates"
 
 
 def _env(primary: str, legacy: str, default: str) -> str:
@@ -78,11 +69,9 @@ def load_layer_schemas() -> LayerSchemas:
         bronze=os.getenv("AURUM_SCHEMA_BRONZE", "bronze"),
         silver=os.getenv("AURUM_SCHEMA_SILVER", "silver"),
         gold=os.getenv("AURUM_SCHEMA_GOLD", "gold"),
+        silver_candidates=os.getenv("AURUM_SCHEMA_SILVER_CANDIDATES", "silver_candidates"),
+        gold_candidates=os.getenv("AURUM_SCHEMA_GOLD_CANDIDATES", "gold_candidates"),
     )
-
-
-def resolve_layer_schema(layer: PipelineLayer | str, schemas: LayerSchemas | None = None) -> str:
-    return (schemas or load_layer_schemas()).schema_for(layer)
 
 
 def load_postgres_config() -> PostgresConfig:
