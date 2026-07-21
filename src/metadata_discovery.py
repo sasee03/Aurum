@@ -12,7 +12,7 @@ from typing import Any, Optional
 import psycopg
 from psycopg import Connection, sql
 
-from .db_config import postgres_conninfo
+from .db_config import load_layer_schemas, postgres_conninfo
 from .table_specs import build_table_specs
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -57,19 +57,22 @@ def _qualified_table(schema_name: str, table_name: str) -> sql.Composed:
 
 
 def classify_layer(schema_name: str, table_name: str) -> str:
-    """Classify a table into bronze/silver/gold/unknown from naming patterns."""
-    lowered = table_name.lower()
-    if "bronze" in lowered:
+    """Classify a table into source/bronze/silver/gold/unknown using LayerSchemas config."""
+    schemas = load_layer_schemas()
+    if schema_name == schemas.source:
+        return "source"
+    if schema_name == schemas.bronze:
         return "bronze"
-    if "silver" in lowered:
+    if schema_name in (schemas.silver, schemas.silver_candidates):
         return "silver"
-    if "gold" in lowered:
+    if schema_name in (schemas.gold, schemas.gold_candidates):
         return "gold"
 
+    # Fallback to table specs only if schema is ambiguous/unmanaged
     spec = build_table_specs().get(table_name)
     if spec:
         hinted = str(spec.get("layer", "")).lower()
-        if hinted in {"bronze", "silver", "gold"}:
+        if hinted in {"bronze", "silver", "gold", "source"}:
             return hinted
     return "unknown"
 
