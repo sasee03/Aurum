@@ -100,6 +100,17 @@ def postgres_conninfo() -> str:
         return database_url
     return load_postgres_config().conninfo()
 
+def postgres_promotion_conninfo() -> str:
+    """Return the connection string for aurum_promotion role."""
+    cfg = load_postgres_config()
+    return (
+        f"host={cfg.host} "
+        f"port={cfg.port} "
+        f"dbname={cfg.dbname} "
+        f"user=aurum_promotion "
+        f"password=aurum_promotion"
+    )
+
 
 def postgres_target_info() -> dict[str, str | int]:
     """Non-sensitive connection target for health/debug responses (no password)."""
