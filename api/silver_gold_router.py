@@ -15,7 +15,6 @@ from sqlglot import exp
 
 from src.app_state.db import get_connection
 from src.db_config import (
-    get_ingestion_pool, 
     get_generated_sql_pool, 
     postgres_promotion_conninfo,
     load_layer_schemas
@@ -39,7 +38,7 @@ class ExecuteGoldPayload(BaseModel):
 
 def check_table_exists(schema_name: str, table_name: str) -> bool:
     """Check if a table exists in the given schema."""
-    with get_ingestion_pool().connection() as conn:
+    with get_generated_sql_pool().connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT to_regclass(%s)",
@@ -102,7 +101,7 @@ def get_multiple_table_schemas(schema_name: str, table_names: List[str]) -> str:
         raise ValueError("At least one source table must be provided.")
         
     schemas_out = []
-    with get_ingestion_pool().connection() as conn:
+    with get_generated_sql_pool().connection() as conn:
         with conn.cursor() as cur:
             for table_name in table_names:
                 cur.execute(
