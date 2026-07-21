@@ -181,10 +181,17 @@ SELECT * FROM step_3;
     # 7. Build planned changes summary (P2.4)
     # Simple summary based on rules list and CTE detection
     cte_count = len(re.findall(r'step_\d+\s+AS\s*\(', stripped_sql, flags=re.IGNORECASE))
+    
+    if cte_count == len(rules):
+        summary_text = f"Successfully planned {cte_count} sequential steps matching your {len(rules)} rules. Each rule will be applied cumulatively."
+    else:
+        summary_text = f"Warning: The AI generated {cte_count} SQL steps for your {len(rules)} rules. Cumulative attribution per rule might not perfectly align."
+
     planned_changes = {
-        "rules_applied": rules,
+        "summary": summary_text,
+        "rules": [f"Step {i+1}: {r}" for i, r in enumerate(rules)],
         "cte_steps_detected": cte_count,
-        "summary": f"Planned {cte_count} sequential steps based on {len(rules)} rules provided by the user."
+        "attribution_safe": cte_count == len(rules)
     }
 
     # 8. Persist for review
