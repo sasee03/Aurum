@@ -39,6 +39,7 @@ class GeneratePayload(BaseModel):
 def get_table_schema(table_name: str) -> str:
     """Fetch schema details for a table in the bronze schema."""
     import psycopg
+    schemas = load_layer_schemas()
     try:
         with get_ingestion_pool().connection() as conn:
             with conn.cursor() as cur:
@@ -46,14 +47,14 @@ def get_table_schema(table_name: str) -> str:
                     """
                     SELECT column_name, data_type 
                     FROM information_schema.columns 
-                    WHERE table_schema = 'bronze' AND table_name = %s
+                    WHERE table_schema = %s AND table_name = %s
                     ORDER BY ordinal_position
                     """,
-                    (table_name,)
+                    (schemas.bronze, table_name)
                 )
                 rows = cur.fetchall()
                 if not rows:
-                    raise ValueError(f"Table bronze.{table_name} not found.")
+                    raise ValueError(f"Table {schemas.bronze}.{table_name} not found.")
                 return "\n".join([f"- {r[0]} ({r[1]})" for r in rows])
     except Exception as e:
         raise ValueError(f"Could not retrieve schema for {table_name}: {e}")
@@ -72,11 +73,12 @@ def call_llm_stubbed(prompt: str) -> str:
     table_match = re.search(r"Candidate Table Name: ([a-zA-Z0-9_]+)_candidate_", prompt)
     table_name = table_match.group(1) if table_match else "src_orders_test"
     
+    schemas = load_layer_schemas()
     return f"""Here is the SQL!
 ```sql
-CREATE TABLE silver_candidates.{table_name}_candidate_{run_id} AS
+CREATE TABLE {schemas.silver_candidates}.{table_name}_candidate_{run_id} AS
 WITH step_1 AS (
-    SELECT * FROM bronze.{table_name} WHERE total_amount >= 0
+    SELECT * FROM {schemas.bronze}.{table_name} WHERE total_amount >= 0
 ),
 step_2 AS (
     SELECT id, customer_id, total_amount, UPPER(status) as status FROM step_1
