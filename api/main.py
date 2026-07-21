@@ -44,6 +44,7 @@ from api.connectors_router import router as connectors_router
 from api.datasets_router import router as datasets_router
 from api.projects_router import router as projects_router
 from api.source_ingest_router import router as source_ingest_router
+from api.bronze_silver_router import router as bronze_silver_router
 
 REACT_DEV_ORIGINS = [
     "http://localhost:5173",
@@ -57,6 +58,7 @@ app.include_router(connectors_router)
 app.include_router(datasets_router)
 app.include_router(projects_router)
 app.include_router(source_ingest_router)
+app.include_router(bronze_silver_router)
 
 app.add_middleware(
     CORSMiddleware,

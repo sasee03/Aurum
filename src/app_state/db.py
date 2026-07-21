@@ -59,6 +59,20 @@ CREATE TABLE IF NOT EXISTS validation_reports (
     created_at TEXT NOT NULL,
     FOREIGN KEY (run_id) REFERENCES validation_runs(run_id)
 );
+
+CREATE TABLE IF NOT EXISTS table_rules (
+    table_name TEXT PRIMARY KEY,
+    rules_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS generated_sql_review (
+    run_id TEXT PRIMARY KEY,
+    table_name TEXT NOT NULL,
+    sql_text TEXT NOT NULL,
+    planned_changes_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
