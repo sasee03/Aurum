@@ -16,7 +16,8 @@ from src.app_state.db import get_connection
 from src.db_config import (
     get_ingestion_pool, 
     get_generated_sql_pool, 
-    postgres_promotion_conninfo
+    postgres_promotion_conninfo,
+    load_layer_schemas
 )
 from src.sql_safety import validate_generated_sql, execute_candidate_sql
 from src.promotion import promote_candidate_table
@@ -151,11 +152,12 @@ def generate_sql(payload: GeneratePayload):
     run_id = f"run_{uuid.uuid4().hex[:8]}"
     rules_text = "\n".join([f"{i+1}. {r}" for i, r in enumerate(rules)])
     
+    schemas = load_layer_schemas()
     prompt = f"""You are an expert PostgreSQL Data Engineer.
 
 Table: {payload.table_name}
-Source schema: bronze
-Target schema: silver_candidates
+Source schema: {schemas.bronze}
+Target schema: {schemas.silver_candidates}
 Candidate Table Name: {payload.table_name}_candidate_{run_id}
 Columns:
 {schema_text}
@@ -169,9 +171,9 @@ You MUST output ONLY raw SQL code. No markdown code blocks (```sql), no explanat
 Requirement:
 The output must exactly follow this structure, using exactly ONE Common Table Expression (CTE) per rule (e.g., step_1, step_2, step_3) so that rules are applied sequentially:
 
-CREATE TABLE silver_candidates.{payload.table_name}_candidate_{run_id} AS
+CREATE TABLE {schemas.silver_candidates}.{payload.table_name}_candidate_{run_id} AS
 WITH step_1 AS (
-    SELECT ... FROM bronze.{payload.table_name} WHERE ...
+    SELECT ... FROM {schemas.bronze}.{payload.table_name} WHERE ...
 ),
 step_2 AS (
     SELECT ... FROM step_1 ...
@@ -277,6 +279,8 @@ def execute_sql(run_id: str):
     planned_changes = json.loads(row[2])
     rules = planned_changes.get("rules", [])
     
+    schemas = load_layer_schemas()
+    
     # 1. Cumulative Attribution Measurement
     stmt = sqlglot.parse_one(sql_text, read="postgres")
     try:
@@ -284,7 +288,7 @@ def execute_sql(run_id: str):
         with_clause = select_expr.args.get("with")
         cte_names = [cte.alias for cte in with_clause.expressions]
         
-        selects = [f"(SELECT COUNT(*) FROM bronze.{table_name}) as step_0_count"]
+        selects = [f"(SELECT COUNT(*) FROM {schemas.bronze}.{table_name}) as step_0_count"]
         for name in cte_names:
             selects.append(f"(SELECT COUNT(*) FROM {name}) as {name}_count")
             
@@ -332,9 +336,9 @@ def execute_sql(run_id: str):
     try:
         promote_candidate_table(
             candidate_table=candidate_name,
-            candidate_schema="silver_candidates",
+            candidate_schema=schemas.silver_candidates,
             target_table=table_name,
-            target_schema="silver",
+            target_schema=schemas.silver,
             promotion_conninfo=postgres_promotion_conninfo()
         )
     except Exception as e:
