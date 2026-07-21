@@ -15,7 +15,7 @@ from .db_config import load_layer_schemas, postgres_conninfo
 from .table_specs import build_table_specs
 
 _EXCLUDED_SCHEMAS = frozenset({"pg_catalog", "information_schema"})
-_EXCLUDED_SCHEMA_PREFIXES = ("pg_toast", "pg_temp_")
+_EXCLUDED_SCHEMA_PREFIXES = ("pg_toast", "pg_temp_", "aurum_session_")
 
 _MINMAX_DATA_TYPES = frozenset(
     {
@@ -106,7 +106,9 @@ def list_tables(
 
     tables: list[dict] = []
     for schema_name, table_name in rows:
-        if _schema_excluded(schema_name):
+        # Explicit schema selection keeps session sandboxes queryable, while
+        # the default discovery listing omits these transient schemas.
+        if _schema_excluded(schema_name) and schema_name != schema_filter:
             continue
         tables.append(
             {
