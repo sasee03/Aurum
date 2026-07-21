@@ -45,29 +45,68 @@ function buildHeatmapPattern(columnStats: Record<string, unknown>[]): number[][]
   return rows;
 }
 
+function toNumber(value: unknown, fallback = 0): number {
+  const numberValue = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+}
+
+function toRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
+    : [];
+}
+
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => toStringArray(entry));
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return toStringArray(record.columns ?? record.column_names ?? record.name ?? record.column);
+  }
+  return [];
+}
+
+function primaryKeyColumns(table: Record<string, unknown>): string[] {
+  const direct = toStringArray(
+    table.pkColumns ?? table.pk_columns ?? table.primary_key_columns ?? table.primary_keys,
+  );
+  if (direct.length > 0) return direct;
+
+  const candidateKeys = table.candidate_keys;
+  if (Array.isArray(candidateKeys) && candidateKeys.length > 0) {
+    return toStringArray(candidateKeys[0]);
+  }
+  return [];
+}
+
 /** Map the raw GET /metadata/tables/{name} response into a flat TableProfile. */
 function toTableProfile(raw: Record<string, unknown>): TableProfile {
-  const tables = (raw.tables as Record<string, unknown>[] | undefined) ?? [];
+  const tables = toRecordArray(raw.tables);
   const t = (tables[0] ?? raw) as Record<string, unknown>;
 
   const schema = (t.schema as string | undefined) ?? '';
   const tableName = (t.table as string | undefined) ?? (t.name as string | undefined) ?? 'unknown';
   const tableId = `${schema}.${tableName}`;
-  const rowCount = (t.row_count as number | undefined) ?? 0;
-  const columnStats = (t.columns as Record<string, unknown>[] | undefined) ?? [];
-  const candidateKeys = (t.candidate_keys as string[][] | undefined) ?? [];
-  const pkColumns = candidateKeys[0] ?? [];
+  const rowCount = toNumber(t.row_count);
+  const columnStats = toRecordArray(t.columns);
+  const pkColumns = primaryKeyColumns(t);
 
   const columnsQuality: ColumnProfile[] = columnStats.map((c) => {
-    const nullRate = typeof c.null_rate === 'number' ? c.null_rate : 0;
-    return { name: c.name as string, completeness: Math.round((1 - nullRate) * 100) };
+    const nullRate = toNumber(c.null_rate);
+    return { name: String(c.name ?? c.column_name ?? 'unknown'), completeness: Math.round((1 - nullRate) * 100) };
   });
 
   const avgNullPct =
     columnStats.length > 0
       ? Math.round(
-          (columnStats.reduce((sum, c) => sum + (typeof c.null_rate === 'number' ? c.null_rate : 0), 0) /
-            columnStats.length) *
+          (columnStats.reduce((sum, c) => sum + toNumber(c.null_rate), 0) / columnStats.length) *
             100,
         )
       : 0;
@@ -77,7 +116,7 @@ function toTableProfile(raw: Record<string, unknown>): TableProfile {
     tableName,
     schema,
     totalRows: rowCount.toLocaleString(),
-    columns: columnStats.length || (t.column_count as number | undefined) || 0,
+    columns: columnStats.length || toNumber(t.column_count),
     primaryKeys: pkColumns.length,
     pkColumns,
     missingValuesPct: avgNullPct,

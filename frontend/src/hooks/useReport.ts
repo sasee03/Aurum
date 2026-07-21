@@ -21,12 +21,12 @@ export interface ReportPayload {
 }
 
 /** A run_id produced by a user CSV upload (POST /datasets/upload). */
-function isUploadRunId(runId: string): boolean {
+export function isUploadRunId(runId: string): boolean {
   return runId.startsWith('upload_');
 }
 
 /** A run_id from live Postgres connector validation. */
-function isConnectorRunId(runId: string): boolean {
+export function isConnectorRunId(runId: string): boolean {
   return runId.startsWith('connector_');
 }
 

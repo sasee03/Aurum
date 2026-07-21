@@ -260,3 +260,14 @@ def test_missing_custom_config_refuses_olist_default(tmp_path, monkeypatch):
 
     assert raised.value.code == "dataset_config_not_found"
     assert "refusing to substitute the default Olist config" in str(raised.value)
+
+
+def test_raw_table_name_resolves_declared_dataset_config(tmp_path, monkeypatch):
+    olist_path = tmp_path / "olist.yaml"
+    olist_path.write_text(default_config_path().read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setattr(config_loader, "default_config_path", lambda: olist_path)
+
+    cfg = resolve_config_for_project_or_table(None, "raw_orders")
+
+    assert cfg.config_name == "olist"
+    assert cfg.tables.raw == "raw_orders"

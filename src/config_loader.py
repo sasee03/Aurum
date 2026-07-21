@@ -282,16 +282,45 @@ def resolve_config_by_name(name: Optional[str]) -> Optional[AurumDatasetConfig]:
         ) from exc
 
 
+def resolve_config_by_raw_table(table_or_file_name: Optional[str]) -> Optional[AurumDatasetConfig]:
+    """Load a config whose declared raw table matches the selected table/file."""
+    if not table_or_file_name:
+        return None
+
+    normalized_table = Path(table_or_file_name).stem.strip().casefold()
+    try:
+        candidates = list(default_config_path().parent.glob("*.yaml"))
+    except Exception as exc:  # noqa: BLE001 - directory lookup failures must be loud
+        raise ConfigResolutionError(
+            "dataset_config_lookup_failed",
+            f"Could not search dataset configs for raw table '{table_or_file_name}': {exc}",
+        ) from exc
+
+    matches = []
+    for candidate in candidates:
+        try:
+            config = load_dataset_config(candidate)
+        except Exception:
+            # Name-based resolution above is responsible for raising on a directly
+            # requested malformed config. Ignore unrelated invalid files here.
+            continue
+        if config.tables.raw.strip().casefold() == normalized_table:
+            matches.append(config)
+
+    if len(matches) > 1:
+        names = ", ".join(m.config_name for m in matches)
+        raise ConfigResolutionError(
+            "dataset_config_ambiguous",
+            f"Multiple dataset configs ({names}) declare raw table '{table_or_file_name}'. Disambiguation required.",
+        )
+    return matches[0] if matches else None
+
+
 def resolve_config_for_project_or_table(
     project_id: Optional[str],
     table_or_file_name: Optional[str] = None,
 ) -> AurumDatasetConfig:
     """Resolve a required config for custom data; never fall back to Olist."""
-    if table_or_file_name:
-        config = resolve_config_by_name(Path(table_or_file_name).stem)
-        if config is not None:
-            return config
-
     project = None
     project_name = None
     if project_id:
@@ -313,6 +342,14 @@ def resolve_config_for_project_or_table(
             )
 
         config = resolve_config_by_name(project_name)
+        if config is not None:
+            return config
+
+    if table_or_file_name:
+        config = resolve_config_by_name(Path(table_or_file_name).stem)
+        if config is not None:
+            return config
+        config = resolve_config_by_raw_table(table_or_file_name)
         if config is not None:
             return config
 

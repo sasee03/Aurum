@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { CheckCircle2, ArrowRight, Upload, Eye, LoaderCircle } from 'lucide-react';
+import { CheckCircle2, ArrowRight, Upload, Eye, LoaderCircle, Database } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -11,7 +11,6 @@ import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { useAppMode } from '@/context/AppModeContext';
 import {
   CsvUploadError,
-  listPostgresSchemas,
   listPostgresTables,
   testPostgresConnection,
   uploadDatasetCsv,
@@ -33,10 +32,12 @@ const connectors = connectorsData as Connector[];
 function ConnectorCard({
   connector,
   selected,
+  compact = false,
   onSelect,
 }: {
   connector: Connector;
   selected: boolean;
+  compact?: boolean;
   onSelect: () => void;
 }) {
   const isPreview = connector.type === 'preview';
@@ -47,7 +48,10 @@ function ConnectorCard({
       aria-pressed={selected}
       title={isPreview ? `${connector.name} — coming soon` : undefined}
       className={cn(
-        'relative flex flex-col items-center justify-center gap-2 rounded-xl border p-5 text-center transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[#6366f1]',
+        'relative w-full rounded-xl border transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[#6366f1]',
+        compact
+          ? 'flex min-h-24 flex-col items-center justify-center gap-2 p-3 text-center'
+          : 'flex min-h-20 items-center gap-3 p-4 text-left',
         selected
           ? 'border-[#6366f1] bg-[#6366f1]/10 shadow-[0_0_12px_rgba(99,102,241,0.15)]'
           : 'border-[#252637] bg-[#13141e] hover:border-[#6366f1]/30 hover:bg-[#1a1b28]',
@@ -61,7 +65,8 @@ function ConnectorCard({
       )}
       <div
         className={cn(
-          'flex h-10 w-10 items-center justify-center rounded-lg text-sm font-bold transition-colors',
+          'flex shrink-0 items-center justify-center rounded-lg font-bold transition-colors',
+          compact ? 'h-9 w-9 text-xs' : 'h-11 w-11 text-sm',
           selected
             ? 'bg-[#6366f1] text-white'
             : 'bg-[#1a1b28] text-[#6366f1] border border-[#252637]',
@@ -69,9 +74,22 @@ function ConnectorCard({
       >
         {connector.icon}
       </div>
-      <span className={cn('text-xs font-semibold', selected ? 'text-[#f1f5f9]' : 'text-[#94a3b8]')}>
-        {connector.name}
-      </span>
+      <div className={cn(!compact && 'min-w-0 flex-1')}>
+        <span
+          className={cn(
+            'block font-semibold',
+            compact ? 'text-[11px]' : 'text-sm',
+            selected ? 'text-[#f1f5f9]' : 'text-[#94a3b8]',
+          )}
+        >
+          {connector.name}
+        </span>
+        {!compact && (
+          <span className="mt-1 block text-xs leading-5 text-[#6b7280]">
+            {connector.description}
+          </span>
+        )}
+      </div>
     </button>
   );
 }
@@ -321,25 +339,14 @@ function PostgresPanel({ projectId }: { projectId: string }) {
 
       setStatus('connected');
       setConnectionId(result.connection_id);
-      toast.success('Connected to PostgreSQL.');
+      toast.success('Connected to PostgreSQL. Opening Dataset Explorer.');
 
-      setLoadingMeta(true);
-      try {
-        const schemaRes = await listPostgresSchemas(result.connection_id);
-        setSchemas(schemaRes.schemas);
-        const preferred = schemaRes.schemas.includes('public')
-          ? 'public'
-          : (schemaRes.schemas[0] ?? '');
-        setSelectedSchema(preferred);
-        if (preferred) {
-          const tableRes = await listPostgresTables(result.connection_id, preferred);
-          setTables(tableRes.tables);
-        }
-      } catch {
-        toast.error('Connected, but schema listing failed. Re-test the connection.');
-      } finally {
-        setLoadingMeta(false);
-      }
+      const explorerQuery = new URLSearchParams({
+        connectionId: result.connection_id,
+        database: result.database,
+        session: String(Date.now()),
+      });
+      navigate(`/projects/${projectId}/select?${explorerQuery.toString()}`);
     } catch {
       setStatus('failed');
       setError('Backend API is not running or the request timed out.');
@@ -682,84 +689,102 @@ export function ConnectorsPage() {
   });
 
   const selectedConnector = connectors.find((c) => c.id === selected);
+  const availableConnectors = connectors.filter((connector) => connector.type !== 'preview');
+  const plannedConnectors = connectors.filter((connector) => connector.type === 'preview');
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in">
       <ProjectSubNav />
-      <div className="flex-1 overflow-y-auto scrollbar-thin min-h-0 px-6 py-8">
-      {/* Page Header */}
-      <div className="mb-8">
-        <div className="flex flex-wrap items-center gap-3">
-          <h2 className="text-xl font-bold text-[#f1f5f9]">Connect Data Sources</h2>
-          <DataSourceBadge mode={displayMode} />
-        </div>
-        <p className="mt-1 text-sm text-[#6b7280]">
-          Upload a CSV or connect a live database table for validation.
-        </p>
-      </div>
-
-      <div className="mb-6 rounded-xl border border-[#6366f1]/40 bg-[#6366f1]/10 p-5">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-4">
-            <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg bg-[#6366f1] text-white">
-              <Upload size={20} />
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6 scrollbar-thin sm:px-6 lg:py-8">
+        <div className="mx-auto w-full max-w-6xl">
+          <div className="mb-6">
+            <div className="flex flex-wrap items-center gap-3">
+              <h2 className="text-xl font-bold text-[#f1f5f9]">Connect Data Sources</h2>
+              <DataSourceBadge mode={displayMode} />
             </div>
-            <div>
-              <h3 className="text-sm font-semibold text-[#f1f5f9]">Upload CSV</h3>
-              <p className="mt-1 max-w-2xl text-sm text-[#94a3b8]">
-                Start a validation from a local file. Aurum checks the uploaded CSV directly and
-                keeps the file out of persistent storage.
-              </p>
-            </div>
-          </div>
-          <Button variant="primary" onClick={() => setSelected('csv')}>
-            Upload CSV
-          </Button>
-        </div>
-      </div>
-
-      <div className="flex flex-col lg:flex-row gap-6">
-        {/* Connector Grid */}
-        <div className="w-full lg:w-80 flex-shrink-0">
-          <div className="grid grid-cols-2 gap-3">
-            {connectors.map((connector) => (
-              <ConnectorCard
-                key={connector.id}
-                connector={connector}
-                selected={selected === connector.id}
-                onSelect={() => setSelected(connector.id)}
-              />
-            ))}
-          </div>
-          {!selected && (
-            <p className="mt-4 text-xs text-[#4b5563] text-center">
-              Select a connector above to configure it.
+            <p className="mt-1 text-sm text-[#6b7280]">
+              Upload a CSV or connect a live database table for validation.
             </p>
-          )}
-        </div>
+          </div>
 
-        {/* Config Panel */}
-        {selectedConnector && (
-          <div className="flex-1 animate-slide-up">
-            <div className="rounded-xl border border-[#252637] bg-[#13141e] p-6">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#6366f1] text-sm font-bold text-white">
-                  {selectedConnector.icon}
+          <div className="grid gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
+            <aside className="space-y-5">
+              <div>
+                <div className="mb-2 flex items-center gap-2">
+                  <Database size={15} className="text-[#6366f1]" />
+                  <h3 className="text-xs font-semibold uppercase tracking-widest text-[#6b7280]">
+                    Available now
+                  </h3>
                 </div>
-                <h3 className="text-base font-semibold text-[#f1f5f9]">{selectedConnector.name}</h3>
+                <div className="space-y-3">
+                  {availableConnectors.map((connector) => (
+                    <ConnectorCard
+                      key={connector.id}
+                      connector={connector}
+                      selected={selected === connector.id}
+                      onSelect={() => setSelected(connector.id)}
+                    />
+                  ))}
+                </div>
               </div>
 
-              {selectedConnector.type === 'csv' && <CsvPanel projectId={id ?? 'demo'} />}
-              {selectedConnector.type === 'postgresql' && (
-                <PostgresPanel projectId={id ?? 'demo'} />
+              <div>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-widest text-[#6b7280]">
+                  Coming soon
+                </h3>
+                <div className="grid grid-cols-2 gap-3">
+                  {plannedConnectors.map((connector) => (
+                    <ConnectorCard
+                      key={connector.id}
+                      connector={connector}
+                      selected={selected === connector.id}
+                      compact
+                      onSelect={() => setSelected(connector.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            </aside>
+
+            <section className="min-w-0 animate-slide-up rounded-xl border border-[#252637] bg-[#13141e] p-6">
+              {selectedConnector ? (
+                <>
+                  <div className="mb-6 flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#6366f1] text-sm font-bold text-white">
+                      {selectedConnector.icon}
+                    </div>
+                    <div>
+                      <h3 className="text-base font-semibold text-[#f1f5f9]">
+                        {selectedConnector.name}
+                      </h3>
+                      <p className="text-xs text-[#6b7280]">{selectedConnector.description}</p>
+                    </div>
+                  </div>
+
+                  {selectedConnector.type === 'csv' && <CsvPanel projectId={id ?? 'demo'} />}
+                  {selectedConnector.type === 'postgresql' && (
+                    <PostgresPanel projectId={id ?? 'demo'} />
+                  )}
+                  {selectedConnector.type === 'preview' && (
+                    <PreviewConnectorPanel connector={selectedConnector} />
+                  )}
+                </>
+              ) : (
+                <div className="flex min-h-[420px] flex-col items-center justify-center text-center">
+                  <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-lg border border-[#252637] bg-[#1a1b28] text-[#6366f1]">
+                    <Database size={22} />
+                  </div>
+                  <h3 className="text-base font-semibold text-[#f1f5f9]">
+                    Choose a data source
+                  </h3>
+                  <p className="mt-2 max-w-sm text-sm leading-6 text-[#6b7280]">
+                    Select CSV for file upload or PostgreSQL to test a live database connection.
+                  </p>
+                </div>
               )}
-              {selectedConnector.type === 'preview' && (
-                <PreviewConnectorPanel connector={selectedConnector} />
-              )}
-            </div>
+            </section>
           </div>
-        )}
-      </div>
+        </div>
       </div>
     </div>
   );

@@ -10,10 +10,12 @@ from fastapi.testclient import TestClient
 
 import api.main as api_main
 from src.metadata_discovery import (
+    _quote_ident,
     classify_layer,
     discover_demo_session_metadata,
     discover_from_connection,
     infer_candidate_keys,
+    list_tables,
     merge_table_spec_overrides,
     profile_columns,
 )
@@ -31,6 +33,11 @@ def test_classify_layer_patterns():
     assert classify_layer("public", "silver_orders") == "silver"
     assert classify_layer("public", "gold_metrics") == "gold"
     assert classify_layer("public", "random_table") == "unknown"
+
+
+def test_quote_ident_allows_valid_postgres_identifiers_with_spaces():
+    quoted = _quote_ident("invalid name with spaces").as_string(None)
+    assert quoted == '"invalid name with spaces"'
 
 
 def test_infer_candidate_keys_accepts_high_uniqueness_zero_nulls():
@@ -365,6 +372,33 @@ def test_get_metadata_tables_is_lightweight(client, monkeypatch):
     table = response.json()["tables"][0]
     assert "candidate_keys" not in table
     assert "columns" not in table
+
+
+def test_list_tables_hides_session_schemas_by_default_but_allows_explicit_schema():
+    conn = MagicMock()
+    cursor = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cursor
+    cursor.fetchall.side_effect = [
+        [
+            ("aurum_session_deadbeef", "bronze_orders"),
+            ("public", "bronze_orders"),
+        ],
+        [("aurum_session_deadbeef", "bronze_orders")],
+    ]
+
+    default_tables = list_tables(conn)
+    explicit_tables = list_tables(conn, schema_filter="aurum_session_deadbeef")
+
+    assert default_tables == [
+        {"schema": "public", "table": "bronze_orders", "layer": "bronze"}
+    ]
+    assert explicit_tables == [
+        {
+            "schema": "aurum_session_deadbeef",
+            "table": "bronze_orders",
+            "layer": "bronze",
+        }
+    ]
 
 
 @patch("src.metadata_discovery.discover_from_connection")
