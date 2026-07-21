@@ -1,13 +1,22 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ChevronRight, ChevronDown, ArrowRight, CheckSquare, Square, Eye, AlertTriangle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
+import { Dialog } from '@/components/ui/Dialog';
 import { SearchBar } from '@/components/common/SearchBar';
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { withRunIdQuery } from '@/hooks/useReport';
 import { cn } from '@/utils/cn';
-import { getMetadataTables, getMetadataTable } from '@/lib/aurumApi';
+import { calmApiMessage } from '@/utils/apiErrors';
+import {
+  getMetadataTables,
+  getMetadataTable,
+  listPostgresSchemas,
+  listPostgresTables,
+  previewPostgresTable,
+  type PostgresTableEntry,
+} from '@/lib/aurumApi';
 import tablesJson from '@/mocks/tables.json';
 
 interface DbTable {
@@ -26,6 +35,21 @@ interface SchemaNode {
   tables: DbTable[];
 }
 
+interface TablePreviewColumn {
+  name: string;
+  data_type: string;
+  nullable?: boolean;
+}
+
+interface TablePreview {
+  schema: string;
+  table: string;
+  rowCount: number | null;
+  columnCount: number | null;
+  columns: TablePreviewColumn[];
+  rows: Record<string, unknown>[];
+}
+
 function SchemaTree({
   schemas,
   selectedIds,
@@ -39,10 +63,15 @@ function SchemaTree({
     new Set(schemas.map((s) => s.name))
   );
 
+  useEffect(() => {
+    setExpandedSchemas(new Set(schemas.map((schema) => schema.name)));
+  }, [schemas]);
+
   function toggleSchema(name: string) {
     setExpandedSchemas((prev) => {
       const next = new Set(prev);
-      next.has(name) ? next.delete(name) : next.add(name);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
       return next;
     });
   }
@@ -95,11 +124,13 @@ function SchemaTree({
 function TableRowCard({
   table,
   selected,
+  previewing,
   onToggle,
   onPreview,
 }: {
   table: DbTable;
   selected: boolean;
+  previewing: boolean;
   onToggle: () => void;
   onPreview: () => void;
 }) {
@@ -150,9 +181,10 @@ function TableRowCard({
           variant="ghost" 
           size="sm" 
           leftIcon={<Eye size={14} />} 
+          isLoading={previewing}
           onClick={(e) => { e.stopPropagation(); onPreview(); }}
         >
-          Preview
+          {previewing ? 'Loading' : 'Preview'}
         </Button>
       </div>
     </div>
@@ -164,6 +196,9 @@ export function DatasetExplorerPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const runId = searchParams.get('runId') ?? undefined;
+  const connectionId = searchParams.get('connectionId') ?? undefined;
+  const databaseName = searchParams.get('database') ?? undefined;
+  const connectionSession = searchParams.get('session') ?? undefined;
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
@@ -172,12 +207,41 @@ export function DatasetExplorerPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [usingFallback, setUsingFallback] = useState(false);
+  const [preview, setPreview] = useState<TablePreview | null>(null);
+  const [previewingTableId, setPreviewingTableId] = useState<string | null>(null);
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     setUsingFallback(false);
+    setAllSchemas([]);
+    setAllTables([]);
     try {
+      if (connectionId) {
+        const schemaRes = await listPostgresSchemas(connectionId);
+        const tableResponses = await Promise.all(
+          schemaRes.schemas.map((schema) => listPostgresTables(connectionId, schema)),
+        );
+        const postgresTables = tableResponses.flatMap((response) => response.tables);
+        const formattedTables = postgresTables.map((table: PostgresTableEntry): DbTable => ({
+          id: `${table.schema}.${table.table}`,
+          schema: table.schema,
+          name: table.table,
+          owner: table.layer === 'unknown' ? 'postgresql' : table.layer,
+          rows: '???',
+          columns: 0,
+          size: '???',
+          lastUpdated: 'live',
+        }));
+        const tablesBySchema = new Map<string, DbTable[]>();
+        for (const schema of schemaRes.schemas) tablesBySchema.set(schema, []);
+        for (const table of formattedTables) tablesBySchema.get(table.schema)?.push(table);
+
+        setAllSchemas(Array.from(tablesBySchema, ([name, tables]) => ({ name, tables })));
+        setAllTables(formattedTables);
+        return;
+      }
+
       const res = await getMetadataTables();
       const tables = res.tables || [];
       
@@ -211,6 +275,15 @@ export function DatasetExplorerPage() {
       setAllSchemas(schemas);
       setAllTables(formattedTables);
     } catch (err) {
+      if (connectionId) {
+        setError(
+          calmApiMessage(
+            err,
+            'Could not load tables from this PostgreSQL connection. Re-test the connection and try again.',
+          ),
+        );
+        return;
+      }
       setUsingFallback(true);
       const fallbackSchemas = tablesJson.schemas as SchemaNode[];
       const fallbackTables = fallbackSchemas.flatMap(s => s.tables);
@@ -219,11 +292,11 @@ export function DatasetExplorerPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [connectionId, connectionSession]);
 
   useEffect(() => {
-    loadData();
-  }, []);
+    void loadData();
+  }, [loadData]);
 
   const filteredTables = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -239,7 +312,8 @@ export function DatasetExplorerPage() {
   function toggleTable(tableId: string) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      next.has(tableId) ? next.delete(tableId) : next.add(tableId);
+      if (next.has(tableId)) next.delete(tableId);
+      else next.add(tableId);
       return next;
     });
   }
@@ -254,24 +328,62 @@ export function DatasetExplorerPage() {
 
   async function handlePreview(table: DbTable) {
     try {
+      setPreviewingTableId(table.id);
       toast.loading(`Fetching preview for ${table.name}...`, { id: 'preview' });
-      const res = await getMetadataTable(table.name, table.schema);
-      const tableData = res.tables?.[0];
-      if (tableData) {
-        toast.success(
-          <div className="text-xs max-h-60 overflow-y-auto w-80 text-left">
-            <strong className="block mb-2 text-sm">{table.name} details</strong>
-            <pre className="whitespace-pre-wrap font-mono text-[10px] text-gray-800">
-              {JSON.stringify(tableData, null, 2)}
-            </pre>
-          </div>,
-          { id: 'preview', duration: 8000 }
+      let nextPreview: TablePreview | null = null;
+      if (connectionId) {
+        const tablePreview = await previewPostgresTable(connectionId, table.schema, table.name);
+        nextPreview = {
+          schema: tablePreview.schema,
+          table: tablePreview.table,
+          rowCount: tablePreview.metadata.row_count,
+          columnCount: tablePreview.metadata.column_count,
+          columns: tablePreview.metadata.columns,
+          rows: tablePreview.data,
+        };
+        setAllTables((current) =>
+          current.map((entry) =>
+            entry.id === table.id
+              ? {
+                  ...entry,
+                  rows: tablePreview.metadata.row_count.toLocaleString(),
+                  columns: tablePreview.metadata.column_count,
+                }
+              : entry,
+          ),
         );
       } else {
-        toast.success('No metadata returned', { id: 'preview' });
+        const res = await getMetadataTable(table.name, table.schema);
+        const tableData = res.tables?.[0];
+        if (tableData) {
+          const rawColumns = Array.isArray(tableData.columns) ? tableData.columns : [];
+          const columns = rawColumns.map((column: any, index: number) => ({
+            name: column.name ?? column.column_name ?? `column_${index + 1}`,
+            data_type: column.data_type ?? column.type ?? 'unknown',
+            nullable: column.nullable ?? column.is_nullable,
+          }));
+          const rowCount = Number(tableData.row_count ?? tableData.rows);
+          const columnCount = Number(tableData.column_count ?? columns.length);
+          nextPreview = {
+            schema: tableData.schema ?? table.schema,
+            table: tableData.table ?? tableData.name ?? table.name,
+            rowCount: Number.isFinite(rowCount) ? rowCount : null,
+            columnCount: Number.isFinite(columnCount) ? columnCount : columns.length,
+            columns,
+            rows: [],
+          };
+        }
       }
-    } catch (e) {
+      if (nextPreview) {
+        setPreview(nextPreview);
+        toast.success('Preview loaded', { id: 'preview', duration: 1500 });
+      } else {
+        toast.error('No preview metadata returned', { id: 'preview' });
+      }
+    } catch {
       toast.error('Failed to load table preview', { id: 'preview' });
+    } finally {
+      setPreviewingTableId(null);
     }
   }
 
@@ -289,7 +401,11 @@ export function DatasetExplorerPage() {
           aria-label="Database schema tree"
         >
           <p className="mb-2 px-2 text-[10px] font-bold uppercase tracking-widest text-[#4b5563]">
-            {usingFallback ? 'DEMO SCHEMAS' : 'LIVE SCHEMAS'}
+            {usingFallback
+              ? 'DEMO SCHEMAS'
+              : connectionId && databaseName
+                ? `${databaseName} / schemas`
+                : 'LIVE SCHEMAS'}
           </p>
           <SchemaTree schemas={allSchemas} selectedIds={selectedIds} onToggle={toggleTable} />
         </aside>
@@ -348,16 +464,32 @@ export function DatasetExplorerPage() {
               <div className="flex flex-col items-center justify-center h-full">
                 <p className="text-sm font-semibold text-red-500 mb-2">{error}</p>
                 <p className="text-xs text-[#6b7280] mb-4">
-                  Attempted: <code className="font-mono bg-[#1a1b28] px-1 py-0.5 rounded">GET /metadata/tables</code>
+                  Attempted:{' '}
+                  <code className="font-mono bg-[#1a1b28] px-1 py-0.5 rounded">
+                    {connectionId
+                      ? 'GET /connectors/postgres/schemas and /tables'
+                      : 'GET /metadata/tables'}
+                  </code>
                 </p>
                 <p className="text-xs text-[#6b7280] mb-4 text-center">
-                  Check backend/PostgreSQL connection.<br />
-                  Make sure uvicorn is running: <br />
-                  <code className="font-mono text-[#f1f5f9] bg-[#1a1b28] px-1 py-0.5 rounded block mt-1">uvicorn api.main:app --reload --port 8000</code>
+                  {connectionId
+                    ? 'Connection passwords are not stored, so an expired session must be tested again.'
+                    : 'Check that the backend and PostgreSQL are running.'}
                 </p>
-                <Button variant="secondary" size="sm" onClick={loadData}>
-                  Retry
-                </Button>
+                <div className="flex gap-3">
+                  <Button variant="secondary" size="sm" onClick={loadData}>
+                    Retry
+                  </Button>
+                  {connectionId && (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => navigate(`/projects/${id}/connect?source=postgresql`)}
+                    >
+                      Re-test Connection
+                    </Button>
+                  )}
+                </div>
               </div>
             ) : hasResults ? (
               filteredTables.map((table) => (
@@ -365,6 +497,7 @@ export function DatasetExplorerPage() {
                   key={table.id}
                   table={table}
                   selected={selectedIds.has(table.id)}
+                  previewing={previewingTableId === table.id}
                   onToggle={() => toggleTable(table.id)}
                   onPreview={() => handlePreview(table)}
                 />
@@ -374,13 +507,14 @@ export function DatasetExplorerPage() {
                 <div className="max-w-xl rounded-xl border border-[#252637] bg-[#13141e] p-6">
                   <AlertTriangle size={28} className="mx-auto mb-4 text-[#f59e0b]" />
                   <h3 className="text-base font-semibold text-[#f1f5f9]">
-                    No tables found in the public schema
+                    {connectionId
+                      ? 'No tables found in this PostgreSQL connection'
+                      : 'No tables found in the public schema'}
                   </h3>
                   <p className="mt-3 text-sm leading-relaxed text-[#94a3b8]">
-                    If you've uploaded a CSV or validated a connected table, that data lives in a
-                    temporary session and won't appear here. Check Run History for those results.
-                    To explore a live table, connect to your database via Connectors and ensure it
-                    has permanent tables in a visible schema.
+                    {connectionId
+                      ? 'This connection is live, but Aurum could not find visible tables in the schemas it can access.'
+                      : "If you've uploaded a CSV or validated a connected table, that data lives in a temporary session and won't appear here. Check Run History for those results. To explore a live table, connect to your database via Connectors and ensure it has permanent tables in a visible schema."}
                   </p>
                   <div className="mt-5 flex flex-wrap justify-center gap-3">
                     <Button
@@ -445,6 +579,107 @@ export function DatasetExplorerPage() {
           )}
         </div>
       </div>
+
+      <Dialog
+        open={Boolean(preview)}
+        onClose={() => setPreview(null)}
+        title={preview ? `${preview.schema}.${preview.table}` : 'Table preview'}
+        description={
+          preview
+            ? `${preview.rowCount?.toLocaleString() ?? 'Unknown'} rows, ${preview.columnCount?.toLocaleString() ?? preview.columns.length} columns`
+            : undefined
+        }
+        className="max-h-[85vh] max-w-5xl overflow-hidden"
+      >
+        {preview && (
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border border-[#252637] bg-[#0d0e14] px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-[#6b7280]">Rows</p>
+                <p className="mt-1 text-sm font-semibold text-[#f1f5f9]">
+                  {preview.rowCount?.toLocaleString() ?? 'Unknown'}
+                </p>
+              </div>
+              <div className="rounded-lg border border-[#252637] bg-[#0d0e14] px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-[#6b7280]">Columns</p>
+                <p className="mt-1 text-sm font-semibold text-[#f1f5f9]">
+                  {preview.columnCount?.toLocaleString() ?? preview.columns.length}
+                </p>
+              </div>
+              <div className="rounded-lg border border-[#252637] bg-[#0d0e14] px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-[#6b7280]">Sample</p>
+                <p className="mt-1 text-sm font-semibold text-[#f1f5f9]">
+                  {preview.rows.length.toLocaleString()} row{preview.rows.length === 1 ? '' : 's'}
+                </p>
+              </div>
+            </div>
+
+            <div className="max-h-[46vh] overflow-auto rounded-lg border border-[#252637] scrollbar-thin">
+              {preview.columns.length > 0 && preview.rows.length > 0 ? (
+                <table className="w-full min-w-max text-left text-xs">
+                  <thead className="sticky top-0 bg-[#13141e] text-[#94a3b8]">
+                    <tr>
+                      {preview.columns.map((column) => (
+                        <th key={column.name} className="border-b border-r border-[#252637] px-3 py-2 align-top last:border-r-0">
+                          <span className="block font-semibold text-[#f1f5f9]">{column.name}</span>
+                          <span className="mt-0.5 block text-[10px] font-normal text-[#6b7280]">
+                            {column.data_type}
+                          </span>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#252637]">
+                    {preview.rows.map((row, rowIndex) => (
+                      <tr key={rowIndex} className="hover:bg-[#252637]/30">
+                        {preview.columns.map((column) => {
+                          const value = row[column.name];
+                          return (
+                            <td key={column.name} className="max-w-64 border-r border-[#252637] px-3 py-2 text-[#d1d5db] last:border-r-0">
+                              {value === null || value === undefined ? (
+                                <span className="italic text-[#6b7280]">NULL</span>
+                              ) : (
+                                <span className="block truncate" title={String(value)}>
+                                  {String(value)}
+                                </span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : preview.columns.length > 0 ? (
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-[#13141e] text-[#94a3b8]">
+                    <tr>
+                      <th className="border-b border-[#252637] px-3 py-2">Column</th>
+                      <th className="border-b border-[#252637] px-3 py-2">Type</th>
+                      <th className="border-b border-[#252637] px-3 py-2">Nullable</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#252637]">
+                    {preview.columns.map((column) => (
+                      <tr key={column.name}>
+                        <td className="px-3 py-2 font-medium text-[#f1f5f9]">{column.name}</td>
+                        <td className="px-3 py-2 text-[#94a3b8]">{column.data_type}</td>
+                        <td className="px-3 py-2 text-[#94a3b8]">
+                          {column.nullable === undefined ? '-' : column.nullable ? 'Yes' : 'No'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="px-4 py-8 text-center text-sm text-[#6b7280]">
+                  No preview rows or column metadata returned.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </Dialog>
     </div>
   );
 }

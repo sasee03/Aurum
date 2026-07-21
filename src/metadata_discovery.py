@@ -6,7 +6,6 @@ Demo-session discovery reuses DataLoader's connection and exact session schema.
 
 from __future__ import annotations
 
-import re
 from typing import Any, Optional
 
 import psycopg
@@ -14,8 +13,6 @@ from psycopg import Connection, sql
 
 from .db_config import load_layer_schemas, postgres_conninfo
 from .table_specs import build_table_specs
-
-_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 _EXCLUDED_SCHEMAS = frozenset({"pg_catalog", "information_schema"})
 _EXCLUDED_SCHEMA_PREFIXES = ("pg_toast", "pg_temp_")
@@ -47,7 +44,7 @@ _CANDIDATE_KEY_EXCLUDED_TYPES = frozenset({"json", "jsonb"})
 
 
 def _quote_ident(name: str) -> sql.Identifier:
-    if not _IDENTIFIER.match(name):
+    if not name or "\x00" in name:
         raise ValueError(f"Unsafe SQL identifier: {name!r}")
     return sql.Identifier(name)
 

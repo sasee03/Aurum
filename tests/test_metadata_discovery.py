@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 import api.main as api_main
 from src.metadata_discovery import (
+    _quote_ident,
     classify_layer,
     discover_demo_session_metadata,
     discover_from_connection,
@@ -31,6 +32,11 @@ def test_classify_layer_patterns():
     assert classify_layer("public", "silver_orders") == "silver"
     assert classify_layer("public", "gold_metrics") == "gold"
     assert classify_layer("public", "random_table") == "unknown"
+
+
+def test_quote_ident_allows_valid_postgres_identifiers_with_spaces():
+    quoted = _quote_ident("invalid name with spaces").as_string(None)
+    assert quoted == '"invalid name with spaces"'
 
 
 def test_infer_candidate_keys_accepts_high_uniqueness_zero_nulls():
