@@ -166,4 +166,99 @@ describe('aurumApi error parsing', () => {
       expect(e.mismatch.error).toBe('Schema mismatch');
     }
   });
+
+  it('sourceConnect handles successful response', async () => {
+    const { sourceConnect } = await import('./aurumApi');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ connected: true, message: 'Connected' }),
+    });
+
+    const res = await sourceConnect({
+      host: 'localhost',
+      port: 5432,
+      database: 'aurum',
+      user: 'postgres',
+      password: 'secretpassword',
+    });
+    expect(res.connected).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/source/connect',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          host: 'localhost',
+          port: 5432,
+          database: 'aurum',
+          user: 'postgres',
+          password: 'secretpassword',
+        }),
+      }),
+    );
+  });
+
+  it('sourceConnect throws status-aware ApiError on 401, 404, 503, and 500', async () => {
+    const { sourceConnect } = await import('./aurumApi');
+
+    // 401 Auth Failed
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'AUTHENTICATION_FAILED', message: "Authentication failed for user 'postgres'" }),
+    });
+    try {
+      await sourceConnect({ host: 'localhost', port: 5432, database: 'aurum', user: 'postgres', password: 'bad' });
+      expect.fail('Should throw');
+    } catch (e: any) {
+      expect(e).toBeInstanceOf(ApiError);
+      expect(e.httpStatus).toBe(401);
+      expect(e.userMessage).toBe("Authentication failed for user 'postgres'");
+    }
+
+    // 404 Database Not Found
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: 'DATABASE_NOT_FOUND', message: "Database 'testdb' does not exist on server" }),
+    });
+    try {
+      await sourceConnect({ host: 'localhost', port: 5432, database: 'testdb', user: 'postgres', password: 'secret' });
+      expect.fail('Should throw');
+    } catch (e: any) {
+      expect(e).toBeInstanceOf(ApiError);
+      expect(e.httpStatus).toBe(404);
+      expect(e.userMessage).toBe("Database 'testdb' does not exist on server");
+    }
+
+    // 503 Host Unreachable
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      json: async () => ({ error: 'HOST_UNREACHABLE', message: "Host/port unreachable at 'badhost:5432'" }),
+    });
+    try {
+      await sourceConnect({ host: 'badhost', port: 5432, database: 'aurum', user: 'postgres', password: 'secret' });
+      expect.fail('Should throw');
+    } catch (e: any) {
+      expect(e).toBeInstanceOf(ApiError);
+      expect(e.httpStatus).toBe(503);
+      expect(e.userMessage).toBe("Host/port unreachable at 'badhost:5432'");
+    }
+
+    // 500 Internal Exception
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: 'INTERNAL_ERROR', message: 'psycopg2.OperationalError: raw db crash' }),
+    });
+    try {
+      await sourceConnect({ host: 'localhost', port: 5432, database: 'aurum', user: 'postgres', password: 'bad' });
+      expect.fail('Should throw');
+    } catch (e: any) {
+      expect(e).toBeInstanceOf(ApiError);
+      expect(e.httpStatus).toBe(500);
+      expect(e.userMessage).toBe('psycopg2.OperationalError: raw db crash');
+    }
+  });
 });

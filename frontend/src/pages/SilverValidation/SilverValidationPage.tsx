@@ -9,7 +9,6 @@ import { withRunIdQuery } from '@/hooks/useReport';
 
 /*
   Silver Layer page scaffold.
-  Preserves Sasee's information architecture with honest preview markers.
 */
 
 export function SilverValidationPage() {
@@ -17,8 +16,8 @@ export function SilverValidationPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const runId = searchParams.get('runId') ?? undefined;
-
-  const sampleTable = 'bronze.silver_orders';
+  const selectedTableParam = searchParams.get('table');
+  const sampleTable = selectedTableParam ? `bronze.${selectedTableParam}` : null;
   const cleaningRules = [
     'Remove duplicate orders (based on order_id)',
     'Remove rows where customer_id is null',
@@ -56,9 +55,25 @@ export function SilverValidationPage() {
       <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-[#090a10] scrollbar-thin">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-4">
-            <div className="rounded-xl border border-[#252637] p-4 bg-[#0d0e14]">
-              <h3 className="text-sm font-semibold text-[#f1f5f9] mb-2">Selected Bronze Table</h3>
-              <div className="text-xs text-[#94a3b8]">{sampleTable} • 10,024 rows • 12 columns</div>
+            <div className="rounded-xl border border-[#252637] p-5 bg-[#0d0e14] space-y-3">
+              <h3 className="text-sm font-semibold text-[#f1f5f9]">Selected Bronze Table</h3>
+              {sampleTable ? (
+                <div className="text-xs text-[#94a3b8]">
+                  <span className="font-mono text-[#f1f5f9]">{sampleTable}</span> (Verified Bronze Table)
+                </div>
+              ) : (
+                <div className="rounded-lg border border-[#f59e0b]/30 bg-[#451a03]/30 p-4 space-y-2 text-xs">
+                  <div className="font-semibold text-[#fbbf24]">No Bronze table selected.</div>
+                  <p className="text-[#fcd34d] leading-relaxed">
+                    Please return to the Bronze layer, discover source tables, ingest, and verify a table to proceed to Silver configuration.
+                  </p>
+                  <div className="pt-2">
+                    <Button variant="secondary" size="sm" onClick={() => navigate(`/projects/${id}/bronze`)}>
+                      Return to Bronze
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="rounded-xl border border-[#252637] p-4 bg-[#0d0e14]">

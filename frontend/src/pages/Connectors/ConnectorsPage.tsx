@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { CheckCircle2, ArrowRight, Upload, Eye, LoaderCircle, Database } from 'lucide-react';
+import { CheckCircle2, ArrowRight, Upload, Eye, Database } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -11,16 +11,11 @@ import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { useAppMode } from '@/context/AppModeContext';
 import {
   CsvUploadError,
-  listPostgresTables,
-  testPostgresConnection,
+  sourceConnect,
   uploadDatasetCsv,
-  validatePostgresTable,
-  previewPostgresTable,
   type CsvUploadMismatch,
-  type PostgresTableEntry,
-  type PreviewData,
 } from '@/lib/aurumApi';
-import { calmApiMessage } from '@/utils/apiErrors';
+import { calmApiMessage, ApiError } from '@/utils/apiErrors';
 import connectorsData from '@/mocks/connectors.json';
 import type { Connector } from '@/types';
 
@@ -271,7 +266,6 @@ type ConnectStatus = 'idle' | 'testing' | 'connected' | 'failed';
 
 function PostgresPanel({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
-  const { canRunValidation } = useAppMode();
 
   const [host, setHost] = useState('localhost');
   const [port, setPort] = useState('');
@@ -282,17 +276,6 @@ function PostgresPanel({ projectId }: { projectId: string }) {
 
   const [status, setStatus] = useState<ConnectStatus>('idle');
   const [error, setError] = useState<string | null>(null);
-  const [connectionId, setConnectionId] = useState<string | null>(null);
-
-  const [schemas, setSchemas] = useState<string[]>([]);
-  const [selectedSchema, setSelectedSchema] = useState('');
-  const [tables, setTables] = useState<PostgresTableEntry[]>([]);
-  const [selectedTable, setSelectedTable] = useState('');
-  const [loadingMeta, setLoadingMeta] = useState(false);
-  const [validating, setValidating] = useState(false);
-  const [mismatch, setMismatch] = useState<CsvUploadMismatch | null>(null);
-  const [previewing, setPreviewing] = useState(false);
-  const [previewData, setPreviewData] = useState<PreviewData | null>(null);
 
   async function handleTest() {
     if (!host.trim() || !port.trim() || !database.trim() || !username.trim()) {
@@ -305,116 +288,39 @@ function PostgresPanel({ projectId }: { projectId: string }) {
       return;
     }
 
+    const submittedPassword = password;
+    setPassword('');
     setStatus('testing');
     setError(null);
-    setConnectionId(null);
-    setSchemas([]);
-    setTables([]);
-    setSelectedSchema('');
-    setSelectedTable('');
-    setMismatch(null);
-    setPreviewData(null);
 
     try {
-      const result = await testPostgresConnection({
+      const res = await sourceConnect({
         host: host.trim(),
         port: portNum,
         database: database.trim(),
-        username: username.trim(),
-        password,
-        project_id: projectId,
+        user: username.trim(),
+        password: submittedPassword,
       });
-      // Clear password from UI state after submission — never show it back.
-      setPassword('');
 
-      if (!result.connected) {
+      if (!res.connected) {
         setStatus('failed');
-        setError(result.error);
-        toast.error(result.error);
+        setError(res.message || 'Connection failed.');
+        toast.error(res.message || 'Connection failed.');
         return;
       }
 
       setStatus('connected');
-      setConnectionId(result.connection_id);
-      toast.success('Connected to PostgreSQL. Opening Dataset Explorer.');
-
-      const explorerQuery = new URLSearchParams({
-        connectionId: result.connection_id,
-        database: result.database,
-        session: String(Date.now()),
-      });
-      navigate(`/projects/${projectId}/select?${explorerQuery.toString()}`);
-    } catch {
+      toast.success('Connection verified.');
+    } catch (err: any) {
       setStatus('failed');
-      setError('Backend API is not running or the request timed out.');
-      toast.error('Backend API is not running. Check the connection.');
-      setPassword('');
-    }
-  }
-
-  async function handleSchemaChange(nextSchema: string) {
-    setSelectedSchema(nextSchema);
-    setSelectedTable('');
-    setTables([]);
-    setMismatch(null);
-    setPreviewData(null);
-    if (!connectionId || !nextSchema) return;
-    setLoadingMeta(true);
-    try {
-      const tableRes = await listPostgresTables(connectionId, nextSchema);
-      setTables(tableRes.tables);
-    } catch {
-      toast.error('Failed to list tables. Re-test the connection.');
-    } finally {
-      setLoadingMeta(false);
-    }
-  }
-
-  async function handlePreview() {
-    if (!connectionId || !selectedSchema || !selectedTable) {
-      toast.error('Select a schema and table first.');
-      return;
-    }
-    setPreviewing(true);
-    setPreviewData(null);
-    setMismatch(null);
-    try {
-      const data = await previewPostgresTable(connectionId, selectedSchema, selectedTable);
-      setPreviewData(data);
-    } catch {
-      toast.error('Failed to preview table data.');
-    } finally {
-      setPreviewing(false);
-    }
-  }
-
-  async function handleValidate() {
-    if (!connectionId || !selectedSchema || !selectedTable) {
-      toast.error('Select a schema and table first.');
-      return;
-    }
-    if (!canRunValidation) {
-      toast.error('Aurum database is unreachable — start PostgreSQL and check /health.');
-      return;
-    }
-    setValidating(true);
-    setMismatch(null);
-    try {
-      await validatePostgresTable({
-        connection_id: connectionId,
-        schema: selectedSchema,
-        table: selectedTable,
-        project_id: projectId,
-      });
-      toast.success('Table validated successfully.');
-    } catch (err) {
-      if (err instanceof CsvUploadError) {
-        setMismatch(err.mismatch);
-      } else {
-        toast.error(calmApiMessage(err, 'Validation failed. Check the backend and database.'));
+      let msg = 'Connection could not be verified due to an unexpected server error.';
+      if (err instanceof ApiError) {
+        if (err.httpStatus === 401 || err.httpStatus === 404 || err.httpStatus === 503) {
+          msg = err.userMessage;
+        }
       }
-    } finally {
-      setValidating(false);
+      setError(msg);
+      toast.error(msg);
     }
   }
 
@@ -492,12 +398,6 @@ function PostgresPanel({ projectId }: { projectId: string }) {
             Failed: {error}
           </span>
         )}
-        {status === 'connected' && connectionId && (
-          <span className="text-xs text-[#6b7280]">
-            Connected — connection ID for Custom Checks:{' '}
-            <span className="font-mono text-[#94a3b8]">{connectionId}</span>
-          </span>
-        )}
       </div>
 
       <p className="text-xs text-[#6b7280] italic">
@@ -506,142 +406,21 @@ function PostgresPanel({ projectId }: { projectId: string }) {
       </p>
 
       {status === 'connected' && (
-        <div className="space-y-3 pt-2 border-t border-[#252637]">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold uppercase tracking-widest text-[#6b7280]">
-                Schema
-              </label>
-              <select
-                className="w-full rounded-lg border border-[#252637] bg-[#1a1b28] px-3 py-2.5 text-sm text-[#f1f5f9] focus:border-[#6366f1] focus:outline-none"
-                value={selectedSchema}
-                disabled={loadingMeta || schemas.length === 0}
-                onChange={(e) => handleSchemaChange(e.target.value)}
-              >
-                {schemas.length === 0 && <option value="">No schemas</option>}
-                {schemas.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold uppercase tracking-widest text-[#6b7280]">
-                Table
-              </label>
-              <select
-                className="w-full rounded-lg border border-[#252637] bg-[#1a1b28] px-3 py-2.5 text-sm text-[#f1f5f9] focus:border-[#6366f1] focus:outline-none"
-                value={selectedTable}
-                disabled={loadingMeta || tables.length === 0}
-                onChange={(e) => {
-                  setSelectedTable(e.target.value);
-                  setMismatch(null);
-                  setPreviewData(null);
-                }}
-              >
-                <option value="">Select a table</option>
-                {tables.map((t) => (
-                  <option key={`${t.schema}.${t.table}`} value={t.table}>
-                    {t.table}
-                  </option>
-                ))}
-              </select>
-            </div>
+        <div className="rounded-xl border border-[#22c55e]/30 bg-[#22c55e]/10 p-4 space-y-3 mt-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-[#4ade80]">
+            <CheckCircle2 size={18} />
+            Connection verified.
           </div>
-
-          {mismatch && (
-            <div className="rounded-md border border-[#7f1d1d] bg-[#450a0a] p-3 space-y-1">
-              <p className="text-sm font-semibold text-[#fecaca]">Schema mismatch</p>
-              <p className="text-xs text-[#fca5a5]">{mismatch.error}</p>
-              {mismatch.missing_columns.length > 0 && (
-                <p className="text-xs text-[#fca5a5]">
-                  Missing: {mismatch.missing_columns.join(', ')}
-                </p>
-              )}
-            </div>
-          )}
-
-          {validating && (
-            <div
-              className="flex items-start gap-3 rounded-md border border-[#92400e] bg-[#451a03]/40 p-3"
-              role="status"
-              aria-live="polite"
-            >
-              <LoaderCircle
-                size={18}
-                className="mt-0.5 shrink-0 animate-spin text-[#f59e0b]"
-                aria-hidden="true"
-              />
-              <div className="space-y-1">
-                <p className="text-sm font-semibold text-[#fbbf24]">
-                  Validating large dataset
-                </p>
-                <p className="text-xs leading-5 text-[#fcd34d]">
-                  Large tables can take a few minutes. Keep this page open while Aurum loads the
-                  data and runs Bronze, Silver, and Gold checks.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {previewData && (
-            <div className="rounded-xl border border-[#252637] bg-[#1a1b28] overflow-hidden">
-              <div className="flex items-center justify-between bg-[#252637]/50 px-4 py-2 border-b border-[#252637]">
-                <span className="text-xs font-semibold text-[#f1f5f9]">
-                  {previewData.schema}.{previewData.table}
-                </span>
-                <span className="text-xs text-[#94a3b8]">
-                  {previewData.metadata.row_count} rows • {previewData.metadata.column_count} columns
-                </span>
-              </div>
-              <div className="overflow-x-auto max-h-[300px] scrollbar-thin scrollbar-thumb-[#6b7280]">
-                <table className="w-full text-left text-xs whitespace-nowrap">
-                  <thead className="sticky top-0 bg-[#13141e] border-b border-[#252637] text-[#94a3b8]">
-                    <tr>
-                      {previewData.metadata.columns.map((col) => (
-                        <th key={col.name} className="px-4 py-2 font-semibold border-r border-[#252637] last:border-r-0">
-                          {col.name}
-                          <span className="block text-[10px] text-[#6b7280] font-normal">{col.data_type}</span>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#252637]">
-                    {previewData.data.map((row, i) => (
-                      <tr key={i} className="hover:bg-[#252637]/30 transition-colors">
-                        {previewData.metadata.columns.map((col) => (
-                          <td key={col.name} className="px-4 py-2 border-r border-[#252637] last:border-r-0 text-[#f1f5f9]">
-                            {row[col.name] !== null ? String(row[col.name]) : <span className="text-[#6b7280] italic">null</span>}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          <div className="flex items-center gap-3">
-            <Button
-              variant="secondary"
-              className="flex-1"
-              isLoading={previewing}
-              disabled={!selectedTable || validating}
-              onClick={handlePreview}
-            >
-              <Eye size={16} className="mr-2" /> {previewing ? 'Loading Preview' : 'Preview Table'}
-            </Button>
+          <p className="text-xs text-[#cbd5e1] leading-relaxed">
+            For this demo, Bronze uses Aurum&apos;s configured Source environment. External database handoff will be supported separately.
+          </p>
+          <div className="pt-2 flex justify-end">
             <Button
               variant="primary"
-              className="flex-1"
-              isLoading={validating}
-              disabled={!selectedTable || validating}
               rightIcon={<ArrowRight size={16} />}
-              onClick={handleValidate}
+              onClick={() => navigate(`/projects/${projectId}/bronze`)}
             >
-              {validating ? 'Validation in progress' : 'Validate this table'}
+              Continue to Bronze
             </Button>
           </div>
         </div>

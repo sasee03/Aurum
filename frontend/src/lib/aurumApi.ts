@@ -489,3 +489,99 @@ export interface SilverAssessment {
 export async function getSilverAssessment(runId: string): Promise<SilverAssessment> {
   return request<SilverAssessment>(`/runs/${encodeURIComponent(runId)}/silver-assessment`);
 }
+
+// ────────────────────────────────────────────
+// P1 Source Ingestion API Client Functions
+// ────────────────────────────────────────────
+
+export interface SourceConnectRequest {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+}
+
+export interface SourceConnectResponse {
+  connected: boolean;
+  message: string;
+}
+
+export interface SourceColumnInfo {
+  name: string;
+  data_type: string;
+  nullable?: boolean;
+  primary_key?: boolean;
+  [key: string]: any;
+}
+
+export interface SourceTableEntry {
+  table: string;
+  schema: string;
+  row_count?: number | null;
+  column_count?: number | null;
+  columns?: SourceColumnInfo[];
+  [key: string]: any;
+}
+
+export interface SourceTablesResponse {
+  schema: string;
+  tables: SourceTableEntry[];
+  source?: string;
+  [key: string]: any;
+}
+
+export interface IngestToBronzeItemResult {
+  table: string;
+  status: 'success' | 'error';
+  message?: string;
+  error?: string;
+}
+
+export interface IngestToBronzeResponse {
+  results: IngestToBronzeItemResult[];
+}
+
+export interface VerifyBronzeItemResult {
+  table: string;
+  status: 'success' | 'error';
+  source_row_count?: number;
+  bronze_row_count?: number;
+  match?: boolean;
+  preview_sample?: Record<string, any>[];
+  error?: string;
+}
+
+export interface VerifyBronzeResponse {
+  results: VerifyBronzeItemResult[];
+}
+
+/** P1.1: Test connection to PostgreSQL source database */
+export async function sourceConnect(req: SourceConnectRequest): Promise<SourceConnectResponse> {
+  return request<SourceConnectResponse>('/api/v1/source/connect', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
+}
+
+/** P1.2 & P1.3: Discover available tables from the source schema */
+export async function fetchSourceTables(schema?: string): Promise<SourceTablesResponse> {
+  const query = schema ? `?schema=${encodeURIComponent(schema)}` : '';
+  return request<SourceTablesResponse>(`/api/v1/source/tables${query}`);
+}
+
+/** P1.4: Ingest selected source tables 1:1 into Bronze layer */
+export async function ingestToBronze(tables: string[]): Promise<IngestToBronzeResponse> {
+  return request<IngestToBronzeResponse>('/api/v1/source/ingest-to-bronze', {
+    method: 'POST',
+    body: JSON.stringify({ tables }),
+  });
+}
+
+/** P1.5: Verify ingested Bronze tables and fetch preview sample */
+export async function verifyBronze(tables: string[]): Promise<VerifyBronzeResponse> {
+  return request<VerifyBronzeResponse>('/api/v1/source/verify-bronze', {
+    method: 'POST',
+    body: JSON.stringify({ tables }),
+  });
+}
