@@ -59,19 +59,19 @@ def test_bulk_cleanup_utility_differentiation():
     tbl_fresh = f"fresh_test_candidate_{run_fresh}"
     tbl_untracked = f"untracked_test_candidate_run_{uuid.uuid4().hex[:8]}"
     
-    # Seed SQLite metadata with sql_text including schema
+    # Seed SQLite metadata with candidate_schema
     stale_time = (datetime.datetime.utcnow() - datetime.timedelta(hours=2)).isoformat()
     fresh_time = datetime.datetime.utcnow().isoformat()
     
     with get_connection() as conn:
         init_schema(conn)
         conn.execute(
-            "INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status) VALUES (?, ?, ?, ?, ?, ?)",
-            (run_stale, "stale_test", f"CREATE TABLE {schemas.silver_candidates}.{tbl_stale} AS SELECT 1", "{}", stale_time, "PENDING")
+            "INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run_stale, "stale_test", f"CREATE TABLE {schemas.silver_candidates}.{tbl_stale} AS SELECT 1", "{}", stale_time, "PENDING", schemas.silver_candidates)
         )
         conn.execute(
-            "INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status) VALUES (?, ?, ?, ?, ?, ?)",
-            (run_fresh, "fresh_test", f"CREATE TABLE {schemas.silver_candidates}.{tbl_fresh} AS SELECT 1", "{}", fresh_time, "PENDING")
+            "INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run_fresh, "fresh_test", f"CREATE TABLE {schemas.silver_candidates}.{tbl_fresh} AS SELECT 1", "{}", fresh_time, "PENDING", schemas.silver_candidates)
         )
         conn.commit()
         
@@ -125,8 +125,8 @@ def test_table_name_mismatch_untracked_safety():
     with get_connection() as conn:
         init_schema(conn)
         conn.execute(
-            "INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status) VALUES (?, ?, ?, ?, ?, ?)",
-            (run_id, tracked_target, f"CREATE TABLE {schemas.silver_candidates}.{tracked_target}_candidate_{run_id} AS SELECT 1", "{}", stale_time, "PENDING")
+            "INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run_id, tracked_target, f"CREATE TABLE {schemas.silver_candidates}.{tracked_target}_candidate_{run_id} AS SELECT 1", "{}", stale_time, "PENDING", schemas.silver_candidates)
         )
         conn.commit()
 

@@ -43,7 +43,7 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
     sqlite_records: Dict[str, dict] = {}
     with get_connection() as conn_db:
         rows = conn_db.execute(
-            "SELECT run_id, table_name, sql_text, created_at, status FROM generated_sql_review"
+            "SELECT run_id, table_name, sql_text, created_at, status, candidate_schema FROM generated_sql_review"
         ).fetchall()
         for row in rows:
             sqlite_records[row["run_id"]] = {
@@ -51,7 +51,8 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
                 "table_name": row["table_name"],
                 "sql_text": row["sql_text"],
                 "created_at": row["created_at"],
-                "status": row["status"]
+                "status": row["status"],
+                "candidate_schema": row["candidate_schema"]
             }
             
     # 2. Fetch active candidate tables from Postgres information_schema using promotion connection
@@ -115,8 +116,18 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
             })
             continue
 
-        # Require exact match on candidate schema in sql_text (cross-pipeline protection)
-        if schema not in rec.get("sql_text", ""):
+        # Require exact match on candidate schema (cross-pipeline protection)
+        expected_candidate_schema = rec.get("candidate_schema")
+        if expected_candidate_schema:
+            if expected_candidate_schema != schema:
+                untracked_candidates.append({
+                    "schema": schema,
+                    "table": table,
+                    "reason": f"Schema mismatch: Postgres candidate schema '{schema}' != SQLite metadata candidate_schema '{expected_candidate_schema}'."
+                })
+                continue
+        elif schema not in rec.get("sql_text", ""):
+            # Fallback for legacy records created prior to candidate_schema column migration
             untracked_candidates.append({
                 "schema": schema,
                 "table": table,

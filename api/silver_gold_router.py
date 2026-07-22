@@ -300,10 +300,10 @@ GROUP BY DATE(order_date);
         with get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status)
-                VALUES (?, ?, ?, ?, ?, 'PENDING')
+                INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema)
+                VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
                 """,
-                (run_id, payload.target_table_name, stripped_sql, json.dumps(planned_changes), now)
+                (run_id, payload.target_table_name, stripped_sql, json.dumps(planned_changes), now, schemas.gold_candidates)
             )
             conn.commit()
     except Exception as e:

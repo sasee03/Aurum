@@ -194,3 +194,29 @@ def get_promotion_pool() -> psycopg_pool.ConnectionPool:
         init_pools()
     assert _promotion_pool is not None
     return _promotion_pool
+
+
+def close_pools():
+    global _ingestion_pool, _generated_sql_pool, _promotion_pool
+    if _ingestion_pool is not None:
+        try:
+            _ingestion_pool.close(timeout=2.0)
+        except Exception:
+            pass
+        _ingestion_pool = None
+    if _generated_sql_pool is not None:
+        try:
+            _generated_sql_pool.close(timeout=2.0)
+        except Exception:
+            pass
+        _generated_sql_pool = None
+    if _promotion_pool is not None:
+        try:
+            _promotion_pool.close(timeout=2.0)
+        except Exception:
+            pass
+        _promotion_pool = None
+
+
+import atexit
+atexit.register(close_pools)
