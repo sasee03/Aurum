@@ -48,7 +48,7 @@ export function GoldValidationPage() {
       <div className="px-6 py-6 border-b border-[#252637]">
         <div className="flex items-center gap-3">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Gold Layer</h2>
-          <DataSourceBadge mode="LIVE API" />
+          <DataSourceBadge mode="live" />
         </div>
         <p className="mt-1 text-sm text-[#6b7280]">Generate business-ready Gold outputs from approved Silver data.</p>
       </div>
@@ -74,7 +74,7 @@ export function GoldValidationPage() {
                 {kpis.map((k) => (
                   <li key={k} className="flex items-center justify-between">
                     <span>{k}</span>
-                    <Badge variant="success">Ready</Badge>
+                    <Badge variant="pass">Ready</Badge>
                   </li>
                 ))}
                 <li className="flex items-center justify-between text-[#f59e0b]">

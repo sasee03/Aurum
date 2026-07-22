@@ -52,7 +52,7 @@ export function SilverValidationPage() {
       <div className="px-6 py-6 border-b border-[#252637]">
         <div className="flex items-center gap-3">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Silver Validation</h2>
-          <DataSourceBadge mode="LIVE API" />
+          <DataSourceBadge mode="live" />
           <Badge variant="secondary">LAYER FAIL</Badge>
         </div>
         <p className="mt-1 text-sm text-[#6b7280]">Clean and transform your Bronze data to build trusted Silver layer.</p>
