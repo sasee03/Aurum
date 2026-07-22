@@ -59,7 +59,7 @@ def test_bulk_cleanup_utility_differentiation():
     tbl_fresh = f"fresh_test_candidate_{run_fresh}"
     tbl_untracked = f"untracked_test_candidate_run_{uuid.uuid4().hex[:8]}"
     
-    # Seed SQLite metadata
+    # Seed SQLite metadata with sql_text including schema
     stale_time = (datetime.datetime.utcnow() - datetime.timedelta(hours=2)).isoformat()
     fresh_time = datetime.datetime.utcnow().isoformat()
     
@@ -67,11 +67,11 @@ def test_bulk_cleanup_utility_differentiation():
         init_schema(conn)
         conn.execute(
             "INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status) VALUES (?, ?, ?, ?, ?, ?)",
-            (run_stale, "stale_test", "SELECT 1", "{}", stale_time, "PENDING")
+            (run_stale, "stale_test", f"CREATE TABLE {schemas.silver_candidates}.{tbl_stale} AS SELECT 1", "{}", stale_time, "PENDING")
         )
         conn.execute(
             "INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status) VALUES (?, ?, ?, ?, ?, ?)",
-            (run_fresh, "fresh_test", "SELECT 1", "{}", fresh_time, "PENDING")
+            (run_fresh, "fresh_test", f"CREATE TABLE {schemas.silver_candidates}.{tbl_fresh} AS SELECT 1", "{}", fresh_time, "PENDING")
         )
         conn.commit()
         
@@ -109,3 +109,65 @@ def test_bulk_cleanup_utility_differentiation():
     # Final cleanup of remaining test tables
     discard_candidate_table(tbl_fresh, schemas.silver_candidates, postgres_promotion_conninfo())
     discard_candidate_table(tbl_untracked, schemas.silver_candidates, postgres_promotion_conninfo())
+
+
+def test_table_name_mismatch_untracked_safety():
+    """Regression test: A candidate table with matching run_id but mismatched target table_name is treated as UNTRACKED and NOT deleted."""
+    schemas = load_layer_schemas()
+    run_id = f"run_shadow_{uuid.uuid4().hex[:8]}"
+
+    tracked_target = "tracked_table_A"
+    shadow_target = "shadow_table_B"
+    shadow_candidate_table = f"{shadow_target}_candidate_{run_id}"
+
+    # 1. Seed SQLite metadata for tracked_target
+    stale_time = (datetime.datetime.utcnow() - datetime.timedelta(hours=2)).isoformat()
+    with get_connection() as conn:
+        init_schema(conn)
+        conn.execute(
+            "INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (run_id, tracked_target, f"CREATE TABLE {schemas.silver_candidates}.{tracked_target}_candidate_{run_id} AS SELECT 1", "{}", stale_time, "PENDING")
+        )
+        conn.commit()
+
+    # 2. Create shadow candidate table (shadow_target != tracked_target) in Postgres
+    with psycopg.connect(postgres_promotion_conninfo()) as p_conn:
+        with p_conn.cursor() as cur:
+            cur.execute(f'CREATE TABLE "{schemas.silver_candidates}"."{shadow_candidate_table}" (id int)')
+        p_conn.commit()
+
+    # 3. Run cleanup utility
+    res = cleanup_orphaned_candidate_tables(age_threshold_seconds=3600)
+    untracked_tables = [r["table"] for r in res["untracked_candidates"]]
+    removed_tables = [r["table"] for r in res["removed_candidates"]]
+
+    # Assert it is classified as UNTRACKED and NOT in removed_candidates
+    assert shadow_candidate_table in untracked_tables
+    assert shadow_candidate_table not in removed_tables
+
+    # 4. Verify candidate STILL EXISTS in Postgres
+    with psycopg.connect(postgres_promotion_conninfo()) as p_conn:
+        with p_conn.cursor() as cur:
+            cur.execute(f'SELECT to_regclass(\'"{schemas.silver_candidates}"."{shadow_candidate_table}"\')')
+            assert cur.fetchone()[0] is not None
+
+    # Cleanup test table
+    discard_candidate_table(shadow_candidate_table, schemas.silver_candidates, postgres_promotion_conninfo())
+
+
+def test_admin_cleanup_endpoint_guard():
+    """Verify POST /api/v1/admin/candidate-cleanup requires confirm=true."""
+    from fastapi.testclient import TestClient
+    from api.main import app
+
+    client = TestClient(app)
+
+    # Call without confirm=true -> HTTP 400
+    resp_no_confirm = client.post("/api/v1/admin/candidate-cleanup")
+    assert resp_no_confirm.status_code == 400
+    assert "explicit confirmation" in resp_no_confirm.json()["detail"]
+
+    # Call with confirm=true -> HTTP 200
+    resp_confirm = client.post("/api/v1/admin/candidate-cleanup?confirm=true")
+    assert resp_confirm.status_code == 200
+    assert resp_confirm.json()["status"] == "success"

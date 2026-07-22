@@ -12,7 +12,10 @@ from src.db_config import load_layer_schemas, postgres_promotion_conninfo, get_g
 from src.promotion import discard_candidate_table, PromotionError
 
 
-_RUN_ID_REGEX = re.compile(r"_candidate_(run_[A-Za-z0-9_]+)$", re.IGNORECASE)
+_CANDIDATE_PARSE_REGEX = re.compile(
+    r"^(?P<target_table>[A-Za-z_][A-Za-z0-9_]*)_candidate_(?P<run_id>run_[A-Za-z0-9_]+)$",
+    re.IGNORECASE
+)
 
 
 def _parse_iso_datetime(dt_str: str) -> Optional[datetime.datetime]:
@@ -31,7 +34,7 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
     Categorizes tables into:
     1. removed_candidates: Tables older than age_threshold_seconds with non-promoted status in SQLite.
     2. in_flight_candidates: Tables created within age_threshold_seconds (preserved).
-    3. untracked_candidates: Tables with no matching SQLite metadata record (preserved for human review).
+    3. untracked_candidates: Tables with no matching SQLite metadata record or mismatched table_name (preserved for human review).
     """
     schemas = load_layer_schemas()
     candidate_schemas = [schemas.silver_candidates, schemas.gold_candidates]
@@ -40,12 +43,13 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
     sqlite_records: Dict[str, dict] = {}
     with get_connection() as conn_db:
         rows = conn_db.execute(
-            "SELECT run_id, table_name, created_at, status FROM generated_sql_review"
+            "SELECT run_id, table_name, sql_text, created_at, status FROM generated_sql_review"
         ).fetchall()
         for row in rows:
             sqlite_records[row["run_id"]] = {
                 "run_id": row["run_id"],
                 "table_name": row["table_name"],
+                "sql_text": row["sql_text"],
                 "created_at": row["created_at"],
                 "status": row["status"]
             }
@@ -80,10 +84,19 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
         schema = candidate["schema"]
         table = candidate["table"]
         
-        match = _RUN_ID_REGEX.search(table)
-        run_id = match.group(1) if match else None
+        match = _CANDIDATE_PARSE_REGEX.match(table)
+        if not match:
+            untracked_candidates.append({
+                "schema": schema,
+                "table": table,
+                "reason": "Candidate table name does not match expected pattern <target>_candidate_<run_id>."
+            })
+            continue
+
+        parsed_target = match.group("target_table")
+        parsed_run_id = match.group("run_id")
         
-        if not run_id or run_id not in sqlite_records:
+        if parsed_run_id not in sqlite_records:
             untracked_candidates.append({
                 "schema": schema,
                 "table": table,
@@ -91,7 +104,25 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
             })
             continue
 
-        rec = sqlite_records[run_id]
+        rec = sqlite_records[parsed_run_id]
+
+        # Require exact match on target table name prefix
+        if rec["table_name"] != parsed_target:
+            untracked_candidates.append({
+                "schema": schema,
+                "table": table,
+                "reason": f"Target table name mismatch: Postgres candidate target '{parsed_target}' != SQLite metadata table '{rec['table_name']}'."
+            })
+            continue
+
+        # Require exact match on candidate schema in sql_text (cross-pipeline protection)
+        if schema not in rec.get("sql_text", ""):
+            untracked_candidates.append({
+                "schema": schema,
+                "table": table,
+                "reason": f"Schema mismatch: Postgres candidate schema '{schema}' not targeted in SQLite SQL text."
+            })
+            continue
         created_dt = _parse_iso_datetime(rec["created_at"])
         
         if created_dt is None:
@@ -114,7 +145,7 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
                     removed_candidates.append({
                         "schema": schema,
                         "table": table,
-                        "run_id": run_id,
+                        "run_id": parsed_run_id,
                         "age_seconds": int(age_seconds),
                         "reason": "Stale leftover table from previously promoted run."
                     })
@@ -128,14 +159,14 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
                 in_flight_candidates.append({
                     "schema": schema,
                     "table": table,
-                    "run_id": run_id,
+                    "run_id": parsed_run_id,
                     "reason": "Marked promoted recently."
                 })
         elif age_seconds <= age_threshold_seconds:
             in_flight_candidates.append({
                 "schema": schema,
                 "table": table,
-                "run_id": run_id,
+                "run_id": parsed_run_id,
                 "age_seconds": int(age_seconds),
                 "reason": f"Created recently ({int(age_seconds)}s <= threshold {age_threshold_seconds}s)."
             })
@@ -146,7 +177,7 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
                 removed_candidates.append({
                     "schema": schema,
                     "table": table,
-                    "run_id": run_id,
+                    "run_id": parsed_run_id,
                     "age_seconds": int(age_seconds),
                     "reason": "Orphaned stale candidate table from failed or abandoned run."
                 })

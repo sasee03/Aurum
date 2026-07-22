@@ -10,6 +10,10 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 @router.post("/candidate-cleanup")
 def trigger_candidate_cleanup(
+    confirm: bool = Query(
+        False,
+        description="Must be explicitly set to True to execute destructive candidate table cleanup."
+    ),
     age_threshold_seconds: int = Query(
         3600, 
         ge=0, 
@@ -17,6 +21,11 @@ def trigger_candidate_cleanup(
     )
 ):
     """Trigger manual candidate table hygiene cleanup."""
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Action requires explicit confirmation. Pass '?confirm=true' to proceed with candidate cleanup."
+        )
     try:
         res = cleanup_orphaned_candidate_tables(age_threshold_seconds=age_threshold_seconds)
         return res
