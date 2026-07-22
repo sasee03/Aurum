@@ -46,6 +46,7 @@ from api.projects_router import router as projects_router
 from api.source_ingest_router import router as source_ingest_router
 from api.bronze_silver_router import router as bronze_silver_router
 from api.silver_gold_router import router as silver_gold_router
+from api.admin_router import router as admin_router
 
 REACT_DEV_ORIGINS = [
     "http://localhost:5173",
@@ -61,6 +62,7 @@ app.include_router(projects_router)
 app.include_router(source_ingest_router)
 app.include_router(bronze_silver_router)
 app.include_router(silver_gold_router)
+app.include_router(admin_router)
 
 app.add_middleware(
     CORSMiddleware,

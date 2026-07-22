@@ -253,8 +253,8 @@ SELECT * FROM step_3;
         with get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status)
+                VALUES (?, ?, ?, ?, ?, 'PENDING')
                 """,
                 (run_id, payload.table_name, stripped_sql, json.dumps(planned_changes), now)
             )
@@ -378,6 +378,13 @@ def execute_sql(run_id: str):
             target_schema=schemas.silver,
             promotion_conninfo=postgres_promotion_conninfo()
         )
+        now_promoted = datetime.datetime.utcnow().isoformat()
+        with get_connection() as conn_db:
+            conn_db.execute(
+                "UPDATE generated_sql_review SET status = 'PROMOTED', promoted_at = ? WHERE run_id = ?",
+                (now_promoted, run_id)
+            )
+            conn_db.commit()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to promote candidate to silver: {e}")
         

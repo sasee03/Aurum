@@ -152,7 +152,19 @@ def execute_candidate_sql(sql_str: str, conn, expected_schema: str, run_id: str 
             cur.execute(validated_sql)
         return
 
+    from src.db_config import postgres_promotion_conninfo
+    from src.promotion import discard_candidate_table
+
     with conn.cursor() as cur:
+        # Check if candidate table already exists (e.g. from a prior failed execution attempt)
+        cur.execute(
+            "SELECT to_regclass(%s)",
+            (f'"{target_schema}"."{target_table}"',)
+        )
+        if cur.fetchone()[0] is not None:
+            # Safely drop stale candidate table using trusted promotion role
+            discard_candidate_table(target_table, target_schema, postgres_promotion_conninfo())
+
         # Execute the validated LLM statement to create the table
         cur.execute(validated_sql)
         # Immediately transfer ownership to aurum_promotion
@@ -162,9 +174,9 @@ def execute_candidate_sql(sql_str: str, conn, expected_schema: str, run_id: str 
 
     # Grant SELECT on candidate table to aurum_generated_sql so it can preview before promotion
     import psycopg
-    from src.db_config import postgres_promotion_conninfo
     with psycopg.connect(postgres_promotion_conninfo()) as p_conn:
         with p_conn.cursor() as p_cur:
             p_cur.execute(psql.SQL("GRANT SELECT ON {}.{} TO aurum_generated_sql").format(
                 psql.Identifier(target_schema), psql.Identifier(target_table)
             ))
+

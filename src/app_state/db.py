@@ -100,6 +100,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "validation_runs", "display_name", "display_name TEXT")
     _ensure_column(conn, "validation_runs", "session_schema", "session_schema TEXT")
     _ensure_column(conn, "validation_runs", "dataset_config", "dataset_config TEXT")
+    _ensure_column(conn, "generated_sql_review", "status", "status TEXT")
+    _ensure_column(conn, "generated_sql_review", "promoted_at", "promoted_at TEXT")
     conn.commit()
 
 
