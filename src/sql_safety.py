@@ -159,3 +159,12 @@ def execute_candidate_sql(sql_str: str, conn, expected_schema: str, run_id: str 
         cur.execute(psql.SQL("ALTER TABLE {}.{} OWNER TO aurum_promotion").format(
             psql.Identifier(target_schema), psql.Identifier(target_table)
         ))
+
+    # Grant SELECT on candidate table to aurum_generated_sql so it can preview before promotion
+    import psycopg
+    from src.db_config import postgres_promotion_conninfo
+    with psycopg.connect(postgres_promotion_conninfo()) as p_conn:
+        with p_conn.cursor() as p_cur:
+            p_cur.execute(psql.SQL("GRANT SELECT ON {}.{} TO aurum_generated_sql").format(
+                psql.Identifier(target_schema), psql.Identifier(target_table)
+            ))

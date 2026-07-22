@@ -45,8 +45,15 @@ GRANT USAGE, CREATE ON SCHEMA silver_candidates TO aurum_generated_sql;
 GRANT USAGE, CREATE ON SCHEMA gold_candidates TO aurum_generated_sql;
 GRANT SELECT ON ALL TABLES IN SCHEMA bronze TO aurum_generated_sql;
 GRANT SELECT ON ALL TABLES IN SCHEMA silver TO aurum_generated_sql;
+GRANT SELECT ON ALL TABLES IN SCHEMA gold TO aurum_generated_sql;
+GRANT SELECT ON ALL TABLES IN SCHEMA silver_candidates TO aurum_generated_sql;
+GRANT SELECT ON ALL TABLES IN SCHEMA gold_candidates TO aurum_generated_sql;
 ALTER DEFAULT PRIVILEGES IN SCHEMA bronze GRANT SELECT ON TABLES TO aurum_generated_sql;
 ALTER DEFAULT PRIVILEGES IN SCHEMA silver GRANT SELECT ON TABLES TO aurum_generated_sql;
+ALTER DEFAULT PRIVILEGES IN SCHEMA gold GRANT SELECT ON TABLES TO aurum_generated_sql;
+ALTER DEFAULT PRIVILEGES IN SCHEMA silver_candidates GRANT SELECT ON TABLES TO aurum_generated_sql;
+ALTER DEFAULT PRIVILEGES IN SCHEMA gold_candidates GRANT SELECT ON TABLES TO aurum_generated_sql;
+ALTER DEFAULT PRIVILEGES FOR ROLE aurum_ingestion IN SCHEMA bronze GRANT SELECT ON TABLES TO aurum_generated_sql;
 DO $$
 BEGIN
     EXECUTE format('GRANT CONNECT ON DATABASE %I TO aurum_generated_sql', current_database());

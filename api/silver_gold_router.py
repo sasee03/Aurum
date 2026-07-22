@@ -394,8 +394,7 @@ def execute_gold_sql(run_id: str, payload: ExecuteGoldPayload):
                 cols = [desc[0] for desc in cur.description] if cur.description else []
                 preview_rows = [dict(zip(cols, row)) for row in cur.fetchall()]
     except Exception as e:
-        # Previews failing shouldn't block promotion entirely, but typically we'd log it
-        pass
+        raise HTTPException(status_code=500, detail=f"Failed to preview gold candidate table: {e}")
 
     # 4. Promotion to Gold (aurum_promotion)
     try:
