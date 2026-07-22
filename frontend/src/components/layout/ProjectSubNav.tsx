@@ -25,20 +25,18 @@ export function ProjectSubNav({ runId, isRunning }: ProjectSubNavProps = {}) {
 
   const steps = [
     { label: 'Connect', path: stepPath(`/projects/${id}/connect`) },
-    { label: 'Explore Datasets', path: stepPath(`/projects/${id}/select`) },
-    { label: 'Validate', path: stepPath(`/projects/${id}/validate/config`) },
-    { label: 'Report', path: stepPath(`/projects/${id}/report/quality`) },
-    { label: 'Remediate', path: stepPath(`/projects/${id}/remediate`) },
+    { label: 'Bronze', path: stepPath(`/projects/${id}/bronze`) },
+    { label: 'Silver', path: stepPath(`/projects/${id}/silver`) },
+    { label: 'Gold', path: stepPath(`/projects/${id}/gold`) },
   ];
 
   let activeLabel = '';
   if (pathname.includes('/connect')) activeLabel = 'Connect';
-  else if (pathname.includes('/select') || pathname.includes('/metadata')) activeLabel = 'Explore Datasets';
-  else if (pathname.includes('/validate')) activeLabel = 'Validate';
-  else if (pathname.includes('/report') || pathname.includes('/impact') || pathname.includes('/trust')) activeLabel = 'Report';
-  else if (pathname.includes('/remediate')) activeLabel = 'Remediate';
+  else if (pathname.includes('/bronze')) activeLabel = 'Bronze';
+  else if (pathname.includes('/silver')) activeLabel = 'Silver';
+  else if (pathname.includes('/gold')) activeLabel = 'Gold';
 
-  const isExecuting = isRunning ?? pathname.includes('/validate/execution');
+  const isExecuting = isRunning ?? false;
   const back = getFlowBackTarget(pathname, id, activeRunId);
 
   return (

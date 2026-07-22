@@ -130,13 +130,7 @@ export function RecentRunsMenu() {
     }
   }
 
-  function openRun(run: ValidationRunSummary) {
-    setOpen(false);
-    const project = run.project_id || 'shared';
-    navigate(
-      `/projects/${encodeURIComponent(project)}/report/quality?runId=${encodeURIComponent(run.run_id)}`,
-    );
-  }
+
 
   return (
     <div className="relative" ref={rootRef}>
@@ -202,10 +196,8 @@ export function RecentRunsMenu() {
               <ul>
                 {runs.map((run) => (
                   <li key={run.run_id}>
-                    <button
-                      type="button"
-                      className="flex w-full flex-col gap-0.5 border-b border-[#1a1b28] px-4 py-3 text-left last:border-0 hover:bg-[#13141e]"
-                      onClick={() => openRun(run)}
+                    <div
+                      className="flex w-full flex-col gap-0.5 border-b border-[#1a1b28] px-4 py-3 text-left last:border-0"
                     >
                       <span className="text-sm font-medium text-[#f1f5f9]">
                         {getRunDisplayName(run)}
@@ -220,7 +212,7 @@ export function RecentRunsMenu() {
                         <span className="text-[#6b7280]">·</span>
                         <span>{relativeTime(runTimestamp(run))}</span>
                       </span>
-                    </button>
+                    </div>
                   </li>
                 ))}
               </ul>

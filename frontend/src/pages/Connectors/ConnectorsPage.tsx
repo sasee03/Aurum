@@ -127,11 +127,8 @@ function CsvPanel({ projectId }: { projectId: string }) {
     setUploading(true);
     setMismatch(null);
     try {
-      const report = await uploadDatasetCsv(file, projectId);
-      toast.success('CSV validated — proceeding to pipeline configuration.');
-      navigate(
-        `/projects/${projectId}/validate/config?runId=${encodeURIComponent(report.run_id)}`,
-      );
+      await uploadDatasetCsv(file, projectId);
+      toast.success('CSV file uploaded and validated.');
     } catch (err) {
       if (err instanceof CsvUploadError) {
         setMismatch(err.mismatch);
@@ -403,16 +400,13 @@ function PostgresPanel({ projectId }: { projectId: string }) {
     setValidating(true);
     setMismatch(null);
     try {
-      const report = await validatePostgresTable({
+      await validatePostgresTable({
         connection_id: connectionId,
         schema: selectedSchema,
         table: selectedTable,
         project_id: projectId,
       });
-      toast.success('Table validated — opening quality report.');
-      navigate(
-        `/projects/${projectId}/report/quality?runId=${encodeURIComponent(report.run_id)}`,
-      );
+      toast.success('Table validated successfully.');
     } catch (err) {
       if (err instanceof CsvUploadError) {
         setMismatch(err.mismatch);

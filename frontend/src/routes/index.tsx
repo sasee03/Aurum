@@ -1,4 +1,4 @@
-import { createBrowserRouter, RouterProvider } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, Navigate, useParams, useLocation } from 'react-router-dom';
 import { AppLayout } from '@/layouts/AppLayout';
 import { LandingPage } from '@/pages/Landing/LandingPage';
 import { NewProjectPage } from '@/pages/NewProject/NewProjectPage';
@@ -13,7 +13,13 @@ import { GoldValidationPage } from '@/pages/GoldValidation/GoldValidationPage';
 import { RunHistoryPage } from '@/pages/RunHistory/RunHistoryPage';
 import { CustomChecksPage } from '@/pages/CustomChecks/CustomChecksPage';
 import { DocumentationPage } from '@/pages/Documentation/DocumentationPage';
-// Removed pages: ImpactAnalysis, TrustScoring, QualityReport, Remediation, Audit, ValidationDashboard
+import { AuditPage } from '@/pages/Audit/AuditPage';
+
+function LegacyProjectRedirect({ target }: { target: string }) {
+  const { id } = useParams<{ id: string }>();
+  const location = useLocation();
+  return <Navigate to={`/projects/${encodeURIComponent(id || 'demo')}/${target}${location.search}`} replace />;
+}
 
 const router = createBrowserRouter([
   {
@@ -25,14 +31,19 @@ const router = createBrowserRouter([
       { path: 'history', element: <RunHistoryPage /> },
       { path: 'custom-checks', element: <CustomChecksPage /> },
       { path: 'documentation', element: <DocumentationPage /> },
+      { path: 'settings/audit', element: <AuditPage /> },
       { path: 'projects/:id/dashboard', element: <ProjectDashboardPage /> },
       { path: 'projects/:id/connect', element: <ConnectorsPage /> },
+      { path: 'projects/:id/bronze', element: <BronzeValidationPage /> },
+      { path: 'projects/:id/silver', element: <SilverValidationPage /> },
+      { path: 'projects/:id/gold', element: <GoldValidationPage /> },
       { path: 'projects/:id/select', element: <DatasetExplorerPage /> },
       { path: 'projects/:id/metadata', element: <MetadataDiscoveryPage /> },
       { path: 'projects/:id/validate/config', element: <PipelineConfigPage /> },
-      { path: 'projects/:id/validate/bronze', element: <BronzeValidationPage /> },
-      { path: 'projects/:id/validate/silver', element: <SilverValidationPage /> },
-      { path: 'projects/:id/validate/gold', element: <GoldValidationPage /> },
+      // Compatibility redirects from legacy URLs
+      { path: 'projects/:id/validate/bronze', element: <LegacyProjectRedirect target="bronze" /> },
+      { path: 'projects/:id/validate/silver', element: <LegacyProjectRedirect target="silver" /> },
+      { path: 'projects/:id/validate/gold', element: <LegacyProjectRedirect target="gold" /> },
     ],
   },
 ]);

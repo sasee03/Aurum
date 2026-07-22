@@ -240,7 +240,7 @@ export function PipelineConfigPage() {
   const checksById = new Map(layerChecks.map((check) => [check.check_id, check]));
 
   const openCheck = (checkId: string) => {
-    const target = withRunIdQuery(`/projects/${id}/validate/${activeStageId}`, activeRunId);
+    const target = withRunIdQuery(`/projects/${id}/${activeStageId}`, activeRunId);
     navigate(`${target}#${encodeURIComponent(checkId)}`);
   };
 
@@ -316,9 +316,9 @@ export function PipelineConfigPage() {
           <Button
             variant="primary"
             rightIcon={<PlayCircle size={16} />}
-            onClick={() => navigate(withRunIdQuery(`/projects/${id}/validate/execution`, activeRunId))}
+            onClick={() => navigate(withRunIdQuery(`/projects/${id}/bronze`, activeRunId))}
           >
-            Start Validation
+            Proceed to Bronze Layer
           </Button>
         </div>
       </div>

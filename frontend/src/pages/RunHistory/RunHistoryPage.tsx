@@ -116,9 +116,7 @@ export function RunHistoryPage() {
               {runs.map((run) => (
                 <tr
                   key={run.run_id}
-                  className="border-b border-[#252637] last:border-b-0 cursor-pointer hover:bg-[#1a1b28] transition-colors"
-                  onClick={() => navigate(`/projects/shared/report/quality?runId=${encodeURIComponent(run.run_id)}`)}
-                  title={`Open report for ${getRunDisplayName(run)}`}
+                  className="border-b border-[#252637] last:border-b-0"
                 >
                   <td className="px-4 py-3">
                     <div className="font-medium text-[#f1f5f9]">{getRunDisplayName(run)}</div>

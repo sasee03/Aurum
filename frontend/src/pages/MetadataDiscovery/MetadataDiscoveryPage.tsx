@@ -341,10 +341,10 @@ export function MetadataDiscoveryPage() {
             variant="primary"
             rightIcon={<ArrowRight size={16} />}
             onClick={() =>
-              navigate(withRunIdQuery(`/projects/${id}/validate/config`, runId))
+              navigate(withRunIdQuery(`/projects/${id}/bronze`, runId))
             }
           >
-            Configure Pipeline
+            Proceed to Bronze Layer
           </Button>
         </div>
       </div>

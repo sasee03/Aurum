@@ -49,12 +49,7 @@ export function ProjectDashboardPage() {
 
   const report = data?.report;
 
-  // If the project has a last_run_id and we're not already showing that report,
-  // redirect straight to the quality report page which handles ?runId= correctly.
-  if (lastRunId && report?.run_id !== lastRunId) {
-    navigate(`/projects/${id}/report/quality?runId=${encodeURIComponent(lastRunId)}`, { replace: true });
-    return null;
-  }
+
 
   if (!report) {
     return (
@@ -118,23 +113,13 @@ export function ProjectDashboardPage() {
         <Button variant="ghost" onClick={() => navigate('/')}>
           Home
         </Button>
-        {lastRunId ? (
-          <Button
-            variant="primary"
-            rightIcon={<ArrowRight size={16} />}
-            onClick={() => navigate(`/projects/${id}/report/quality?runId=${encodeURIComponent(lastRunId)}`)}
-          >
-            View Last Report
-          </Button>
-        ) : (
-          <Button
-            variant="primary"
-            rightIcon={<ArrowRight size={16} />}
-            onClick={() => navigate(`/projects/${id}/validate/execution`)}
-          >
-            Run / View Execution
-          </Button>
-        )}
+        <Button
+          variant="primary"
+          rightIcon={<ArrowRight size={16} />}
+          onClick={() => navigate(`/projects/${id}/bronze`)}
+        >
+          Open Bronze Layer
+        </Button>
       </div>
     </div>
   );

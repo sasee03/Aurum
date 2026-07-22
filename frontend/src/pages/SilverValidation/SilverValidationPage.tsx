@@ -1,4 +1,3 @@
-import React from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
@@ -6,15 +5,11 @@ import { Badge } from '@/components/ui/Badge';
 import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
+import { withRunIdQuery } from '@/hooks/useReport';
 
 /*
-  Simplified Silver Validation page scaffold.
-  Visual structure is based on the provided design image:
-  - Selected Bronze Table
-  - Cleaning Rules list + Generate SQL
-  - Generated SQL per rule
-  - Planned Changes + Transformation Result
-  - Silver Data Preview
+  Silver Layer page scaffold.
+  Preserves Sasee's information architecture with honest preview markers.
 */
 
 export function SilverValidationPage() {
@@ -35,7 +30,7 @@ export function SilverValidationPage() {
   const generatedSql = cleaningRules.map((r, i) => ({
     id: `rule-${i + 1}`,
     title: r,
-    sql: `-- SQL for: ${r}\nSELECT * FROM __INPUT__`,
+    sql: `-- Transformation step ${i + 1}: ${r}\nSELECT * FROM __INPUT__`,
   }));
 
   const previewRows = [
@@ -51,14 +46,14 @@ export function SilverValidationPage() {
 
       <div className="px-6 py-6 border-b border-[#252637]">
         <div className="flex items-center gap-3">
-          <h2 className="text-xl font-bold text-[#f1f5f9]">Silver Validation</h2>
-          <DataSourceBadge mode="live" />
-          <Badge variant="secondary">LAYER FAIL</Badge>
+          <h2 className="text-xl font-bold text-[#f1f5f9]">Silver Layer</h2>
+          <DataSourceBadge mode="planned" />
+          <Badge variant="secondary">Preview Shell</Badge>
         </div>
         <p className="mt-1 text-sm text-[#6b7280]">Clean and transform your Bronze data to build trusted Silver layer.</p>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-[#090a10]">
+      <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-[#090a10] scrollbar-thin">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-4">
             <div className="rounded-xl border border-[#252637] p-4 bg-[#0d0e14]">
@@ -98,7 +93,7 @@ export function SilverValidationPage() {
 
           <div className="space-y-4">
             <div className="rounded-xl border border-[#252637] p-4 bg-[#0d0e14]">
-              <h3 className="text-sm font-semibold text-[#f1f5f9]">3. Generated SQL (Per Rule)</h3>
+              <h3 className="text-sm font-semibold text-[#f1f5f9]">3. Generated Transformation SQL</h3>
               <div className="mt-3 space-y-2 text-xs text-[#94a3b8]">
                 {generatedSql.map((g) => (
                   <div key={g.id} className="rounded border border-[#252637] p-2 bg-[#0b0c12]">
@@ -157,12 +152,21 @@ export function SilverValidationPage() {
       </div>
 
       <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-4 flex items-center justify-between">
-        <Button variant="ghost" onClick={() => navigate(`/projects/${id}/validate/bronze`)}>
+        <Button variant="ghost" onClick={() => navigate(withRunIdQuery(`/projects/${id}/bronze`, runId))}>
           Back to Bronze
         </Button>
-        <Button variant="primary" rightIcon={<ArrowRight size={16} />}>
-          Approve & Execute
-        </Button>
+        <div className="flex items-center gap-3">
+          <Button variant="secondary" disabled title="Transformation execution planned in Batch 3">
+            Approve &amp; Execute (Planned)
+          </Button>
+          <Button
+            variant="primary"
+            rightIcon={<ArrowRight size={16} />}
+            onClick={() => navigate(withRunIdQuery(`/projects/${id}/gold`, runId))}
+          >
+            Continue to Gold
+          </Button>
+        </div>
       </div>
     </div>
   );
