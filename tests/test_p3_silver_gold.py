@@ -108,18 +108,15 @@ def test_legacy_gold_execute_is_rejected_before_postgres(
     _seed_gold_run(run_id, provenance)
     calls = {"candidate": 0, "promotion": 0, "collision": 0}
 
-    def candidate_spy(*args, **kwargs):
-        calls["candidate"] += 1
-
-    def promotion_spy(*args, **kwargs):
-        calls["promotion"] += 1
-
     def collision_spy(*args, **kwargs):
         calls["collision"] += 1
         return False
 
-    monkeypatch.setattr(router, "execute_candidate_sql", candidate_spy)
-    monkeypatch.setattr(router, "promote_candidate_table", promotion_spy)
+    monkeypatch.setattr(
+        router,
+        "get_generated_sql_pool",
+        lambda: pytest.fail("contained execution must not reach PostgreSQL"),
+    )
     monkeypatch.setattr(router, "check_table_exists", collision_spy)
 
     response = client.post(
@@ -140,17 +137,8 @@ def test_silver_trusted_provenance_does_not_authorize_gold(monkeypatch):
 
     monkeypatch.setattr(
         router,
-        "execute_candidate_sql",
-        lambda *args, **kwargs: calls.__setitem__(
-            "candidate", calls["candidate"] + 1
-        ),
-    )
-    monkeypatch.setattr(
-        router,
-        "promote_candidate_table",
-        lambda *args, **kwargs: calls.__setitem__(
-            "promotion", calls["promotion"] + 1
-        ),
+        "get_generated_sql_pool",
+        lambda: pytest.fail("Silver trust must not reach Gold PostgreSQL"),
     )
 
     response = client.post(

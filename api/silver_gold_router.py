@@ -5,11 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-import datetime
 from typing import List
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 import psycopg
 
 try:
@@ -20,12 +19,24 @@ except ImportError:  # pragma: no cover - dependency is required in production
 from src.app_state.db import get_connection
 from src.db_config import (
     get_generated_sql_pool,
-    postgres_promotion_conninfo,
     load_layer_schemas,
 )
+from src.gold_catalog import (
+    GoldCatalogResolutionError,
+    resolve_gold_approval_catalog,
+)
+from src.gold_security import (
+    GoldStateMalformed,
+    GoldStateStale,
+    approval_timestamp,
+    build_approval_snapshot,
+    canonical_json,
+    load_gold_security_state,
+    load_persisted_gold_security_state,
+    revision_for,
+)
 from src.generator_trust import GeneratorTrustPolicy
-from src.sql_safety import validate_generated_sql, execute_candidate_sql
-from src.promotion import promote_candidate_table
+from src.sql_safety import validate_generated_sql
 
 router = APIRouter(prefix="/api/v1/gold", tags=["gold"])
 logger = logging.getLogger(__name__)
@@ -44,6 +55,15 @@ GOLD_REVIEW_UNAVAILABLE = (
     "Gold review is unavailable because this run was not produced by a trusted, "
     "hardened generator."
 )
+GOLD_UNAVAILABLE = "GOLD_UNAVAILABLE"
+GOLD_RUN_NOT_FOUND = "GOLD_RUN_NOT_FOUND"
+GOLD_RUN_MALFORMED = "GOLD_RUN_MALFORMED"
+GOLD_APPROVAL_REQUIRED = "GOLD_APPROVAL_REQUIRED"
+GOLD_APPROVAL_STALE = "GOLD_APPROVAL_STALE"
+GOLD_STATE_CONFLICT = "GOLD_STATE_CONFLICT"
+GOLD_SOURCE_IDENTITY_CHANGED = "GOLD_SOURCE_IDENTITY_CHANGED"
+GOLD_TARGET_IDENTITY_CHANGED = "GOLD_TARGET_IDENTITY_CHANGED"
+GOLD_DATABASE_UNAVAILABLE = "GOLD_DATABASE_UNAVAILABLE"
 
 class GenerateGoldPayload(BaseModel):
     target_table_name: str
@@ -52,6 +72,13 @@ class GenerateGoldPayload(BaseModel):
 
 class ExecuteGoldPayload(BaseModel):
     overwrite: bool = False
+
+
+class ApproveGoldPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    review_revision: StrictStr = Field(pattern=r"^[0-9a-f]{64}$")
+    overwrite: StrictBool
 
 def check_table_exists(schema_name: str, table_name: str) -> bool:
     """Check if a table exists in the given schema."""
@@ -186,11 +213,16 @@ def review_gold_sql(run_id: str):
     with get_connection() as conn:
         row = conn.execute(
             """
-            SELECT table_name, sql_text, planned_changes_json, generator_provenance
+            SELECT run_id, table_name, sql_text, planned_changes_json,
+                   candidate_schema, generator_provenance
             FROM generated_sql_review
             WHERE run_id = ?
             """,
             (run_id,)
+        ).fetchone()
+        security_row = conn.execute(
+            "SELECT * FROM gold_security_state WHERE run_id = ?",
+            (run_id,),
         ).fetchone()
         
     if not row:
@@ -198,107 +230,314 @@ def review_gold_sql(run_id: str):
 
     if not GOLD_GENERATOR_TRUST.trusts_run(row["generator_provenance"]):
         raise HTTPException(status_code=503, detail=GOLD_REVIEW_UNAVAILABLE)
-        
-    sql_text = row["sql_text"]
-    
+
     try:
         schemas = load_layer_schemas()
-        validated_sql = validate_generated_sql(sql_text, expected_schema=schemas.gold_candidates, run_id=run_id, expected_step_count=None)
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"SQL failed structural validation: {e}")
+        state = load_gold_security_state(
+            security_row,
+            row,
+            configured_silver_schema=schemas.silver,
+            configured_gold_schema=schemas.gold,
+            configured_candidate_schema=schemas.gold_candidates,
+        )
+        validated_sql = validate_generated_sql(
+            row["sql_text"],
+            expected_schema=schemas.gold_candidates,
+            expected_table_name=state.target["table"],
+            run_id=run_id,
+            expected_step_count=None,
+        )
+        planned_changes = json.loads(row["planned_changes_json"])
+    except (GoldStateMalformed, GoldStateStale, TypeError, ValueError):
+        raise HTTPException(status_code=422, detail=GOLD_RUN_MALFORMED) from None
+    except Exception:
+        logger.exception("Gold review validation failed for run %s", run_id)
+        raise HTTPException(status_code=422, detail=GOLD_RUN_MALFORMED) from None
 
     return {
         "run_id": run_id,
         "table_name": row["table_name"],
-        "planned_changes": json.loads(row["planned_changes_json"]),
+        "planned_changes": planned_changes,
         "sql_text": validated_sql,
+        "review_revision": state.review_revision,
+        "approved_revision": state.approved_revision,
         "executed": False,
-        "message": "SQL is validated and ready for execution."
+        "message": (
+            "Gold plan is approved but production execution remains unavailable."
+            if state.approved_revision
+            else "Gold plan is ready for explicit approval."
+        ),
     }
+
+
+
+def _load_gold_rows(conn, run_id: str):
+    envelope = conn.execute(
+        """
+        SELECT run_id, table_name, sql_text, planned_changes_json, status,
+               candidate_schema, generator_provenance
+        FROM generated_sql_review
+        WHERE run_id = ?
+        """,
+        (run_id,),
+    ).fetchone()
+    security = conn.execute(
+        "SELECT * FROM gold_security_state WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    return envelope, security
+
+
+def _approval_response(state, *, idempotent: bool) -> dict:
+    assert state.approved_revision is not None
+    assert state.approval_snapshot is not None
+    assert state.overwrite_authorized is not None
+    return {
+        "status": "unchanged" if idempotent else "approved",
+        "run_id": state.run_id,
+        "review_revision": state.review_revision,
+        "approved_revision": state.approved_revision,
+        "approved_at": state.approved_at,
+        "overwrite_authorized": state.overwrite_authorized,
+        "target_state": state.approval_snapshot["target_identity"]["state"],
+    }
+
+
+@router.post("/approve/{run_id}")
+def approve_gold_sql(run_id: str, payload: ApproveGoldPayload):
+    """Persist one immutable execution authorization for the reviewed Gold plan."""
+    with get_connection() as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row, security_row = _load_gold_rows(conn, run_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail=GOLD_RUN_NOT_FOUND)
+            if row["status"] != "PENDING":
+                raise HTTPException(status_code=409, detail=GOLD_STATE_CONFLICT)
+            if not GOLD_GENERATOR_TRUST.trusts_run(row["generator_provenance"]):
+                raise HTTPException(status_code=503, detail=GOLD_UNAVAILABLE)
+            if (
+                security_row is not None
+                and security_row["approved_revision"] is not None
+            ):
+                try:
+                    state = load_persisted_gold_security_state(
+                        security_row,
+                        row,
+                    )
+                    validate_generated_sql(
+                        row["sql_text"],
+                        expected_schema=state.candidate["schema"],
+                        expected_table_name=state.target["table"],
+                        run_id=run_id,
+                        expected_step_count=None,
+                    )
+                except GoldStateStale:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=GOLD_APPROVAL_STALE,
+                    ) from None
+                except GoldStateMalformed:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=GOLD_RUN_MALFORMED,
+                    ) from None
+                except Exception:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=GOLD_RUN_MALFORMED,
+                    ) from None
+                if payload.review_revision != state.review_revision:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=GOLD_APPROVAL_STALE,
+                    )
+                if state.overwrite_authorized != payload.overwrite:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=GOLD_STATE_CONFLICT,
+                    )
+                conn.rollback()
+                return _approval_response(state, idempotent=True)
+            try:
+                schemas = load_layer_schemas()
+                state = load_gold_security_state(
+                    security_row,
+                    row,
+                    configured_silver_schema=schemas.silver,
+                    configured_gold_schema=schemas.gold,
+                    configured_candidate_schema=schemas.gold_candidates,
+                )
+            except GoldStateStale:
+                raise HTTPException(
+                    status_code=409,
+                    detail=GOLD_APPROVAL_STALE,
+                ) from None
+            except GoldStateMalformed:
+                raise HTTPException(
+                    status_code=422,
+                    detail=GOLD_RUN_MALFORMED,
+                ) from None
+            except Exception:
+                logger.exception("Gold approval configuration failed")
+                raise HTTPException(
+                    status_code=503,
+                    detail=GOLD_UNAVAILABLE,
+                ) from None
+            if payload.review_revision != state.review_revision:
+                raise HTTPException(status_code=409, detail=GOLD_APPROVAL_STALE)
+            try:
+                validate_generated_sql(
+                    row["sql_text"],
+                    expected_schema=schemas.gold_candidates,
+                    expected_table_name=state.target["table"],
+                    run_id=run_id,
+                    expected_step_count=None,
+                )
+            except Exception:
+                raise HTTPException(
+                    status_code=422,
+                    detail=GOLD_RUN_MALFORMED,
+                ) from None
+
+            try:
+                catalog = resolve_gold_approval_catalog(
+                    selected_sources=state.selected_sources,
+                    target=state.target,
+                )
+            except GoldCatalogResolutionError as exc:
+                if exc.area == "database":
+                    raise HTTPException(
+                        status_code=503,
+                        detail=GOLD_DATABASE_UNAVAILABLE,
+                    ) from None
+                if exc.area == "target":
+                    raise HTTPException(
+                        status_code=409,
+                        detail=GOLD_TARGET_IDENTITY_CHANGED,
+                    ) from None
+                if exc.area == "source":
+                    raise HTTPException(
+                        status_code=409,
+                        detail=GOLD_SOURCE_IDENTITY_CHANGED,
+                    ) from None
+                raise HTTPException(
+                    status_code=503,
+                    detail=GOLD_DATABASE_UNAVAILABLE,
+                ) from None
+            except Exception as exc:
+                if _is_connectivity_error(exc):
+                    logger.warning(
+                        "Gold approval database unavailable: %s",
+                        type(exc).__name__,
+                    )
+                else:
+                    logger.exception("Gold approval catalog resolution failed")
+                raise HTTPException(
+                    status_code=503,
+                    detail=GOLD_DATABASE_UNAVAILABLE,
+                ) from None
+
+            target_state = catalog.target_identity.get("state")
+            if (
+                target_state == "existing" and not payload.overwrite
+            ) or (
+                target_state == "absent" and payload.overwrite
+            ):
+                raise HTTPException(status_code=409, detail=GOLD_STATE_CONFLICT)
+            try:
+                approval_snapshot = build_approval_snapshot(
+                    review_snapshot=state.review_snapshot,
+                    review_revision=state.review_revision,
+                    database_oid=catalog.database_oid,
+                    database_name=catalog.database_name,
+                    source_identities=catalog.source_identities,
+                    target_identity=catalog.target_identity,
+                    overwrite_authorized=payload.overwrite,
+                )
+            except GoldStateMalformed:
+                raise HTTPException(
+                    status_code=422,
+                    detail=GOLD_RUN_MALFORMED,
+                ) from None
+
+            approved_revision = revision_for(approval_snapshot)
+            approved_at = approval_timestamp()
+            cursor = conn.execute(
+                """
+                UPDATE gold_security_state
+                SET approval_snapshot_json = ?,
+                    approved_revision = ?,
+                    approved_at = ?,
+                    overwrite_authorized = ?,
+                    source_identities_json = ?,
+                    target_identity_json = ?
+                WHERE run_id = ?
+                  AND review_revision = ?
+                  AND approved_revision IS NULL
+                """,
+                (
+                    canonical_json(approval_snapshot),
+                    approved_revision,
+                    approved_at,
+                    int(payload.overwrite),
+                    canonical_json(list(catalog.source_identities)),
+                    canonical_json(catalog.target_identity),
+                    run_id,
+                    state.review_revision,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise HTTPException(status_code=409, detail=GOLD_STATE_CONFLICT)
+            refreshed_security = conn.execute(
+                "SELECT * FROM gold_security_state WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            approved_state = load_gold_security_state(
+                refreshed_security,
+                row,
+                configured_silver_schema=schemas.silver,
+                configured_gold_schema=schemas.gold,
+                configured_candidate_schema=schemas.gold_candidates,
+            )
+            conn.commit()
+            return _approval_response(approved_state, idempotent=False)
+        except HTTPException:
+            conn.rollback()
+            raise
+
 
 @router.post("/execute/{run_id}")
 def execute_gold_sql(run_id: str, payload: ExecuteGoldPayload):
-    """Execute only runs produced by a trusted, hardened Gold generator."""
+    """Fail closed before PostgreSQL until later execution controls exist."""
     with get_connection() as conn_db:
-        row = conn_db.execute(
-            """
-            SELECT table_name, sql_text, generator_provenance
-            FROM generated_sql_review
-            WHERE run_id = ?
-            """,
-            (run_id,)
-        ).fetchone()
-        
-    if not row:
-        raise HTTPException(status_code=404, detail="Run ID not found or already executed.")
+        row, security_row = _load_gold_rows(conn_db, run_id)
 
+    if row is None:
+        raise HTTPException(status_code=404, detail=GOLD_RUN_NOT_FOUND)
     if not GOLD_GENERATOR_TRUST.trusts_run(row["generator_provenance"]):
         raise HTTPException(status_code=503, detail=GOLD_EXECUTION_UNAVAILABLE)
-        
-    table_name = row["table_name"]
-    sql_text = row["sql_text"]
-    
-    schemas = load_layer_schemas()
-    
-    # 1. TOCTOU Check: Ensure overwrite is respected at execution time
-    exists = check_table_exists(schemas.gold, table_name)
-    if exists and not payload.overwrite:
-        raise HTTPException(
-            status_code=409, 
-            detail=f"Table '{table_name}' exists in the gold schema. Provide overwrite=True to replace it."
+    if row["status"] != "PENDING":
+        raise HTTPException(status_code=409, detail=GOLD_APPROVAL_STALE)
+
+    try:
+        schemas = load_layer_schemas()
+        state = load_gold_security_state(
+            security_row,
+            row,
+            configured_silver_schema=schemas.silver,
+            configured_gold_schema=schemas.gold,
+            configured_candidate_schema=schemas.gold_candidates,
         )
-
-    # 2. Execution and Ownership Transfer (aurum_generated_sql -> aurum_promotion)
-    try:
-        with get_generated_sql_pool().connection() as conn:
-            execute_candidate_sql(sql_text, conn, expected_schema=schemas.gold_candidates, run_id=run_id)
-            conn.commit()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to execute candidate SQL: {e}")
-
-    candidate_name = f"{table_name}_candidate_{run_id}"
-
-    # 3. P3.5: Gold preview via LIMIT from the candidate table
-    preview_rows = []
-    total_rows = 0
-    try:
-        with get_generated_sql_pool().connection() as conn:
-            with conn.cursor() as cur:
-                # Count
-                cur.execute(f'SELECT COUNT(*) FROM "{schemas.gold_candidates}"."{candidate_name}"')
-                total_rows = cur.fetchone()[0]
-                
-                # Preview
-                cur.execute(f'SELECT * FROM "{schemas.gold_candidates}"."{candidate_name}" LIMIT 5')
-                cols = [desc[0] for desc in cur.description] if cur.description else []
-                preview_rows = [dict(zip(cols, row)) for row in cur.fetchall()]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to preview gold candidate table: {e}")
-
-    # 4. Promotion to Gold (aurum_promotion)
-    try:
-        promote_candidate_table(
-            candidate_table=candidate_name,
-            candidate_schema=schemas.gold_candidates,
-            target_table=table_name,
-            target_schema=schemas.gold,
-            promotion_conninfo=postgres_promotion_conninfo()
-        )
-        now_promoted = datetime.datetime.utcnow().isoformat()
-        with get_connection() as conn_db:
-            conn_db.execute(
-                "UPDATE generated_sql_review SET status = 'PROMOTED', promoted_at = ? WHERE run_id = ?",
-                (now_promoted, run_id)
-            )
-            conn_db.commit()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to promote candidate to gold: {e}")
-        
-    return {
-        "status": "success",
-        "run_id": run_id,
-        "table_name": table_name,
-        "total_rows": total_rows,
-        "preview_rows": preview_rows,
-        "message": f"Successfully executed and promoted {table_name} to Gold."
-    }
+    except GoldStateStale:
+        raise HTTPException(status_code=409, detail=GOLD_APPROVAL_STALE) from None
+    except GoldStateMalformed:
+        raise HTTPException(status_code=422, detail=GOLD_RUN_MALFORMED) from None
+    except Exception:
+        logger.exception("Gold execution preflight configuration failed")
+        raise HTTPException(status_code=503, detail=GOLD_UNAVAILABLE) from None
+    if state.approved_revision is None:
+        raise HTTPException(status_code=409, detail=GOLD_APPROVAL_REQUIRED)
+    if payload.overwrite != state.overwrite_authorized:
+        raise HTTPException(status_code=409, detail=GOLD_APPROVAL_STALE)
+    raise HTTPException(status_code=503, detail=GOLD_EXECUTION_UNAVAILABLE)

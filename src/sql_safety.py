@@ -7,7 +7,7 @@ import re
 import sqlglot
 from sqlglot import exp
 
-from src.db_config import LayerSchemas, load_layer_schemas
+from src.db_config import LayerSchemas
 
 
 class SqlSafetyViolation(Exception):
@@ -73,6 +73,9 @@ def validate_generated_sql(
     Supports modes:
     - "generic": Basic AST safety, no forbidden DDL/DML, target schema/candidate checks.
     - "p2_silver": P2 sequential Silver transformation policy (strict CTE chain, physical source binding).
+
+    Schema identities are caller-supplied so validation never reinterprets persisted
+    SQL against current environment configuration.
     """
     if not sql_str or not sql_str.strip():
         raise SqlSafetyViolation("Empty SQL statement.")
@@ -130,7 +133,6 @@ def validate_generated_sql(
         if not schema_node:
             raise SqlSafetyViolation("CREATE TABLE must specify a target schema.")
 
-        schemas = layer_schemas or load_layer_schemas()
         schema_name = schema_node.name
         if schema_name != expected_schema:
             raise SqlSafetyViolation(

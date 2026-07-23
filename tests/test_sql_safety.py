@@ -1,6 +1,7 @@
 """Unit tests for AST structural safety gate."""
 
 import pytest
+import src.sql_safety as sql_safety
 from src.sql_safety import validate_generated_sql as _validate_generated_sql, SqlSafetyViolation
 from src.db_config import load_layer_schemas
 
@@ -12,6 +13,32 @@ def validate_generated_sql(sql_str: str, **kwargs):
 
 
 RUN_ID = "run_20260721"
+
+
+def test_generic_validation_does_not_load_current_layer_config(monkeypatch):
+    calls = {"count": 0}
+
+    def unavailable_config():
+        calls["count"] += 1
+        pytest.fail("generic structural validation must not load layer config")
+
+    monkeypatch.setattr(
+        sql_safety,
+        "load_layer_schemas",
+        unavailable_config,
+        raising=False,
+    )
+    sql = (
+        f"CREATE TABLE {schemas.silver_candidates}."
+        f"orders_candidate_{RUN_ID} AS SELECT * FROM bronze.orders"
+    )
+    result = validate_generated_sql(
+        sql,
+        expected_table_name="orders",
+        run_id=RUN_ID,
+    )
+    assert "CREATE TABLE" in result
+    assert calls["count"] == 0
 
 
 def test_valid_select_query():

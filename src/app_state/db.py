@@ -87,6 +87,30 @@ CREATE TABLE IF NOT EXISTS generated_sql_review (
     planned_changes_json TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS gold_security_state (
+    run_id TEXT PRIMARY KEY,
+    model_version TEXT NOT NULL,
+    policy_version TEXT NOT NULL,
+    business_requirement TEXT NOT NULL,
+    selected_sources_json TEXT NOT NULL,
+    target_schema TEXT NOT NULL,
+    target_name TEXT NOT NULL,
+    candidate_schema TEXT NOT NULL,
+    candidate_name TEXT NOT NULL,
+    generator_provenance TEXT NOT NULL,
+    generator_version TEXT NOT NULL,
+    review_snapshot_json TEXT NOT NULL,
+    review_revision TEXT NOT NULL,
+    approval_snapshot_json TEXT,
+    approved_revision TEXT,
+    approved_at TEXT,
+    overwrite_authorized INTEGER
+        CHECK (overwrite_authorized IS NULL OR overwrite_authorized IN (0, 1)),
+    source_identities_json TEXT,
+    target_identity_json TEXT,
+    FOREIGN KEY (run_id) REFERENCES generated_sql_review(run_id)
+);
 """
 
 
