@@ -2,11 +2,25 @@
 
 from __future__ import annotations
 
+import json
+import hashlib
+import logging
 import os
+import re
 import sqlite3
 from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_RELATIVE_PATH = Path("data") / "app_state.sqlite"
+
+REVISION_REGEX = re.compile(r"^[0-9a-f]{64}$")
+
+
+def is_valid_rule_revision(value: Any) -> bool:
+    """Return True if value is exactly a 64-character lowercase hex SHA-256 string."""
+    return isinstance(value, str) and bool(REVISION_REGEX.match(value))
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS projects (
@@ -92,6 +106,18 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
 
+def compute_rule_revision(rules: Any) -> str | None:
+    """Compute deterministic canonical full 64-char SHA-256 rule revision hash.
+
+    Returns None if rules is not a valid list[str].
+    """
+    if not isinstance(rules, list) or not all(isinstance(x, str) for x in rules):
+        return None
+    normalized = [r.strip() for r in rules if isinstance(r, str) and r.strip()]
+    canonical_json = json.dumps(normalized, separators=(',', ':'))
+    return hashlib.sha256(canonical_json.encode('utf-8')).hexdigest().lower()
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA_SQL)
     # Migrate older DBs created before source_schema/source_table existed.
@@ -103,6 +129,29 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "generated_sql_review", "status", "status TEXT")
     _ensure_column(conn, "generated_sql_review", "promoted_at", "promoted_at TEXT")
     _ensure_column(conn, "generated_sql_review", "candidate_schema", "candidate_schema TEXT")
+    _ensure_column(conn, "generated_sql_review", "attribution_log_json", "attribution_log_json TEXT")
+    _ensure_column(conn, "generated_sql_review", "generator_provenance", "generator_provenance TEXT")
+    _ensure_column(conn, "table_rules", "rule_revision", "rule_revision TEXT")
+    _ensure_column(conn, "generated_sql_review", "rule_revision", "rule_revision TEXT")
+
+    # Migration: Backfill existing valid table_rules rows where rule_revision IS NULL
+    try:
+        rows = conn.execute("SELECT table_name, rules_json FROM table_rules WHERE rule_revision IS NULL").fetchall()
+        for row in rows:
+            try:
+                decoded = json.loads(row["rules_json"])
+                rev = compute_rule_revision(decoded)
+                if rev is not None:
+                    conn.execute("UPDATE table_rules SET rule_revision = ? WHERE table_name = ?", (rev, row["table_name"]))
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning("Failed to backfill table_rules rule_revision: %s", e)
+
+    # Idempotent migration: Quarantine existing historical runs missing provenance
+    conn.execute(
+        "UPDATE generated_sql_review SET generator_provenance = 'untrusted_legacy' WHERE generator_provenance IS NULL"
+    )
     conn.commit()
 
 

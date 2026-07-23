@@ -7,7 +7,30 @@ import type { AurumReport } from '@/types/report';
 import type { DatabaseTarget } from '@/types/appMode';
 import { ApiError, API_UNAVAILABLE } from '@/utils/apiErrors';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
+export function normalizeApiUrl(rawBase: string, path: string): string {
+  let base = (rawBase || '').trim().replace(/\/+$/, '');
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+
+  if (!base) {
+    return cleanPath;
+  }
+
+  if (base.endsWith('/api/v1') && cleanPath.startsWith('/api/v1/')) {
+    base = base.slice(0, -7);
+  } else if (base.endsWith('/api/v1') && cleanPath.startsWith('/v1/')) {
+    base = base.slice(0, -3);
+  } else if (base.endsWith('/api') && cleanPath.startsWith('/api/')) {
+    base = base.slice(0, -4);
+  }
+
+  return base ? `${base}${cleanPath}` : cleanPath;
+}
+
+export function buildUrl(path: string): string {
+  const rawBase = import.meta.env.VITE_API_BASE_URL ?? '';
+  return normalizeApiUrl(rawBase, path);
+}
+
 const FETCH_TIMEOUT_MS = 8_000;
 const CONNECTOR_VALIDATION_TIMEOUT_MS = 5 * 60_000;
 
@@ -61,7 +84,7 @@ async function fetchWithTimeout(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const isFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData;
   try {
-    return await fetch(`${API_BASE}${path}`, {
+    return await fetch(buildUrl(path), {
       ...init,
       headers: isFormData
         ? { ...init?.headers }
@@ -583,5 +606,98 @@ export async function verifyBronze(tables: string[]): Promise<VerifyBronzeRespon
   return request<VerifyBronzeResponse>('/api/v1/source/verify-bronze', {
     method: 'POST',
     body: JSON.stringify({ tables }),
+  });
+}
+
+// ────────────────────────────────────────────
+// P2 Silver Transformation API Client Functions
+// ────────────────────────────────────────────
+
+export interface TransformSaveRulesRequest {
+  table_name: string;
+  rules: string[];
+}
+
+export interface TransformSaveRulesResponse {
+  status: string;
+  message: string;
+  rule_revision?: string;
+}
+
+export interface TransformGetRulesResponse {
+  table_name: string;
+  rules: string[];
+  rule_revision?: string;
+}
+
+export interface TransformGenerateRequest {
+  table_name: string;
+}
+
+export interface TransformGenerateResponse {
+  run_id: string;
+  status: string;
+  message: string;
+}
+
+export interface TransformPlannedChanges {
+  summary: string;
+  rules: string[];
+  cte_steps_detected: number;
+  attribution_safe: boolean;
+}
+
+export interface TransformReviewResponse {
+  run_id: string;
+  table_name: string;
+  planned_changes: TransformPlannedChanges;
+  sql_text: string;
+  executed: boolean;
+  executable: boolean;
+  status: string;
+  generator_provenance: string | null;
+  rule_revision?: string | null;
+  message: string;
+}
+
+export interface TransformExecuteResponse {
+  status: string;
+  run_id: string;
+  table_name: string;
+  attribution_log: string[] | null;
+  attribution_available: boolean;
+  message: string;
+}
+
+/** P2.1: Save free-text rules for a Bronze table */
+export async function transformSaveRules(tableName: string, rules: string[]): Promise<TransformSaveRulesResponse> {
+  return request<TransformSaveRulesResponse>('/api/v1/transform/rules', {
+    method: 'POST',
+    body: JSON.stringify({ table_name: tableName, rules }),
+  });
+}
+
+/** P2.1: Fetch saved rules for a table */
+export async function transformGetRules(tableName: string): Promise<TransformGetRulesResponse> {
+  return request<TransformGetRulesResponse>(`/api/v1/transform/rules/${encodeURIComponent(tableName)}`);
+}
+
+/** P2.2 & P2.3: Generate SQL via LLM for requested table */
+export async function transformGenerate(tableName: string): Promise<TransformGenerateResponse> {
+  return request<TransformGenerateResponse>('/api/v1/transform/generate', {
+    method: 'POST',
+    body: JSON.stringify({ table_name: tableName }),
+  });
+}
+
+/** P2.5: Review generated SQL */
+export async function transformReview(runId: string): Promise<TransformReviewResponse> {
+  return request<TransformReviewResponse>(`/api/v1/transform/review/${encodeURIComponent(runId)}`);
+}
+
+/** P2-B: Execute generated SQL and promote to Silver */
+export async function transformExecute(runId: string): Promise<TransformExecuteResponse> {
+  return request<TransformExecuteResponse>(`/api/v1/transform/execute/${encodeURIComponent(runId)}`, {
+    method: 'POST',
   });
 }

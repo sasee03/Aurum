@@ -1,18 +1,17 @@
-"""API Router for P2-A Bronze-to-Silver transformations via LLM."""
+"""API Router for P2-A Bronze-to-Silver transformations."""
 
 from __future__ import annotations
 
 import json
 import re
-import uuid
+import logging
 import datetime
-from typing import List, Dict, Any
+from typing import List, Optional, Set, Tuple, Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-import requests
 
-from src.app_state.db import get_connection
+from src.app_state.db import get_connection, compute_rule_revision, is_valid_rule_revision
 from src.db_config import (
     get_ingestion_pool, 
     get_generated_sql_pool, 
@@ -23,11 +22,33 @@ from src.sql_safety import validate_generated_sql, execute_candidate_sql
 from src.promotion import promote_candidate_table
 import sqlglot
 
+try:
+    import psycopg
+    from psycopg import OperationalError as PsycopgOperationalError
+except ImportError:
+    PsycopgOperationalError = None
+
+try:
+    from psycopg_pool import PoolTimeout, PoolClosed
+except ImportError:
+    PoolTimeout = PoolClosed = None
+
+def is_db_connection_error(exc: Exception) -> bool:
+    """Return True if exc is a genuine Postgres/pool connection operational error."""
+    if PsycopgOperationalError is not None and isinstance(exc, PsycopgOperationalError):
+        return True
+    if PoolTimeout is not None and isinstance(exc, PoolTimeout):
+        return True
+    if PoolClosed is not None and isinstance(exc, PoolClosed):
+        return True
+    return False
+
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/transform", tags=["transform"])
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3"
-OLLAMA_TIMEOUT = 15
+# Approved trusted generator provenances for execution eligibility
+TRUSTED_GENERATOR_PROVENANCES: Set[str] = {"ollama_v1_generic"}
 
 class RulesPayload(BaseModel):
     table_name: str
@@ -36,10 +57,83 @@ class RulesPayload(BaseModel):
 class GeneratePayload(BaseModel):
     table_name: str
 
+def is_trusted_provenance(provenance: Optional[str]) -> bool:
+    """Return True if provenance is recognized as a trusted generator implementation."""
+    if not provenance or not isinstance(provenance, str):
+        return False
+    return provenance in TRUSTED_GENERATOR_PROVENANCES
+
+def validate_sql_identifier(identifier: str) -> str:
+    """Ensure string is a safe SQL identifier matching standard naming patterns."""
+    if not identifier or not isinstance(identifier, str) or not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", identifier):
+        raise ValueError(f"Invalid SQL identifier: {identifier}")
+    return identifier
+
+def validate_rules_shape(rules: Any) -> List[str]:
+    """Ensure rules is a valid list[str] (reject dicts, scalars, numbers, nulls, or mixed arrays)."""
+    if not isinstance(rules, list) or not all(isinstance(x, str) for x in rules):
+        raise ValueError("Rules must be a flat list of strings.")
+    return rules
+
+def parse_attribution_log(raw_json: Optional[str]) -> Tuple[Optional[List[str]], bool]:
+    """Structurally parse stored attribution_log_json.
+
+    Returns (attribution_list, attribution_available).
+    Only valid list[str] payloads are returned as attribution_list.
+    Malformed JSON, dicts, scalars, or mixed arrays return (None, False).
+    """
+    if not raw_json or not isinstance(raw_json, str):
+        return None, False
+    try:
+        data = json.loads(raw_json)
+        if isinstance(data, list) and all(isinstance(x, str) for x in data):
+            return data, True
+        logger.warning("Stored attribution_log_json is not a list[str]: %r", type(data))
+        return None, False
+    except Exception as e:
+        logger.warning("Failed to parse attribution_log_json: %s", e)
+        return None, False
+
+def _update_run_status(run_id: str, status: str, **kwargs) -> bool:
+    """Helper for atomic terminal/lifecycle run-state transitions in SQLite."""
+    try:
+        fields = ["status = ?"]
+        params = [status]
+        for k, v in kwargs.items():
+            fields.append(f"{k} = ?")
+            params.append(v)
+        params.append(run_id)
+        set_clause = ", ".join(fields)
+        with get_connection() as conn:
+            cursor = conn.execute(f"UPDATE generated_sql_review SET {set_clause} WHERE run_id = ?", params)
+            conn.commit()
+            return cursor.rowcount > 0
+    except Exception as e:
+        logger.error("Failed to update status to %s for run %s: %s", status, run_id, e)
+        return False
+
+class TableNotFoundError(Exception):
+    """Raised when a table is not found in the target schema."""
+    pass
+
+class DatabaseConnectionError(Exception):
+    """Raised when database connection or query fails."""
+    pass
+
+class ConfigurationError(Exception):
+    """Raised when Aurum layer/schema configuration is invalid."""
+    pass
+
 def get_table_schema(table_name: str) -> str:
     """Fetch schema details for a table in the bronze schema."""
-    import psycopg
-    schemas = load_layer_schemas()
+    table_name = validate_sql_identifier(table_name)
+    try:
+        schemas = load_layer_schemas()
+        bronze_schema = validate_sql_identifier(schemas.bronze)
+    except Exception as e:
+        logger.error("Failed to load layer schemas: %s", e)
+        raise ConfigurationError("Invalid Aurum layer configuration.")
+
     try:
         with get_ingestion_pool().connection() as conn:
             with conn.cursor() as cur:
@@ -50,348 +144,472 @@ def get_table_schema(table_name: str) -> str:
                     WHERE table_schema = %s AND table_name = %s
                     ORDER BY ordinal_position
                     """,
-                    (schemas.bronze, table_name)
+                    (bronze_schema, table_name)
                 )
                 rows = cur.fetchall()
                 if not rows:
-                    raise ValueError(f"Table {schemas.bronze}.{table_name} not found.")
+                    raise TableNotFoundError(f"Table {bronze_schema}.{table_name} not found.")
                 return "\n".join([f"- {r[0]} ({r[1]})" for r in rows])
+    except (TableNotFoundError, ConfigurationError):
+        raise
     except Exception as e:
-        raise ValueError(f"Could not retrieve schema for {table_name}: {e}")
-
-def call_llm_stubbed(prompt: str) -> str:
-    """
-    TODO(sassee): Replace this stub with the real LLM integration.
-    This function currently returns a hardcoded mock CTE response 
-    for end-to-end pipeline testing without a live LLM daemon.
-    """
-    import time
-    if "TIMEOUT_TEST" in prompt:
-        time.sleep(OLLAMA_TIMEOUT + 1)
-        
-    if not hasattr(call_llm_stubbed, "retry_count"):
-        call_llm_stubbed.retry_count = 0
-    call_llm_stubbed.retry_count += 1
-        
-    if "RETRY_TEST" in prompt and call_llm_stubbed.retry_count % 2 == 1:
-        return "MALFORMED SQL"
-
-    # Extract the run_id from the prompt for the mock
-    run_id_match = re.search(r"_candidate_(run_[a-f0-9]+)", prompt)
-    run_id = run_id_match.group(1) if run_id_match else "run_mock"
-
-    if "NO_CTE_TEST" in prompt:
-        return "SELECT 1;"
-
-    if "TOO_MANY_CTE_TEST" in prompt:
-        schemas = load_layer_schemas()
-        return f"CREATE TABLE {schemas.silver_candidates}.src_orders_TOO_MANY_CTE_TEST_candidate_{run_id} AS WITH step_1 AS (SELECT 1), step_2 AS (SELECT 2), step_3 AS (SELECT 3) SELECT * FROM step_3;"
-    # Extract the run_id from the prompt for the mock
-    run_id_match = re.search(r"_candidate_(run_[a-f0-9]+)", prompt)
-    run_id = run_id_match.group(1) if run_id_match else "run_mock"
-    
-    # Extract table name from the prompt to make the mock match
-    table_match = re.search(r"Candidate Table Name: ([a-zA-Z0-9_]+)_candidate_", prompt)
-    table_name = table_match.group(1) if table_match else "src_orders_test"
-    
-    schemas = load_layer_schemas()
-    return f"""Here is the SQL!
-```sql
-CREATE TABLE {schemas.silver_candidates}.{table_name}_candidate_{run_id} AS
-WITH step_1 AS (
-    SELECT * FROM {schemas.bronze}.{table_name} WHERE total_amount >= 0
-),
-step_2 AS (
-    SELECT id, customer_id, total_amount, UPPER(status) as status FROM step_1
-),
-step_3 AS (
-    SELECT * FROM step_2 WHERE customer_id IS NOT NULL
-)
-SELECT * FROM step_3;
-```
-"""
-
-def strip_markdown(raw_text: str) -> str:
-    """Strip markdown code blocks from LLM response."""
-    stripped_sql = raw_text.strip()
-    
-    matches = re.findall(r'```(?:sql|postgresql)?\n(.*?)```', stripped_sql, re.DOTALL | re.IGNORECASE)
-    if matches:
-        stripped_sql = matches[0].strip()
-    else:
-        stripped_sql = re.sub(r'^```(?:sql|postgresql)?\n', '', stripped_sql, flags=re.IGNORECASE)
-        stripped_sql = re.sub(r'\n```$', '', stripped_sql)
-        stripped_sql = stripped_sql.strip()
-        
-    return stripped_sql
+        logger.error("Failed to retrieve schema for %s: %s", table_name, e)
+        if is_db_connection_error(e):
+            raise DatabaseConnectionError("Database service is currently unavailable.")
+        raise
 
 @router.post("/rules")
 def save_rules(payload: RulesPayload):
-    """P2.1: Save free-text rules for a Bronze table."""
+    """P2.1: Save free-text rules for a Bronze table with canonical rule revision."""
+    try:
+        validate_sql_identifier(payload.table_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        validate_rules_shape(payload.rules)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Rules must be a list of strings.")
+
+    if not payload.rules or len(payload.rules) == 0:
+        raise HTTPException(status_code=400, detail="Rules must not be empty.")
+
+    if any(not r or not r.strip() for r in payload.rules):
+        raise HTTPException(status_code=400, detail="Rules cannot contain empty or whitespace-only entries.")
+
+    trimmed_rules = [r.strip() for r in payload.rules]
+    if len(trimmed_rules) != len(set(trimmed_rules)):
+        raise HTTPException(status_code=400, detail="Duplicate rules are not allowed.")
+
+    rule_rev = compute_rule_revision(trimmed_rules)
+    if not rule_rev:
+        raise HTTPException(status_code=400, detail="Failed to compute rule revision.")
     now = datetime.datetime.utcnow().isoformat()
     try:
         with get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO table_rules (table_name, rules_json, updated_at) 
-                VALUES (?, ?, ?)
+                INSERT INTO table_rules (table_name, rules_json, rule_revision, updated_at)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(table_name) DO UPDATE SET 
                     rules_json=excluded.rules_json,
+                    rule_revision=excluded.rule_revision,
                     updated_at=excluded.updated_at
                 """,
-                (payload.table_name, json.dumps(payload.rules), now)
+                (payload.table_name, json.dumps(trimmed_rules), rule_rev, now)
             )
             conn.commit()
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save rules: {e}")
-    
-    return {"status": "success", "message": "Rules saved successfully"}
+        logger.error("Failed to save rules for table %s: %s", payload.table_name, e)
+        raise HTTPException(status_code=500, detail="Failed to save table rules.")
+
+    return {"status": "success", "message": "Rules saved successfully", "rule_revision": rule_rev}
 
 @router.get("/rules/{table_name}")
 def get_rules(table_name: str):
-    """Fetch saved rules for a table."""
-    with get_connection() as conn:
-        row = conn.execute("SELECT rules_json FROM table_rules WHERE table_name = ?", (table_name,)).fetchone()
-        if row:
-            return {"table_name": table_name, "rules": json.loads(row[0])}
-        return {"table_name": table_name, "rules": []}
+    """Fetch saved rules for a table with canonical rule revision."""
+    try:
+        validate_sql_identifier(table_name)
+        with get_connection() as conn:
+            row = conn.execute("SELECT rules_json, rule_revision FROM table_rules WHERE table_name = ?", (table_name,)).fetchone()
+            if row:
+                try:
+                    rules = json.loads(row["rules_json"])
+                    validate_rules_shape(rules)
+                except Exception as e:
+                    logger.error("Corrupt rules_json in table_rules for table %s: %s", table_name, e)
+                    raise HTTPException(status_code=500, detail="Internal server error.")
+
+                rule_rev = compute_rule_revision(rules)
+                if not rule_rev:
+                    raise HTTPException(status_code=500, detail="Internal server error.")
+                return {"table_name": table_name, "rules": rules, "rule_revision": rule_rev}
+
+            empty_rev = compute_rule_revision([])
+            return {"table_name": table_name, "rules": [], "rule_revision": empty_rev}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to fetch rules for table %s: %s", table_name, e)
+        raise HTTPException(status_code=500, detail="Failed to fetch table rules.")
 
 @router.post("/generate")
 def generate_sql(payload: GeneratePayload):
     """P2.2 & P2.3: Generate SQL via LLM for the requested table."""
+    try:
+        validate_sql_identifier(payload.table_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     # 1. Fetch rules
     rules_resp = get_rules(payload.table_name)
     rules = rules_resp.get("rules", [])
     if not rules:
         raise HTTPException(status_code=400, detail="No rules defined for this table.")
-        
+
     # 2. Fetch schema
     try:
-        schema_text = get_table_schema(payload.table_name)
+        get_table_schema(payload.table_name)
+    except TableNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Table '{payload.table_name}' not found.")
+    except DatabaseConnectionError:
+        raise HTTPException(status_code=503, detail="Database service is currently unavailable.")
+    except ConfigurationError:
+        raise HTTPException(status_code=500, detail="Invalid Aurum layer configuration.")
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-        
-    # 3. Construct prompt
-    run_id = f"run_{uuid.uuid4().hex[:8]}"
-    rules_text = "\n".join([f"{i+1}. {r}" for i, r in enumerate(rules)])
-    
-    schemas = load_layer_schemas()
-    prompt = f"""You are an expert PostgreSQL Data Engineer.
-
-Table: {payload.table_name}
-Source schema: {schemas.bronze}
-Target schema: {schemas.silver_candidates}
-Candidate Table Name: {payload.table_name}_candidate_{run_id}
-Columns:
-{schema_text}
-
-User Cleaning Rules (apply in exact order):
-{rules_text}
-
-Generate a single valid PostgreSQL statement to apply these rules.
-You MUST output ONLY raw SQL code. No markdown code blocks (```sql), no explanations, no conversational text.
-
-Requirement:
-The output must exactly follow this structure, using exactly ONE Common Table Expression (CTE) per rule (e.g., step_1, step_2, step_3) so that rules are applied sequentially:
-
-CREATE TABLE {schemas.silver_candidates}.{payload.table_name}_candidate_{run_id} AS
-WITH step_1 AS (
-    SELECT ... FROM {schemas.bronze}.{payload.table_name} WHERE ...
-),
-step_2 AS (
-    SELECT ... FROM step_1 ...
-),
-step_3 AS (
-    SELECT ... FROM step_2 ...
-)
-SELECT * FROM step_3;
-"""
-
-    # 4. Call Ollama (Stubbed for now, awaiting sassee's integration)
-    import concurrent.futures
-    max_attempts = 2
-    last_error = None
-    
-    for attempt in range(max_attempts):
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(call_llm_stubbed, prompt)
-                raw_response = future.result(timeout=OLLAMA_TIMEOUT)
-
-            # 5. Parse and strip markdown
-            stripped_sql = strip_markdown(raw_response)
-            
-            # 6. Pre-flight structural check (P0 AST safety gate, before saving for review)
-            validate_generated_sql(stripped_sql, expected_schema=schemas.silver_candidates, run_id=run_id, expected_step_count=len(rules))
-            
-            last_error = None
-            break
-        except concurrent.futures.TimeoutError:
-            last_error = f"LLM generation timed out after {OLLAMA_TIMEOUT} seconds."
-            # Immediately raise, do not retry on timeout for UX reasons
-            raise HTTPException(status_code=504, detail=last_error)
-        except Exception as e:
-            last_error = f"Generated SQL failed safety validation: {e}"
-            if attempt == max_attempts - 1:
-                raise HTTPException(status_code=422, detail=last_error)
-
-    # 7. Build planned changes summary (P2.4)
-    # CTE count matches rule count because validate_generated_sql enforced it
-    cte_count = len(rules)
-    summary_text = f"Successfully planned {cte_count} sequential steps matching your {len(rules)} rules. Each rule will be applied cumulatively."
-
-    planned_changes = {
-        "summary": summary_text,
-        "rules": [f"Step {i+1}: {r}" for i, r in enumerate(rules)],
-        "cte_steps_detected": cte_count,
-        "attribution_safe": True
-    }
-
-    # 8. Persist for review
-    now = datetime.datetime.utcnow().isoformat()
-    try:
-        with get_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema)
-                VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
-                """,
-                (run_id, payload.table_name, stripped_sql, json.dumps(planned_changes), now, schemas.silver_candidates)
-            )
-            conn.commit()
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save generated SQL for review: {e}")
+        logger.error("Unexpected error fetching schema for %s: %s", payload.table_name, e)
+        raise HTTPException(status_code=500, detail="Internal server error.")
 
-    return {
-        "run_id": run_id, 
-        "status": "success",
-        "message": "SQL generated successfully and ready for review."
-    }
+    # 3. Production generator status: Explicitly unavailable until generic LLM integration
+    raise HTTPException(
+        status_code=503,
+        detail="SQL generator is currently unavailable (LLM integration pending)."
+    )
 
 @router.get("/review/{run_id}")
 def review_sql(run_id: str):
     """P2.5: Review the generated SQL and validate it again (no execution)."""
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT table_name, sql_text, planned_changes_json, created_at FROM generated_sql_review WHERE run_id = ?",
+            """
+            SELECT table_name, sql_text, planned_changes_json, created_at, status, generator_provenance, rule_revision
+            FROM generated_sql_review
+            WHERE run_id = ?
+            """,
             (run_id,)
         ).fetchone()
-        
+
     if not row:
         raise HTTPException(status_code=404, detail="Run ID not found.")
-        
-    sql_text = row[1]
-    planned_changes = json.loads(row[2])
-    
-    # Validate the SQL again right before returning for review to be absolutely certain
+
+    sql_text = row["sql_text"]
+    table_name = row["table_name"]
+    try:
+        planned_changes = json.loads(row["planned_changes_json"])
+        if not isinstance(planned_changes, dict) or "rules" not in planned_changes:
+            raise ValueError("planned_changes_json missing rules dictionary")
+        validate_rules_shape(planned_changes["rules"])
+    except Exception as e:
+        logger.error("Corrupt planned_changes_json for review run %s: %s", run_id, e)
+        raise HTTPException(status_code=500, detail="Internal server error.")
+
+    status_val = row["status"] or "PENDING"
+    provenance = row["generator_provenance"]
+    run_rule_rev = row["rule_revision"]
+
+    # Fetch current saved table rule revision
+    rules_info = get_rules(table_name)
+    current_table_rule_rev = rules_info.get("rule_revision")
+
+    executed = (status_val == "PROMOTED")
+
+    # Check structural SQL validity
+    sql_is_valid = False
+    validated_sql = sql_text
     try:
         schemas = load_layer_schemas()
-        validated_sql = validate_generated_sql(sql_text, expected_schema=schemas.silver_candidates, run_id=run_id, expected_step_count=len(planned_changes.get("rules", [])))
+        bronze_schema = validate_sql_identifier(schemas.bronze)
+        candidate_schema = validate_sql_identifier(schemas.silver_candidates)
+        validated_sql = validate_generated_sql(
+            sql_text,
+            expected_schema=candidate_schema,
+            expected_table_name=table_name,
+            expected_bronze_schema=bronze_schema,
+            run_id=run_id,
+            expected_step_count=len(planned_changes.get("rules", [])),
+            mode="p2_silver",
+        )
+        sql_is_valid = True
     except Exception as e:
-        raise HTTPException(status_code=422, detail=f"SQL failed structural validation: {e}")
+        logger.warning("SQL validation failed for review run %s: %s", run_id, e)
+
+    # Executable requires: PENDING status, trusted provenance, matching valid 64-char rule revision against current saved rules, valid SQL
+    revision_matches = (
+        is_valid_rule_revision(run_rule_rev)
+        and is_valid_rule_revision(current_table_rule_rev)
+        and run_rule_rev == current_table_rule_rev
+    )
+    executable = (
+        status_val == "PENDING"
+        and is_trusted_provenance(provenance)
+        and revision_matches
+        and sql_is_valid
+    )
 
     return {
         "run_id": run_id,
-        "table_name": row[0],
-        "planned_changes": json.loads(row[2]),
+        "table_name": table_name,
+        "planned_changes": planned_changes,
         "sql_text": validated_sql,
-        "executed": False,
-        "message": "SQL is validated and ready for execution (P2-B)."
+        "executed": executed,
+        "executable": executable,
+        "status": status_val,
+        "generator_provenance": provenance,
+        "rule_revision": run_rule_rev,
+        "message": (
+            "SQL has already been executed and promoted." if executed
+            else "SQL is validated and ready for execution." if executable
+            else "SQL review is untrusted, stale, or non-executable."
+        )
     }
 
 @router.post("/execute/{run_id}")
 def execute_sql(run_id: str):
     """P2-B: Execute generated SQL, compute cumulative attribution, and promote to silver."""
+    # 1. PRECLAIM IMMUTABLE VALIDATION BEFORE ATOMIC CLAIM
     with get_connection() as conn_db:
         row = conn_db.execute(
-            "SELECT table_name, sql_text, planned_changes_json FROM generated_sql_review WHERE run_id = ?",
+            """
+            SELECT table_name, sql_text, planned_changes_json, status, generator_provenance, rule_revision
+            FROM generated_sql_review
+            WHERE run_id = ?
+            """,
             (run_id,)
         ).fetchone()
-        
+
     if not row:
-        raise HTTPException(status_code=404, detail="Run ID not found or already executed.")
-        
-    table_name = row[0]
-    sql_text = row[1]
-    planned_changes = json.loads(row[2])
-    rules = planned_changes.get("rules", [])
-    
-    schemas = load_layer_schemas()
-    
-    # 1. Cumulative Attribution Measurement
-    stmt = sqlglot.parse_one(sql_text, read="postgres")
+        raise HTTPException(status_code=404, detail="Run ID not found.")
+
+    table_name = validate_sql_identifier(row["table_name"])
+    status_val = row["status"]
+    provenance = row["generator_provenance"]
+    run_rule_rev = row["rule_revision"]
+
+    if status_val == "PROMOTED":
+        with get_connection() as conn_db:
+            promoted_row = conn_db.execute(
+                "SELECT attribution_log_json FROM generated_sql_review WHERE run_id = ?",
+                (run_id,)
+            ).fetchone()
+        attr_log, attr_avail = parse_attribution_log(promoted_row["attribution_log_json"] if promoted_row else None)
+        return {
+            "status": "success",
+            "run_id": run_id,
+            "table_name": table_name,
+            "attribution_log": attr_log,
+            "attribution_available": attr_avail,
+            "message": f"Transformation for '{table_name}' was already executed and promoted."
+        }
+    elif status_val in ("EXECUTING", "PROMOTING"):
+        raise HTTPException(status_code=409, detail="Execution or promotion already in progress for this run.")
+    elif status_val == "AMBIGUOUS_PROMOTION":
+        raise HTTPException(
+            status_code=409,
+            detail="Run state is ambiguous (PostgreSQL promotion may have succeeded, but app state update failed). Manual reconciliation is required."
+        )
+    elif status_val == "FAILED":
+        raise HTTPException(status_code=400, detail="Run execution failed previously and cannot be re-executed.")
+    elif status_val != "PENDING":
+        raise HTTPException(status_code=400, detail=f"Run is not eligible for execution (status: {status_val}).")
+
+    if not is_trusted_provenance(provenance):
+        raise HTTPException(status_code=400, detail="Run is untrusted or missing valid generator provenance.")
+
+    if not is_valid_rule_revision(run_rule_rev):
+        raise HTTPException(status_code=400, detail="Run is missing a valid rule revision.")
+
+    # Rule revision preflight comparison against current saved table rules
+    rules_info = get_rules(table_name)
+    current_table_rule_rev = rules_info.get("rule_revision")
+    if not is_valid_rule_revision(current_table_rule_rev) or run_rule_rev != current_table_rule_rev:
+        raise HTTPException(
+            status_code=400,
+            detail="Rules have changed since this review was generated."
+        )
+
+    # Decode planned changes JSON and validate shape
     try:
+        planned_changes = json.loads(row["planned_changes_json"])
+        if not isinstance(planned_changes, dict) or "rules" not in planned_changes:
+            raise ValueError("planned_changes_json missing rules dictionary")
+        rules = validate_rules_shape(planned_changes["rules"])
+    except Exception as e:
+        logger.error("Corrupt planned_changes_json for execution run %s: %s", run_id, e)
+        raise HTTPException(status_code=500, detail="Internal server error.")
+
+    sql_text = row["sql_text"]
+
+    try:
+        schemas = load_layer_schemas()
+        bronze_schema = validate_sql_identifier(schemas.bronze)
+        candidates_schema = validate_sql_identifier(schemas.silver_candidates)
+        silver_schema = validate_sql_identifier(schemas.silver)
+    except Exception as e:
+        logger.error("Failed to load layer schemas: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error.")
+
+    # Structural AST Preflight Validation
+    try:
+        validate_generated_sql(
+            sql_text,
+            expected_schema=candidates_schema,
+            expected_table_name=table_name,
+            expected_bronze_schema=bronze_schema,
+            run_id=run_id,
+            expected_step_count=len(rules),
+            mode="p2_silver",
+        )
+    except Exception as e:
+        logger.error("Preflight SQL validation failed for run %s: %s", run_id, e)
+        raise HTTPException(status_code=422, detail="SQL failed structural safety validation.")
+
+    # Build attribution count query structure before claim
+    try:
+        stmt = sqlglot.parse_one(sql_text, read="postgres")
         select_expr = stmt.args.get("expression")
         with_clause = select_expr.args.get("with")
         cte_names = [cte.alias for cte in with_clause.expressions]
-        
-        selects = [f"(SELECT COUNT(*) FROM {schemas.bronze}.{table_name}) as step_0_count"]
+
+        expected_cte_names = [f"step_{i+1}" for i in range(len(rules))]
+        if cte_names != expected_cte_names:
+            raise ValueError(f"CTE sequence {cte_names} does not match expected {expected_cte_names}")
+
+        selects = [f"(SELECT COUNT(*) FROM {bronze_schema}.{table_name}) as step_0_count"]
         for name in cte_names:
-            selects.append(f"(SELECT COUNT(*) FROM {name}) as {name}_count")
-            
+            safe_name = validate_sql_identifier(name)
+            selects.append(f"(SELECT COUNT(*) FROM {safe_name}) as {safe_name}_count")
+
         count_sql = f"{with_clause.sql(dialect='postgres')} SELECT {', '.join(selects)}"
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to build attribution query: {e}")
+        logger.error("Failed to build attribution count query for run %s: %s", run_id, e)
+        raise HTTPException(status_code=422, detail="SQL structure invalid for attribution.")
 
+    # 2. ATOMIC CURRENT-SAVED-REVISION CLAIM
+    # Single SQLite atomic statement linking run_id, status=PENDING, provenance, rule_revision, AND live table_rules match
+    trusted_list = list(TRUSTED_GENERATOR_PROVENANCES)
+    placeholders = ", ".join(["?"] * len(trusted_list))
+    params = [run_id] + trusted_list + [run_rule_rev]
+
+    with get_connection() as conn_db:
+        cursor = conn_db.execute(
+            f"""
+            UPDATE generated_sql_review
+            SET status = 'EXECUTING'
+            WHERE run_id = ?
+              AND status = 'PENDING'
+              AND generator_provenance IN ({placeholders})
+              AND rule_revision = ?
+              AND rule_revision IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM table_rules tr
+                  WHERE tr.table_name = generated_sql_review.table_name
+                    AND tr.rule_revision = generated_sql_review.rule_revision
+                    AND tr.rule_revision IS NOT NULL
+              )
+            """,
+            params
+        )
+        conn_db.commit()
+        claimed = (cursor.rowcount > 0)
+
+    if not claimed:
+        # Re-check status if atomic claim failed due to concurrent execution or state shift
+        with get_connection() as conn_db:
+            check_row = conn_db.execute(
+                "SELECT status FROM generated_sql_review WHERE run_id = ?",
+                (run_id,)
+            ).fetchone()
+        curr_st = check_row["status"] if check_row else "UNKNOWN"
+        if curr_st in ("EXECUTING", "PROMOTING"):
+            raise HTTPException(status_code=409, detail="Execution or promotion already in progress for this run.")
+        raise HTTPException(
+            status_code=400,
+            detail="Run execution claim failed due to invalid status, untrusted provenance, or modified rules."
+        )
+
+    # 3. WINNING CLAIMER EXECUTES CANDIDATE AND MEASURES ATTRIBUTION
     attribution_results = []
     try:
-        # Run count query securely with generated_sql role
         with get_generated_sql_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(count_sql)
                 counts = cur.fetchone()
-                
+
                 initial_count = counts[0]
                 attribution_results.append(f"Initial Bronze Rows: {initial_count}")
-                
-                # Match steps to rules if safe, otherwise just show steps
+
                 for i in range(len(cte_names)):
                     prev_count = counts[i]
                     curr_count = counts[i+1]
                     diff = prev_count - curr_count
-                    
+
                     rule_label = rules[i] if i < len(rules) else f"Step {i+1}"
-                    
                     if diff > 0:
                         attribution_results.append(f"{rule_label}: {diff} rows removed (Remaining: {curr_count})")
                     else:
                         attribution_results.append(f"{rule_label}: Transformation applied (Remaining: {curr_count})")
-                        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to execute attribution query: {e}")
 
-    # 2. Execution and Ownership Transfer (aurum_generated_sql -> aurum_promotion)
-    try:
+        candidate_name = f"{table_name}_candidate_{run_id}"
         with get_generated_sql_pool().connection() as conn:
-            execute_candidate_sql(sql_text, conn, expected_schema=schemas.silver_candidates, run_id=run_id)
+            execute_candidate_sql(
+                sql_text,
+                conn,
+                expected_schema=candidates_schema,
+                run_id=run_id,
+                expected_table_name=table_name,
+                expected_bronze_schema=bronze_schema,
+                mode="p2_silver",
+            )
             conn.commit()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to execute candidate SQL: {e}")
+        logger.error("Post-claim PostgreSQL execution failed for run %s: %s", run_id, e)
+        _update_run_status(run_id, "FAILED")
+        if is_db_connection_error(e):
+            raise HTTPException(status_code=503, detail="Database service is currently unavailable.")
+        raise HTTPException(status_code=500, detail="Internal server error.")
 
-    # 3. Promotion to Silver (aurum_promotion)
-    candidate_name = f"{table_name}_candidate_{run_id}"
+    # 4. TRANSITION TO PROMOTING state before initiating promotion
+    promoted_durable = _update_run_status(run_id, "PROMOTING")
+    if not promoted_durable:
+        logger.error("Failed to durably set run %s status to PROMOTING before promotion", run_id)
+        _update_run_status(run_id, "FAILED")
+        raise HTTPException(status_code=500, detail="Internal server error.")
+
+    # 5. PROMOTE CANDIDATE TABLE TO SILVER
     try:
         promote_candidate_table(
             candidate_table=candidate_name,
-            candidate_schema=schemas.silver_candidates,
+            candidate_schema=candidates_schema,
             target_table=table_name,
-            target_schema=schemas.silver,
+            target_schema=silver_schema,
             promotion_conninfo=postgres_promotion_conninfo()
         )
-        now_promoted = datetime.datetime.utcnow().isoformat()
-        with get_connection() as conn_db:
-            conn_db.execute(
-                "UPDATE generated_sql_review SET status = 'PROMOTED', promoted_at = ? WHERE run_id = ?",
-                (now_promoted, run_id)
-            )
-            conn_db.commit()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to promote candidate to silver: {e}")
-        
+        logger.error("PostgreSQL promotion failed for run %s: %s", run_id, e)
+        _update_run_status(run_id, "AMBIGUOUS_PROMOTION")
+        raise HTTPException(
+            status_code=500,
+            detail="Promotion failed or outcome ambiguous. Manual reconciliation required."
+        )
+
+    # 6. POST-PROMOTION SQLite STATUS UPDATE TO PROMOTED
+    now_promoted = datetime.datetime.utcnow().isoformat()
+    promoted_ok = _update_run_status(
+        run_id,
+        "PROMOTED",
+        promoted_at=now_promoted,
+        attribution_log_json=json.dumps(attribution_results)
+    )
+
+    if not promoted_ok:
+        logger.critical("PostgreSQL promotion committed for run %s but SQLite PROMOTED update failed", run_id)
+        _update_run_status(run_id, "AMBIGUOUS_PROMOTION")
+        raise HTTPException(
+            status_code=500,
+            detail="Promotion completed in database, but run status recording encountered an internal error. Manual reconciliation required."
+        )
+
     return {
         "status": "success",
         "run_id": run_id,
         "table_name": table_name,
         "attribution_log": attribution_results,
+        "attribution_available": True,
         "message": f"Successfully executed and promoted {table_name} to Silver."
     }
