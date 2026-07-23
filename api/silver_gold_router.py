@@ -1,32 +1,49 @@
-"""API Router for P3 Silver-to-Gold aggregations via LLM."""
+"""API router for contained Gold operations and configured Silver discovery."""
 
 from __future__ import annotations
 
 import json
+import logging
 import re
-import uuid
 import datetime
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-import sqlglot
-from sqlglot import exp
+import psycopg
+
+try:
+    from psycopg_pool import PoolClosed, PoolTimeout
+except ImportError:  # pragma: no cover - dependency is required in production
+    PoolClosed = PoolTimeout = ()
 
 from src.app_state.db import get_connection
 from src.db_config import (
-    get_generated_sql_pool, 
+    get_generated_sql_pool,
     postgres_promotion_conninfo,
-    load_layer_schemas
+    load_layer_schemas,
 )
+from src.generator_trust import GeneratorTrustPolicy
 from src.sql_safety import validate_generated_sql, execute_candidate_sql
 from src.promotion import promote_candidate_table
 
 router = APIRouter(prefix="/api/v1/gold", tags=["gold"])
+logger = logging.getLogger(__name__)
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3"
-OLLAMA_TIMEOUT = 15
+GOLD_GENERATOR_TRUST = GeneratorTrustPolicy(
+    pipeline="gold",
+    trusted_hardened_provenances=frozenset(),
+)
+
+GOLD_GENERATION_UNAVAILABLE = "Gold SQL generation is currently unavailable."
+GOLD_EXECUTION_UNAVAILABLE = (
+    "Gold execution is unavailable until the run is produced by a trusted, "
+    "hardened generator."
+)
+GOLD_REVIEW_UNAVAILABLE = (
+    "Gold review is unavailable because this run was not produced by a trusted, "
+    "hardened generator."
+)
 
 class GenerateGoldPayload(BaseModel):
     target_table_name: str
@@ -95,239 +112,94 @@ def check_name(name: str = Query(..., description="The proposed name for the gol
             "message": "Name is available."
         }
 
-def get_multiple_table_schemas(schema_name: str, table_names: List[str]) -> str:
-    """Fetch schema details for multiple tables."""
-    if not table_names:
-        raise ValueError("At least one source table must be provided.")
-        
-    schemas_out = []
-    with get_generated_sql_pool().connection() as conn:
-        with conn.cursor() as cur:
-            for table_name in table_names:
+def _configured_silver_schema() -> str:
+    """Resolve and validate the physical Silver schema from server configuration."""
+    schema_name = load_layer_schemas().silver
+    if not isinstance(schema_name, str) or not re.fullmatch(
+        r"[A-Za-z_][A-Za-z0-9_]*", schema_name
+    ):
+        raise ValueError("Invalid configured Silver schema")
+    return schema_name
+
+
+def _is_connectivity_error(exc: Exception) -> bool:
+    pool_errors = tuple(
+        error_type
+        for error_type in (PoolClosed, PoolTimeout)
+        if isinstance(error_type, type)
+    )
+    return isinstance(exc, (psycopg.OperationalError, *pool_errors))
+
+
+@router.get("/silver-tables")
+def list_silver_tables():
+    """List only real tables in the server-configured Silver schema."""
+    try:
+        silver_schema = _configured_silver_schema()
+    except Exception:
+        logger.exception("Invalid Silver layer configuration")
+        raise HTTPException(
+            status_code=500,
+            detail="Invalid Silver layer configuration.",
+        ) from None
+
+    try:
+        with get_generated_sql_pool().connection() as conn:
+            with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT column_name, data_type 
-                    FROM information_schema.columns 
-                    WHERE table_schema = %s AND table_name = %s
-                    ORDER BY ordinal_position
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_schema = %s
+                      AND table_type = 'BASE TABLE'
+                    ORDER BY table_name
                     """,
-                    (schema_name, table_name)
+                    (silver_schema,),
                 )
                 rows = cur.fetchall()
-                if not rows:
-                    raise ValueError(f"Table {schema_name}.{table_name} not found.")
-                
-                cols_str = "\n".join([f"  - {r[0]} ({r[1]})" for r in rows])
-                schemas_out.append(f"Table: {table_name}\nColumns:\n{cols_str}")
-                
-    return "\n\n".join(schemas_out)
+    except Exception as exc:
+        if _is_connectivity_error(exc):
+            logger.warning("Silver discovery database unavailable: %s", type(exc).__name__)
+            raise HTTPException(
+                status_code=503,
+                detail="Silver table discovery is currently unavailable.",
+            ) from None
+        logger.exception("Silver table discovery failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Silver table discovery failed.",
+        ) from None
 
-def call_llm_stubbed(prompt: str) -> str:
-    """
-    TODO(sassee): Replace this stub with the real LLM integration.
-    This function currently returns a hardcoded mock aggregation response 
-    for end-to-end pipeline testing without a live LLM daemon.
-    """
-    import time
-    if "TIMEOUT_TEST" in prompt:
-        time.sleep(OLLAMA_TIMEOUT + 1)
-        
-    if not hasattr(call_llm_stubbed, "retry_count"):
-        call_llm_stubbed.retry_count = 0
-    call_llm_stubbed.retry_count += 1
-        
-    if "RETRY_TEST" in prompt and call_llm_stubbed.retry_count % 2 == 1:
-        return "MALFORMED SQL"
-
-    run_id_match = re.search(r"_candidate_(run_[a-f0-9]+)", prompt)
-    run_id = run_id_match.group(1) if run_id_match else "run_mock"
-    
-    table_match = re.search(r"Candidate Table Name: ([a-zA-Z0-9_]+)_candidate_", prompt)
-    table_name = table_match.group(1) if table_match else "daily_sales"
-    
-    schemas = load_layer_schemas()
-    
-    if "MULTI_TABLE_TEST" in prompt:
-        return f"""
-```sql
-CREATE TABLE {schemas.gold_candidates}.{table_name}_candidate_{run_id} AS
-SELECT 
-    orders.status,
-    customers.region,
-    COUNT(orders.id) AS total_orders,
-    SUM(orders.amount) AS revenue
-FROM {schemas.silver}.orders
-JOIN {schemas.silver}.customers ON orders.customer_id = customers.id
-GROUP BY orders.status, customers.region;
-```
-"""
-    
-    return f"""
-```sql
-CREATE TABLE {schemas.gold_candidates}.{table_name}_candidate_{run_id} AS
-SELECT 
-    DATE(order_date) AS order_day, 
-    COUNT(*) AS total_orders
-FROM {schemas.silver}.orders
-GROUP BY DATE(order_date);
-```
-"""
-
-def strip_markdown(raw_text: str) -> str:
-    """Strip markdown code blocks from LLM response."""
-    stripped_sql = raw_text.strip()
-    matches = re.findall(r'```(?:sql|postgresql)?\n(.*?)```', stripped_sql, re.DOTALL | re.IGNORECASE)
-    if matches:
-        return matches[0].strip()
-    stripped_sql = re.sub(r'^```(?:sql|postgresql)?\n', '', stripped_sql, flags=re.IGNORECASE)
-    stripped_sql = re.sub(r'\n```$', '', stripped_sql)
-    return stripped_sql.strip()
-
-def summarize_sql_structure(sql_text: str) -> dict:
-    """Derive planned output summary from AST."""
-    try:
-        stmt = sqlglot.parse_one(sql_text, read="postgres")
-        select_stmt = stmt.args.get("expression") if isinstance(stmt, exp.Create) else stmt
-        
-        group_by = select_stmt.args.get("group") if select_stmt else None
-        groups = [e.sql(dialect="postgres") for e in group_by.expressions] if group_by else []
-        
-        aggregates = []
-        if select_stmt:
-            for select_expr in select_stmt.expressions:
-                if any(isinstance(node, exp.AggFunc) for node in select_expr.find_all(exp.AggFunc)):
-                    aggregates.append(select_expr.alias_or_name)
-                    
-        has_filters = bool(select_stmt.args.get("where") or select_stmt.args.get("having")) if select_stmt else False
-        
-        sources = []
-        if select_stmt:
-            from_clause = select_stmt.args.get("from")
-            if from_clause:
-                for table in from_clause.find_all(exp.Table):
-                    sources.append(table.name)
-            
-            for join in select_stmt.args.get("joins") or []:
-                for table in join.find_all(exp.Table):
-                    sources.append(table.name)
-                    
-        sources_str = ", ".join(set(sources)) if sources else "unknown sources"
-        summary_text = f"This query computes aggregations from {sources_str}."
-        
-        return {
-            "summary": summary_text,
-            "dimensions": groups,
-            "metrics": aggregates,
-            "filters_applied": has_filters
-        }
-    except Exception:
-        # Graceful degradation if parsing fails for summary extraction
-        return {
-            "summary": "Could not automatically summarize the query structure.",
-            "dimensions": [],
-            "metrics": [],
-            "filters_applied": False
-        }
+    return {"tables": [{"name": row[0]} for row in rows]}
 
 
 @router.post("/generate")
 def generate_gold_sql(payload: GenerateGoldPayload):
-    """P3.2 & P3.3: Generate SQL via LLM for the requested Gold aggregation."""
-    schemas = load_layer_schemas()
-    
-    try:
-        silver_schema_metadata = get_multiple_table_schemas(schemas.silver, payload.silver_table_names)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-        
-    run_id = f"run_{uuid.uuid4().hex[:8]}"
-    
-    prompt = f"""You are an expert PostgreSQL Data Engineer.
-
-Source tables (Silver):
-{silver_schema_metadata}
-
-Target schema: {schemas.gold_candidates}
-Candidate Table Name: {payload.target_table_name}_candidate_{run_id}
-
-Business Requirement:
-{payload.business_requirement}
-
-Generate a single valid PostgreSQL statement to satisfy this requirement.
-You MUST output ONLY raw SQL code. No markdown code blocks (```sql), no explanations, no conversational text.
-
-Requirement:
-The output must be a valid CREATE TABLE AS SELECT statement targeting the candidate schema.
-Example:
-CREATE TABLE {schemas.gold_candidates}.{payload.target_table_name}_candidate_{run_id} AS
-SELECT 
-    DATE(order_date) AS order_day, 
-    COUNT(*) AS total_orders
-FROM {schemas.silver}.orders
-GROUP BY DATE(order_date);
-"""
-
-    import concurrent.futures
-    max_attempts = 2
-    last_error = None
-    
-    for attempt in range(max_attempts):
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(call_llm_stubbed, prompt)
-                raw_response = future.result(timeout=OLLAMA_TIMEOUT)
-
-            stripped_sql = strip_markdown(raw_response)
-            
-            # P0 AST safety gate, explicitly NO step count enforcement for Gold
-            validate_generated_sql(stripped_sql, expected_schema=schemas.gold_candidates, run_id=run_id, expected_step_count=None)
-            
-            last_error = None
-            break
-        except concurrent.futures.TimeoutError:
-            last_error = f"LLM generation timed out after {OLLAMA_TIMEOUT} seconds."
-            raise HTTPException(status_code=504, detail=last_error)
-        except Exception as e:
-            last_error = f"Generated SQL failed safety validation: {e}"
-            if attempt == max_attempts - 1:
-                raise HTTPException(status_code=422, detail=last_error)
-
-    # Derive planned output summary from AST
-    planned_changes = summarize_sql_structure(stripped_sql)
-
-    now = datetime.datetime.utcnow().isoformat()
-    try:
-        with get_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema)
-                VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
-                """,
-                (run_id, payload.target_table_name, stripped_sql, json.dumps(planned_changes), now, schemas.gold_candidates)
-            )
-            conn.commit()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save generated SQL for review: {e}")
-
-    return {
-        "run_id": run_id, 
-        "status": "success",
-        "message": "SQL generated successfully and ready for review."
-    }
+    """Fail closed until a trusted, hardened Gold generator is registered."""
+    if not GOLD_GENERATOR_TRUST.generation_available:
+        raise HTTPException(status_code=503, detail=GOLD_GENERATION_UNAVAILABLE)
+    raise HTTPException(status_code=503, detail=GOLD_GENERATION_UNAVAILABLE)
 
 @router.get("/review/{run_id}")
 def review_gold_sql(run_id: str):
-    """P3.4a: Review the generated SQL and validate it again (no execution)."""
+    """Review only runs produced by a trusted, hardened Gold generator."""
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT table_name, sql_text, planned_changes_json FROM generated_sql_review WHERE run_id = ?",
+            """
+            SELECT table_name, sql_text, planned_changes_json, generator_provenance
+            FROM generated_sql_review
+            WHERE run_id = ?
+            """,
             (run_id,)
         ).fetchone()
         
     if not row:
         raise HTTPException(status_code=404, detail="Run ID not found.")
+
+    if not GOLD_GENERATOR_TRUST.trusts_run(row["generator_provenance"]):
+        raise HTTPException(status_code=503, detail=GOLD_REVIEW_UNAVAILABLE)
         
-    sql_text = row[1]
+    sql_text = row["sql_text"]
     
     try:
         schemas = load_layer_schemas()
@@ -337,8 +209,8 @@ def review_gold_sql(run_id: str):
 
     return {
         "run_id": run_id,
-        "table_name": row[0],
-        "planned_changes": json.loads(row[2]),
+        "table_name": row["table_name"],
+        "planned_changes": json.loads(row["planned_changes_json"]),
         "sql_text": validated_sql,
         "executed": False,
         "message": "SQL is validated and ready for execution."
@@ -346,18 +218,25 @@ def review_gold_sql(run_id: str):
 
 @router.post("/execute/{run_id}")
 def execute_gold_sql(run_id: str, payload: ExecuteGoldPayload):
-    """P3.4b & P3.5: Execute generated SQL, fetch preview, and promote to gold."""
+    """Execute only runs produced by a trusted, hardened Gold generator."""
     with get_connection() as conn_db:
         row = conn_db.execute(
-            "SELECT table_name, sql_text FROM generated_sql_review WHERE run_id = ?",
+            """
+            SELECT table_name, sql_text, generator_provenance
+            FROM generated_sql_review
+            WHERE run_id = ?
+            """,
             (run_id,)
         ).fetchone()
         
     if not row:
         raise HTTPException(status_code=404, detail="Run ID not found or already executed.")
+
+    if not GOLD_GENERATOR_TRUST.trusts_run(row["generator_provenance"]):
+        raise HTTPException(status_code=503, detail=GOLD_EXECUTION_UNAVAILABLE)
         
-    table_name = row[0]
-    sql_text = row[1]
+    table_name = row["table_name"]
+    sql_text = row["sql_text"]
     
     schemas = load_layer_schemas()
     

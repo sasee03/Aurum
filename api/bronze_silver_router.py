@@ -20,6 +20,7 @@ from src.db_config import (
 )
 from src.sql_safety import validate_generated_sql, execute_candidate_sql
 from src.promotion import promote_candidate_table
+from src.generator_trust import GeneratorTrustPolicy
 import sqlglot
 
 try:
@@ -49,6 +50,10 @@ router = APIRouter(prefix="/api/v1/transform", tags=["transform"])
 
 # Approved trusted generator provenances for execution eligibility
 TRUSTED_GENERATOR_PROVENANCES: Set[str] = {"ollama_v1_generic"}
+SILVER_GENERATOR_TRUST = GeneratorTrustPolicy(
+    pipeline="silver",
+    trusted_hardened_provenances=frozenset(TRUSTED_GENERATOR_PROVENANCES),
+)
 
 class RulesPayload(BaseModel):
     table_name: str
@@ -59,9 +64,7 @@ class GeneratePayload(BaseModel):
 
 def is_trusted_provenance(provenance: Optional[str]) -> bool:
     """Return True if provenance is recognized as a trusted generator implementation."""
-    if not provenance or not isinstance(provenance, str):
-        return False
-    return provenance in TRUSTED_GENERATOR_PROVENANCES
+    return SILVER_GENERATOR_TRUST.trusts_run(provenance)
 
 def validate_sql_identifier(identifier: str) -> str:
     """Ensure string is a safe SQL identifier matching standard naming patterns."""
