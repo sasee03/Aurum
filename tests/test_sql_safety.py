@@ -130,3 +130,209 @@ def test_reject_delete_operation():
 def test_reject_malicious_or_invalid_inputs(sql):
     with pytest.raises(SqlSafetyViolation):
         validate_generated_sql(sql, run_id=RUN_ID)
+
+
+def _validate_gold(sql: str, *, sources=("orders", "customers", "items")):
+    return _validate_generated_sql(
+        sql,
+        expected_schema="gold_work",
+        expected_table_name="business_output",
+        expected_candidate_name="business_output_candidate_run_gold",
+        run_id="run_gold",
+        mode="gold_ctas",
+        selected_sources=tuple(("curated", table) for table in sources),
+    )
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT * FROM curated.orders",
+        (
+            "SELECT o.* FROM curated.orders o "
+            "JOIN curated.customers c ON c.id = o.customer_id"
+        ),
+        (
+            "SELECT o.id FROM curated.orders o "
+            "JOIN curated.customers c ON c.id = o.customer_id "
+            "JOIN curated.items i ON i.order_id = o.id"
+        ),
+        (
+            "SELECT customer_id, COUNT(*) AS n FROM curated.orders "
+            "GROUP BY customer_id"
+        ),
+        (
+            "SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS n "
+            "FROM curated.orders"
+        ),
+        (
+            "SELECT CASE WHEN id > 0 THEN 1 ELSE 0 END AS bucket "
+            "FROM curated.orders"
+        ),
+        (
+            "SELECT * FROM curated.orders o WHERE EXISTS "
+            "(SELECT 1 FROM curated.customers c WHERE c.id = o.customer_id)"
+        ),
+        (
+            "WITH first AS (SELECT * FROM curated.orders), "
+            "second AS (SELECT * FROM first) SELECT * FROM second"
+        ),
+        (
+            "WITH orders AS (SELECT * FROM curated.orders) "
+            "SELECT * FROM orders"
+        ),
+        (
+            "WITH scoped AS (SELECT * FROM curated.orders) "
+            "SELECT * FROM (WITH scoped AS "
+            "(SELECT * FROM curated.customers) SELECT * FROM scoped) nested "
+            "JOIN scoped outer_scope ON true"
+        ),
+    ],
+)
+def test_gold_ctas_allows_business_queries_with_lexical_cte_scopes(query):
+    sql = (
+        "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+        f"{query}"
+    )
+    assert _validate_gold(sql).startswith("CREATE TABLE")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM curated.orders",
+        (
+            "CREATE TABLE gold_work.wrong_candidate_run_gold AS "
+            "SELECT * FROM curated.orders"
+        ),
+        (
+            "CREATE TABLE other.business_output_candidate_run_gold AS "
+            "SELECT * FROM curated.orders"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM curated.orders; SELECT 1"
+        ),
+        (
+            "CREATE TEMP TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM curated.orders"
+        ),
+        (
+            "CREATE UNLOGGED TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM curated.orders"
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS "
+            "gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM curated.orders"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM curated.orders WITH NO DATA"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * INTO another_target FROM curated.orders"
+        ),
+        (
+            "CREATE VIEW gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM curated.orders"
+        ),
+        (
+            "CREATE MATERIALIZED VIEW "
+            "gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM curated.orders"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "WITH changed AS (DELETE FROM curated.orders RETURNING *) "
+            "SELECT * FROM changed"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM orders"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM curated.unselected"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM bronze.orders"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM source.orders"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM gold.orders"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM gold_work.business_output_candidate_run_gold"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM public.orders"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM information_schema.tables"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM pg_catalog.pg_class"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM other_database.curated.orders"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT o.* FROM curated.orders o "
+            "CROSS JOIN LATERAL generate_series(1, 3) AS generated(value)"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT evil.side_effect(id) FROM curated.orders"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT o.* FROM curated.orders o "
+            "CROSS JOIN LATERAL unnest(ARRAY[1, 2]) AS expanded(value)"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT o.* FROM curated.orders o "
+            "CROSS JOIN (VALUES (1)) AS values_source(id)"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "WITH hidden AS (SELECT * FROM curated.unselected) "
+            "SELECT * FROM hidden"
+        ),
+        (
+            "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+            "SELECT * FROM (SELECT * FROM curated.unselected) hidden"
+        ),
+    ],
+)
+def test_gold_ctas_rejects_non_contained_statement_or_source(sql):
+    with pytest.raises(SqlSafetyViolation):
+        _validate_gold(sql)
+
+
+def test_gold_ctas_requires_quotes_for_case_sensitive_approved_identifier():
+    unquoted = (
+        "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+        "SELECT * FROM curated.Orders"
+    )
+    with pytest.raises(SqlSafetyViolation):
+        _validate_gold(unquoted, sources=("Orders",))
+
+    quoted = (
+        "CREATE TABLE gold_work.business_output_candidate_run_gold AS "
+        'SELECT * FROM curated."Orders"'
+    )
+    assert _validate_gold(quoted, sources=("Orders",)).startswith("CREATE TABLE")

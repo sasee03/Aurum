@@ -12,7 +12,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 GOLD_MODEL_VERSION = "gold-security-state-v1"
-GOLD_POLICY_VERSION = "gold-approval-policy-v1"
+GOLD_POLICY_VERSION = "gold-ctas-policy-v2"
 GOLD_SELECTED_SOURCES_VERSION = "gold-selected-sources-v1"
 GOLD_REVIEW_SNAPSHOT_VERSION = "gold-review-snapshot-v1"
 GOLD_APPROVAL_SNAPSHOT_VERSION = "gold-approval-snapshot-v1"
@@ -22,6 +22,7 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _REVISION_RE = re.compile(r"^[0-9a-f]{64}$")
 _GENERATOR_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
 _RELATION_KINDS = frozenset({"r", "p"})
+POSTGRES_IDENTIFIER_MAX_BYTES = 63
 
 
 class GoldSecurityError(ValueError):
@@ -55,6 +56,11 @@ class GoldSecurityState:
     overwrite_authorized: bool | None
     source_identities: tuple[dict[str, Any], ...] | None
     target_identity: dict[str, Any] | None
+    candidate_namespace_identity: dict[str, Any] | None
+    execution_claim_id: str | None
+    execution_claimed_at: str | None
+    candidate_identity: dict[str, Any] | None
+    execution_failure_code: str | None
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -113,7 +119,10 @@ def _require_nonempty_string(value: Any, *, field: str) -> str:
 
 def _require_identifier(value: Any, *, field: str) -> str:
     value = _require_nonempty_string(value, field=field)
-    if not _IDENTIFIER_RE.fullmatch(value) or len(value.encode("utf-8")) > 63:
+    if (
+        not _IDENTIFIER_RE.fullmatch(value)
+        or len(value.encode("utf-8")) > POSTGRES_IDENTIFIER_MAX_BYTES
+    ):
         raise GoldStateMalformed(f"{field} is not a valid identifier")
     return value
 
@@ -525,6 +534,40 @@ def _parse_target_identity(
     return parsed
 
 
+def _parse_candidate_namespace_identity(
+    value: Any,
+    *,
+    candidate: Mapping[str, str],
+    database_oid: int | None = None,
+) -> dict[str, Any]:
+    item = _require_exact_keys(
+        value,
+        {"database_oid", "namespace_oid", "schema"},
+        field="candidate namespace identity",
+    )
+    parsed = {
+        "database_oid": _require_oid(
+            item["database_oid"],
+            field="candidate namespace identity.database_oid",
+        ),
+        "namespace_oid": _require_oid(
+            item["namespace_oid"],
+            field="candidate namespace identity.namespace_oid",
+        ),
+        "schema": _require_identifier(
+            item["schema"],
+            field="candidate namespace identity.schema",
+        ),
+    }
+    if parsed["schema"] != candidate["schema"]:
+        raise GoldStateMalformed(
+            "candidate namespace identity does not match the reviewed candidate"
+        )
+    if database_oid is not None and parsed["database_oid"] != database_oid:
+        raise GoldStateMalformed("candidate namespace database identity is inconsistent")
+    return parsed
+
+
 def build_approval_snapshot(
     *,
     review_snapshot: Mapping[str, Any],
@@ -533,6 +576,7 @@ def build_approval_snapshot(
     database_name: str,
     source_identities: Sequence[Mapping[str, Any]],
     target_identity: Mapping[str, Any],
+    candidate_namespace_identity: Mapping[str, Any],
     overwrite_authorized: bool,
 ) -> dict[str, Any]:
     _require_revision(review_revision, field="review_revision")
@@ -542,7 +586,12 @@ def build_approval_snapshot(
         raise GoldStateMalformed("overwrite authorization must be boolean")
     selected_sources = review_snapshot.get("selected_sources")
     target = review_snapshot.get("target")
-    if not isinstance(selected_sources, list) or not isinstance(target, dict):
+    candidate = review_snapshot.get("candidate")
+    if (
+        not isinstance(selected_sources, list)
+        or not isinstance(target, dict)
+        or not isinstance(candidate, dict)
+    ):
         raise GoldStateMalformed("review snapshot is malformed")
     parsed_sources = _parse_source_identities(
         list(source_identities),
@@ -552,6 +601,11 @@ def build_approval_snapshot(
     parsed_target = _parse_target_identity(
         dict(target_identity),
         target=target,
+        database_oid=database_oid,
+    )
+    parsed_candidate_namespace = _parse_candidate_namespace_identity(
+        dict(candidate_namespace_identity),
+        candidate=candidate,
         database_oid=database_oid,
     )
     if parsed_target["state"] == "existing" and not overwrite_authorized:
@@ -568,6 +622,7 @@ def build_approval_snapshot(
         },
         "source_identities": list(parsed_sources),
         "target_identity": parsed_target,
+        "candidate_namespace_identity": parsed_candidate_namespace,
         "overwrite_authorized": overwrite_authorized,
     }
 
@@ -586,6 +641,7 @@ def _parse_approval_snapshot(
             "database",
             "source_identities",
             "target_identity",
+            "candidate_namespace_identity",
             "overwrite_authorized",
         },
         field="approval_snapshot",
@@ -604,6 +660,7 @@ def _parse_approval_snapshot(
         database_name=database["name"],
         source_identities=snapshot["source_identities"],
         target_identity=snapshot["target_identity"],
+        candidate_namespace_identity=snapshot["candidate_namespace_identity"],
         overwrite_authorized=snapshot["overwrite_authorized"],
     )
     if snapshot["review_snapshot"] != state.review_snapshot:
@@ -767,6 +824,11 @@ def load_gold_security_state(
         overwrite_authorized=None,
         source_identities=None,
         target_identity=None,
+        candidate_namespace_identity=None,
+        execution_claim_id=None,
+        execution_claimed_at=None,
+        candidate_identity=None,
+        execution_failure_code=None,
     )
     if not any(present.values()):
         return state
@@ -818,6 +880,7 @@ def load_gold_security_state(
             "overwrite_authorized": overwrite_authorized,
             "source_identities": source_identities,
             "target_identity": target_identity,
+            "candidate_namespace_identity": None,
         }
     )
     parsed_approval = _parse_approval_snapshot(
@@ -832,12 +895,103 @@ def load_gold_security_state(
         raise GoldStateMalformed("captured source identities are inconsistent")
     if target_identity != parsed_approval["target_identity"]:
         raise GoldStateMalformed("captured target identity is inconsistent")
+    candidate_namespace_identity = parsed_approval[
+        "candidate_namespace_identity"
+    ]
     if overwrite_authorized != parsed_approval["overwrite_authorized"]:
         raise GoldStateMalformed("captured overwrite authorization is inconsistent")
-    return GoldSecurityState(
+    approved_state = GoldSecurityState(
         **{
             **approved_state.__dict__,
             "approval_snapshot": parsed_approval,
+            "candidate_namespace_identity": candidate_namespace_identity,
+        }
+    )
+    execution_claim_id = _row_value(security_row, "execution_claim_id")
+    execution_claimed_at = _row_value(security_row, "execution_claimed_at")
+    candidate_identity_json = _row_value(security_row, "candidate_identity_json")
+    execution_failure_code = _row_value(security_row, "execution_failure_code")
+    execution_values = (
+        execution_claim_id,
+        execution_claimed_at,
+        candidate_identity_json,
+        execution_failure_code,
+    )
+    if all(value is None for value in execution_values):
+        return approved_state
+    execution_claim_id = _require_generator_token(
+        execution_claim_id,
+        field="execution_claim_id",
+    )
+    execution_claimed_at = _require_nonempty_string(
+        execution_claimed_at,
+        field="execution_claimed_at",
+    )
+    try:
+        claimed_timestamp = datetime.fromisoformat(execution_claimed_at)
+    except ValueError as exc:
+        raise GoldStateMalformed(
+            "execution_claimed_at is not an ISO-8601 timestamp"
+        ) from exc
+    if claimed_timestamp.tzinfo is None:
+        raise GoldStateMalformed("execution_claimed_at must include a timezone")
+
+    status = _row_value(envelope_row, "status")
+    candidate_identity = None
+    if candidate_identity_json is not None:
+        candidate_identity = _parse_relation_identity(
+            strict_json_loads(
+                candidate_identity_json,
+                field="candidate_identity_json",
+            ),
+            field="candidate identity",
+        )
+        if (
+            candidate_identity["schema"],
+            candidate_identity["relation_name"],
+        ) != (candidate["schema"], candidate["table"]):
+            raise GoldStateMalformed(
+                "candidate identity does not match the approved candidate"
+            )
+        if candidate_identity["relation_kind"] != "r":
+            raise GoldStateMalformed("candidate identity is not an ordinary table")
+        if (
+            candidate_identity["database_oid"]
+            != approved_state.approval_snapshot["database"]["oid"]
+        ):
+            raise GoldStateMalformed(
+                "candidate database identity is inconsistent"
+            )
+        if (
+            candidate_identity["namespace_oid"]
+            != approved_state.candidate_namespace_identity["namespace_oid"]
+        ):
+            raise GoldStateMalformed(
+                "candidate namespace identity is inconsistent"
+            )
+    if execution_failure_code is not None:
+        execution_failure_code = _require_generator_token(
+            execution_failure_code,
+            field="execution_failure_code",
+        )
+    if status == "EXECUTING":
+        if candidate_identity is not None:
+            raise GoldStateMalformed("executing state cannot contain candidate identity")
+    elif status == "PROMOTING":
+        if candidate_identity is None or execution_failure_code is not None:
+            raise GoldStateMalformed("promoting state is internally inconsistent")
+    elif status == "EXECUTION_FAILED":
+        if candidate_identity is not None or execution_failure_code is None:
+            raise GoldStateMalformed("failed execution state is internally inconsistent")
+    else:
+        raise GoldStateMalformed("execution metadata is invalid for run status")
+    return GoldSecurityState(
+        **{
+            **approved_state.__dict__,
+            "execution_claim_id": execution_claim_id,
+            "execution_claimed_at": execution_claimed_at,
+            "candidate_identity": candidate_identity,
+            "execution_failure_code": execution_failure_code,
         }
     )
 

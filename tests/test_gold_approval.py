@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from threading import Barrier, Lock, get_ident
+from threading import Barrier, Event, Lock, get_ident
 from types import SimpleNamespace
 
 import pytest
@@ -14,11 +14,21 @@ from fastapi.testclient import TestClient
 
 import api.silver_gold_router as router
 import src.gold_catalog as gold_catalog
+import src.gold_execution as gold_execution
 import src.sql_safety as sql_safety
 from api.main import app
 from src.app_state.db import get_connection, init_schema
 from src.generator_trust import GeneratorTrustPolicy
-from src.gold_catalog import GoldCatalogResolutionError, GoldCatalogSnapshot
+from src.gold_catalog import (
+    GoldCatalogResolutionError,
+    GoldCatalogSnapshot,
+    GoldExecutionCatalogSnapshot,
+    lock_gold_sources,
+)
+from src.gold_execution import (
+    GoldCommitOutcomeUnknown,
+    GoldExecutionRejected,
+)
 from src.gold_security import (
     GoldStateMalformed,
     GoldStateStale,
@@ -28,6 +38,7 @@ from src.gold_security import (
     insert_gold_security_state,
     load_gold_security_state,
     new_gold_security_record,
+    expected_candidate_name,
     revision_for,
 )
 
@@ -137,12 +148,21 @@ def _target_existing(target: str = "approved_output") -> dict:
     }
 
 
+def _candidate_namespace_identity(*, namespace_oid: int = 104) -> dict:
+    return {
+        "database_oid": 101,
+        "namespace_oid": namespace_oid,
+        "schema": SCHEMAS.gold_candidates,
+    }
+
+
 def _catalog(target_identity: dict | None = None) -> GoldCatalogSnapshot:
     return GoldCatalogSnapshot(
         database_oid=101,
         database_name="isolated_test_database",
         source_identities=(_source_identity(),),
         target_identity=target_identity or _target_absent(),
+        candidate_namespace_identity=_candidate_namespace_identity(),
     )
 
 
@@ -171,7 +191,7 @@ def _load_state(run_id: str):
     with get_connection() as conn:
         envelope = conn.execute(
             """
-            SELECT run_id, table_name, sql_text, candidate_schema,
+            SELECT run_id, table_name, sql_text, status, candidate_schema,
                    generator_provenance
             FROM generated_sql_review
             WHERE run_id = ?
@@ -359,6 +379,11 @@ def test_review_revision_is_deterministic_and_source_order_is_canonical():
     assert first["selected_sources"] == [source_a, source_b]
 
 
+def test_server_candidate_name_rejects_postgres_identifier_truncation():
+    with pytest.raises(GoldStateMalformed):
+        expected_candidate_name("x" * 50, "run_length")
+
+
 def test_each_review_sensitive_input_changes_or_invalidates_revision():
     base = {
         "run_id": "run_sensitive",
@@ -433,6 +458,7 @@ def test_each_database_identity_field_changes_approved_revision():
         database_name="isolated_test_database",
         source_identities=[_source_identity()],
         target_identity=_target_existing(),
+        candidate_namespace_identity=_candidate_namespace_identity(),
         overwrite_authorized=True,
     )
     variants = {}
@@ -444,6 +470,11 @@ def test_each_database_identity_field_changes_approved_revision():
 
     variants["namespace_oid"] = deepcopy(baseline)
     variants["namespace_oid"]["source_identities"][0]["namespace_oid"] = 105
+
+    variants["candidate_namespace_oid"] = deepcopy(baseline)
+    variants["candidate_namespace_oid"]["candidate_namespace_identity"][
+        "namespace_oid"
+    ] = 199
 
     variants["source_relation_oid"] = deepcopy(baseline)
     variants["source_relation_oid"]["source_identities"][0]["relation_oid"] = 206
@@ -626,7 +657,12 @@ class _CatalogCursor:
         elif "pg_catalog.pg_database" in normalized:
             self.current = (101, "isolated_test_database")
         elif "pg_catalog.pg_namespace" in normalized:
-            self.current = (102,) if params == (SCHEMAS.silver,) else (103,)
+            namespace_oids = {
+                (SCHEMAS.silver,): 102,
+                (SCHEMAS.gold,): 103,
+                (SCHEMAS.gold_candidates,): 104,
+            }
+            self.current = (namespace_oids[params],)
         elif params == (102, "source_a"):
             self.current = (201, "source_a", "r")
         elif params == (103, "approved_output"):
@@ -700,12 +736,19 @@ def test_catalog_resolver_uses_pg_oids_and_configured_names(
             {"schema": SCHEMAS.silver, "table": "source_a"},
         ),
         target={"schema": SCHEMAS.gold, "table": "approved_output"},
+        candidate={
+            "schema": SCHEMAS.gold_candidates,
+            "table": "approved_output_candidate_run_catalog",
+        },
     )
     assert result.database_oid == 101
     assert result.database_name == "isolated_test_database"
     assert result.source_identities == (_source_identity(),)
     assert result.target_identity["state"] == expected_state
     assert result.target_identity["namespace_oid"] == 103
+    assert result.candidate_namespace_identity == (
+        _candidate_namespace_identity()
+    )
     assert cursor.queries[0] == (
         "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
         None,
@@ -716,6 +759,9 @@ def test_catalog_resolver_uses_pg_oids_and_configured_names(
     )
     assert (SCHEMAS.silver,) in [params for _, params in cursor.queries]
     assert (SCHEMAS.gold,) in [params for _, params in cursor.queries]
+    assert (SCHEMAS.gold_candidates,) in [
+        params for _, params in cursor.queries
+    ]
     assert pool.catalog_connection.transaction_events == [
         "enter",
         "exit:none",
@@ -744,11 +790,45 @@ def test_catalog_transaction_rolls_back_on_resolution_error(monkeypatch):
                 {"schema": SCHEMAS.silver, "table": "source_a"},
             ),
             target={"schema": SCHEMAS.gold, "table": "approved_output"},
+            candidate={
+                "schema": SCHEMAS.gold_candidates,
+                "table": "approved_output_candidate_run_catalog_failure",
+            },
         )
     assert pool.catalog_connection.transaction_events == [
         "enter",
         "exit:RuntimeError",
     ]
+
+
+def test_approval_rejects_missing_candidate_namespace(monkeypatch):
+    class MissingCandidateNamespaceCursor(_CatalogCursor):
+        def execute(self, query, params=None):
+            super().execute(query, params)
+            if (
+                "pg_catalog.pg_namespace" in " ".join(str(query).split())
+                and params == (SCHEMAS.gold_candidates,)
+            ):
+                self.current = None
+
+    cursor = MissingCandidateNamespaceCursor()
+    monkeypatch.setattr(
+        gold_catalog,
+        "get_generated_sql_pool",
+        lambda: _CatalogPool(cursor),
+    )
+    with pytest.raises(GoldCatalogResolutionError) as rejected:
+        gold_catalog.resolve_gold_approval_catalog(
+            selected_sources=(
+                {"schema": SCHEMAS.silver, "table": "source_a"},
+            ),
+            target={"schema": SCHEMAS.gold, "table": "approved_output"},
+            candidate={
+                "schema": SCHEMAS.gold_candidates,
+                "table": "approved_output_candidate_run_missing_namespace",
+            },
+        )
+    assert rejected.value.area == "candidate_namespace"
 
 
 def test_approval_database_error_is_sanitized(
@@ -779,6 +859,11 @@ def test_approval_database_error_is_sanitized(
         ("database", 503, router.GOLD_DATABASE_UNAVAILABLE),
         ("source", 409, router.GOLD_SOURCE_IDENTITY_CHANGED),
         ("target", 409, router.GOLD_TARGET_IDENTITY_CHANGED),
+        (
+            "candidate_namespace",
+            409,
+            router.GOLD_TARGET_IDENTITY_CHANGED,
+        ),
     ],
 )
 def test_catalog_resolution_errors_are_mapped_by_area(
@@ -1080,6 +1165,7 @@ def test_retry_ignores_catalog_drift_and_returns_original_approval(
                 _source_identity(relation_oid=999),
             ),
             target_identity=_target_absent(),
+            candidate_namespace_identity=_candidate_namespace_identity(),
         )
 
     monkeypatch.setattr(
@@ -1145,6 +1231,7 @@ def test_synchronized_competing_catalog_snapshots_persist_one_authorization(
                 _source_identity(relation_oid=999),
             ),
             target_identity=_target_absent(),
+            candidate_namespace_identity=_candidate_namespace_identity(),
         ),
     )
     real_get_connection = router.get_connection
@@ -1287,7 +1374,7 @@ def test_execute_rejects_missing_and_malformed_approval_before_postgres(
     assert malformed.json() == {"detail": router.GOLD_RUN_MALFORMED}
 
 
-def test_valid_approval_still_cannot_execute_in_batch_45a(
+def test_valid_approval_hands_candidate_to_promoting_in_batch_45b(
     trusted_gold,
     monkeypatch,
 ):
@@ -1305,15 +1392,38 @@ def test_valid_approval_still_cannot_execute_in_batch_45a(
     assert approved.status_code == 200
     monkeypatch.setattr(
         router,
-        "get_generated_sql_pool",
-        lambda: pytest.fail("approved execute must remain contained"),
+        "execute_gold_candidate",
+        lambda state, sql_text: {
+            "database_oid": 101,
+            "namespace_oid": 104,
+            "relation_oid": 401,
+            "schema": SCHEMAS.gold_candidates,
+            "relation_name": state.candidate["table"],
+            "relation_kind": "r",
+        },
     )
     execute = client.post(
         f"/api/v1/gold/execute/{run_id}",
         json={"overwrite": False},
     )
-    assert execute.status_code == 503
-    assert execute.json() == {"detail": router.GOLD_EXECUTION_UNAVAILABLE}
+    assert execute.status_code == 200
+    assert execute.json()["status"] == "PROMOTING"
+    with get_connection() as conn:
+        envelope = conn.execute(
+            "SELECT status FROM generated_sql_review WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        security = conn.execute(
+            """
+            SELECT execution_claim_id, candidate_identity_json
+            FROM gold_security_state
+            WHERE run_id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+    assert envelope["status"] == "PROMOTING"
+    assert security["execution_claim_id"].startswith("exec_")
+    assert json.loads(security["candidate_identity_json"])["relation_oid"] == 401
 
 
 def test_malformed_approved_revision_fails_closed(
@@ -1344,3 +1454,974 @@ def test_malformed_approved_revision_fails_closed(
     )
     assert response.status_code == 422
     assert response.json() == {"detail": router.GOLD_RUN_MALFORMED}
+
+
+def _approve_seeded_run(
+    monkeypatch,
+    run_id: str,
+    *,
+    target_identity=None,
+    overwrite: bool = False,
+):
+    record = _seed_run(run_id)
+    monkeypatch.setattr(
+        router,
+        "resolve_gold_approval_catalog",
+        lambda **kwargs: _catalog(target_identity),
+    )
+    response = client.post(
+        f"/api/v1/gold/approve/{run_id}",
+        json={
+            "review_revision": record["review_revision"],
+            "overwrite": overwrite,
+        },
+    )
+    assert response.status_code == 200
+    return _load_state(run_id)
+
+
+def _candidate_identity(state, *, relation_oid: int = 401) -> dict:
+    return {
+        "database_oid": 101,
+        "namespace_oid": 104,
+        "relation_oid": relation_oid,
+        "schema": state.candidate["schema"],
+        "relation_name": state.candidate["table"],
+        "relation_kind": "r",
+    }
+
+
+def test_two_execute_requests_have_one_claim_and_one_candidate_mutation(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_execute_race"
+    state = _approve_seeded_run(monkeypatch, run_id)
+    entered = Event()
+    release = Event()
+    calls = {"count": 0}
+    calls_lock = Lock()
+
+    def controlled_execute(claimed_state, sql_text):
+        with calls_lock:
+            calls["count"] += 1
+        entered.set()
+        assert release.wait(timeout=5)
+        return _candidate_identity(claimed_state)
+
+    monkeypatch.setattr(router, "execute_gold_candidate", controlled_execute)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(
+            client.post,
+            f"/api/v1/gold/execute/{run_id}",
+            json={"overwrite": False},
+        )
+        assert entered.wait(timeout=5)
+        second = client.post(
+            f"/api/v1/gold/execute/{run_id}",
+            json={"overwrite": False},
+        )
+        release.set()
+        first = first_future.result(timeout=5)
+
+    assert first.status_code == 200
+    assert first.json()["status"] == "PROMOTING"
+    assert second.status_code == 409
+    assert second.json() == {"detail": router.GOLD_RECONCILIATION_REQUIRED}
+    assert calls["count"] == 1
+    assert first.json()["candidate"]["table"] == state.candidate["table"]
+
+
+def test_retry_while_promoting_never_executes_candidate_again(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_execute_promoting_retry"
+    state = _approve_seeded_run(monkeypatch, run_id)
+    calls = {"count": 0}
+
+    def execute_once(claimed_state, sql_text):
+        calls["count"] += 1
+        return _candidate_identity(claimed_state)
+
+    monkeypatch.setattr(router, "execute_gold_candidate", execute_once)
+    first = client.post(
+        f"/api/v1/gold/execute/{run_id}",
+        json={"overwrite": False},
+    )
+    retry = client.post(
+        f"/api/v1/gold/execute/{run_id}",
+        json={"overwrite": False},
+    )
+    assert first.status_code == 200
+    assert retry.status_code == 409
+    assert retry.json() == {"detail": router.GOLD_RECONCILIATION_REQUIRED}
+    assert calls["count"] == 1
+    assert first.json()["candidate"]["table"] == state.candidate["table"]
+
+
+@pytest.mark.parametrize(
+    ("case", "error", "expected_status", "expected_code"),
+    [
+        (
+            "conflict",
+            GoldExecutionRejected(gold_execution.GOLD_CANDIDATE_CONFLICT),
+            "EXECUTION_FAILED",
+            gold_execution.GOLD_CANDIDATE_CONFLICT,
+        ),
+        (
+            "failed",
+            GoldExecutionRejected(gold_execution.GOLD_EXECUTION_FAILED),
+            "EXECUTION_FAILED",
+            gold_execution.GOLD_EXECUTION_FAILED,
+        ),
+        (
+            "unknown",
+            GoldCommitOutcomeUnknown(),
+            "EXECUTING",
+            router.GOLD_RECONCILIATION_REQUIRED,
+        ),
+    ],
+)
+def test_execution_failure_and_commit_ambiguity_persist_honest_state(
+    trusted_gold,
+    monkeypatch,
+    case,
+    error,
+    expected_status,
+    expected_code,
+):
+    run_id = f"run_exec_{case}"
+    _approve_seeded_run(monkeypatch, run_id)
+
+    def fail_execution(state, sql_text):
+        raise error
+
+    monkeypatch.setattr(router, "execute_gold_candidate", fail_execution)
+    response = client.post(
+        f"/api/v1/gold/execute/{run_id}",
+        json={"overwrite": False},
+    )
+    with get_connection() as conn:
+        envelope = conn.execute(
+            "SELECT status FROM generated_sql_review WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        security = conn.execute(
+            """
+            SELECT execution_failure_code, candidate_identity_json
+            FROM gold_security_state WHERE run_id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+    assert response.status_code in {409, 500}
+    assert envelope["status"] == expected_status
+    assert security["execution_failure_code"] == expected_code
+    assert security["candidate_identity_json"] is None
+    loaded = _load_state(run_id)
+    assert loaded.execution_failure_code == expected_code
+    assert loaded.candidate_identity is None
+
+
+@pytest.mark.parametrize(
+    ("case", "schemas"),
+    [
+        (
+            "silver",
+            SimpleNamespace(
+                silver="changed_silver",
+                gold=SCHEMAS.gold,
+                gold_candidates=SCHEMAS.gold_candidates,
+            ),
+        ),
+        (
+            "gold",
+            SimpleNamespace(
+                silver=SCHEMAS.silver,
+                gold="changed_gold",
+                gold_candidates=SCHEMAS.gold_candidates,
+            ),
+        ),
+        (
+            "candidate",
+            SimpleNamespace(
+                silver=SCHEMAS.silver,
+                gold=SCHEMAS.gold,
+                gold_candidates="changed_candidates",
+            ),
+        ),
+    ],
+)
+def test_execute_rejects_current_layer_config_drift_before_candidate_mutation(
+    trusted_gold,
+    monkeypatch,
+    case,
+    schemas,
+):
+    run_id = f"run_cfg_{case}"
+    _approve_seeded_run(monkeypatch, run_id)
+    monkeypatch.setattr(router, "load_layer_schemas", lambda: schemas)
+    monkeypatch.setattr(
+        router,
+        "execute_gold_candidate",
+        lambda *args: pytest.fail("config drift must fail before PostgreSQL"),
+    )
+    response = client.post(
+        f"/api/v1/gold/execute/{run_id}",
+        json={"overwrite": False},
+    )
+    assert response.status_code == 409
+    assert response.json() == {"detail": router.GOLD_APPROVAL_STALE}
+    with get_connection() as conn:
+        status = conn.execute(
+            "SELECT status FROM generated_sql_review WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()["status"]
+    assert status == "PENDING"
+
+
+def test_unsupported_old_execution_policy_fails_before_candidate_mutation(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_old_execution_policy"
+    _approve_seeded_run(monkeypatch, run_id)
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE gold_security_state
+            SET policy_version = 'gold-approval-policy-v1'
+            WHERE run_id = ?
+            """,
+            (run_id,),
+        )
+        conn.commit()
+    monkeypatch.setattr(
+        router,
+        "execute_gold_candidate",
+        lambda *args: pytest.fail("old policy must fail before PostgreSQL"),
+    )
+    response = client.post(
+        f"/api/v1/gold/execute/{run_id}",
+        json={"overwrite": False},
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": router.GOLD_RUN_MALFORMED}
+
+
+def test_uncommitted_v2_approval_without_candidate_namespace_fails_closed(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_old_v2_approval_shape"
+    state = _approve_seeded_run(monkeypatch, run_id)
+    old_shape = dict(state.approval_snapshot)
+    old_shape.pop("candidate_namespace_identity")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE gold_security_state
+            SET approval_snapshot_json = ?,
+                approved_revision = ?
+            WHERE run_id = ?
+            """,
+            (
+                canonical_json(old_shape),
+                revision_for(old_shape),
+                run_id,
+            ),
+        )
+        conn.commit()
+    monkeypatch.setattr(
+        router,
+        "load_layer_schemas",
+        lambda: pytest.fail("immutable retry must not load current config"),
+    )
+    monkeypatch.setattr(
+        router,
+        "resolve_gold_approval_catalog",
+        lambda **kwargs: pytest.fail("immutable retry must not query PostgreSQL"),
+    )
+    response = client.post(
+        f"/api/v1/gold/approve/{run_id}",
+        json={
+            "review_revision": state.review_revision,
+            "overwrite": False,
+        },
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": router.GOLD_RUN_MALFORMED}
+
+
+class _ExecutionCursor:
+    def __init__(self, *, ctas_error=None):
+        self.commands = []
+        self.ctas_error = ctas_error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, query, params=None):
+        rendered = query.as_string(None) if hasattr(query, "as_string") else query
+        self.commands.append((rendered, params))
+        if (
+            self.ctas_error is not None
+            and isinstance(rendered, str)
+            and rendered.startswith("CREATE TABLE")
+        ):
+            raise self.ctas_error
+
+
+class _MissingCandidateNamespaceExecutionCursor(_ExecutionCursor):
+    def __init__(self):
+        super().__init__()
+        self.current = None
+
+    def execute(self, query, params=None):
+        super().execute(query, params)
+        rendered = query.as_string(None) if hasattr(query, "as_string") else query
+        normalized = " ".join(str(rendered).split())
+        if "pg_catalog.pg_database" in normalized:
+            self.current = (101, "isolated_test_database")
+        elif "pg_catalog.pg_namespace" in normalized:
+            namespace_oids = {
+                (SCHEMAS.silver,): 102,
+                (SCHEMAS.gold,): 103,
+                (SCHEMAS.gold_candidates,): None,
+            }
+            namespace_oid = namespace_oids[params]
+            self.current = (
+                (namespace_oid,)
+                if namespace_oid is not None
+                else None
+            )
+        elif "pg_catalog.pg_class" in normalized:
+            if params == (102, "source_a"):
+                self.current = (201, "source_a", "r")
+            elif params == (103, "approved_output"):
+                self.current = None
+            else:
+                raise AssertionError(
+                    f"unexpected execution catalog query: {normalized}, {params}"
+                )
+        else:
+            self.current = None
+
+    def fetchone(self):
+        return self.current
+
+
+class _ExecutionTransaction:
+    def __init__(self, commit_error=None):
+        self.commit_error = commit_error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None and self.commit_error is not None:
+            raise self.commit_error
+        return False
+
+
+class _ExecutionConnection:
+    def __init__(
+        self,
+        *,
+        commit_error=None,
+        cleanup_error=None,
+        ctas_error=None,
+    ):
+        self.cursor_instance = _ExecutionCursor(ctas_error=ctas_error)
+        self.commit_error = commit_error
+        self.cleanup_error = cleanup_error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None and self.cleanup_error is not None:
+            raise self.cleanup_error
+        return False
+
+    def transaction(self):
+        return _ExecutionTransaction(self.commit_error)
+
+    def cursor(self):
+        return self.cursor_instance
+
+
+class _ExecutionPool:
+    def __init__(
+        self,
+        *,
+        commit_error=None,
+        cleanup_error=None,
+        ctas_error=None,
+    ):
+        self.connection_instance = _ExecutionConnection(
+            commit_error=commit_error,
+            cleanup_error=cleanup_error,
+            ctas_error=ctas_error,
+        )
+
+    def connection(self):
+        return self.connection_instance
+
+
+def _live_execution_snapshot(state, *, candidate_identity=None):
+    assert state.approval_snapshot is not None
+    assert state.source_identities is not None
+    assert state.target_identity is not None
+    assert state.candidate_namespace_identity is not None
+    return GoldExecutionCatalogSnapshot(
+        database_oid=state.approval_snapshot["database"]["oid"],
+        database_name=state.approval_snapshot["database"]["name"],
+        source_identities=state.source_identities,
+        target_identity=state.target_identity,
+        candidate_namespace_identity=state.candidate_namespace_identity,
+        candidate_identity=candidate_identity,
+    )
+
+
+def test_candidate_transaction_uses_safe_search_path_locks_exact_sql_and_oid(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_candidate_transaction"
+    state = _approve_seeded_run(monkeypatch, run_id)
+    created = _candidate_identity(state)
+    snapshots = [
+        _live_execution_snapshot(state),
+        _live_execution_snapshot(state, candidate_identity=created),
+    ]
+    monkeypatch.setattr(
+        gold_execution,
+        "resolve_gold_execution_catalog",
+        lambda *args, **kwargs: snapshots.pop(0),
+    )
+    pool = _ExecutionPool()
+    result = gold_execution.execute_gold_candidate(
+        state,
+        state.review_snapshot["sql_text"],
+        pool=pool,
+    )
+    commands = pool.connection_instance.cursor_instance.commands
+    assert result == created
+    assert commands[0] == (
+        "SELECT pg_catalog.set_config(%s, %s, true)",
+        ("search_path", "pg_catalog"),
+    )
+    assert commands[1][0] == (
+        'LOCK TABLE "configured_silver"."source_a" IN ACCESS SHARE MODE'
+    )
+    assert commands[2] == (state.review_snapshot["sql_text"], None)
+    assert all(
+        "configured_gold.approved_output" not in command
+        for command, _ in commands
+        if isinstance(command, str)
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda state, live: GoldExecutionCatalogSnapshot(
+            database_oid=999,
+            database_name=live.database_name,
+            source_identities=live.source_identities,
+            target_identity=live.target_identity,
+            candidate_namespace_identity=live.candidate_namespace_identity,
+            candidate_identity=None,
+        ),
+        lambda state, live: GoldExecutionCatalogSnapshot(
+            database_oid=live.database_oid,
+            database_name=live.database_name,
+            source_identities=(
+                {**live.source_identities[0], "relation_oid": 999},
+            ),
+            target_identity=live.target_identity,
+            candidate_namespace_identity=live.candidate_namespace_identity,
+            candidate_identity=None,
+        ),
+        lambda state, live: GoldExecutionCatalogSnapshot(
+            database_oid=live.database_oid,
+            database_name=live.database_name,
+            source_identities=(
+                {**live.source_identities[0], "relation_kind": "p"},
+            ),
+            target_identity=live.target_identity,
+            candidate_namespace_identity=live.candidate_namespace_identity,
+            candidate_identity=None,
+        ),
+    ],
+)
+def test_execution_rejects_database_or_source_identity_drift(
+    trusted_gold,
+    monkeypatch,
+    mutate,
+):
+    run_id = f"run_identity_drift_{id(mutate)}"
+    state = _approve_seeded_run(monkeypatch, run_id)
+    live = mutate(state, _live_execution_snapshot(state))
+    monkeypatch.setattr(
+        gold_execution,
+        "resolve_gold_execution_catalog",
+        lambda *args, **kwargs: live,
+    )
+    pool = _ExecutionPool()
+    with pytest.raises(GoldExecutionRejected) as rejected:
+        gold_execution.execute_gold_candidate(
+            state,
+            state.review_snapshot["sql_text"],
+            pool=pool,
+        )
+    assert rejected.value.code == gold_execution.GOLD_SOURCE_IDENTITY_CHANGED
+    assert state.review_snapshot["sql_text"] not in {
+        command for command, _ in pool.connection_instance.cursor_instance.commands
+    }
+
+
+def test_execution_rejects_replaced_candidate_namespace_before_ctas(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_replaced_candidate_namespace"
+    state = _approve_seeded_run(monkeypatch, run_id)
+    live = GoldExecutionCatalogSnapshot(
+        database_oid=state.approval_snapshot["database"]["oid"],
+        database_name=state.approval_snapshot["database"]["name"],
+        source_identities=state.source_identities,
+        target_identity=state.target_identity,
+        candidate_namespace_identity={
+            **state.candidate_namespace_identity,
+            "namespace_oid": 999,
+        },
+        candidate_identity=None,
+    )
+
+    monkeypatch.setattr(
+        gold_execution,
+        "resolve_gold_execution_catalog",
+        lambda *args, **kwargs: live,
+    )
+    pool = _ExecutionPool()
+    with pytest.raises(GoldExecutionRejected) as rejected:
+        gold_execution.execute_gold_candidate(
+            state,
+            state.review_snapshot["sql_text"],
+            pool=pool,
+        )
+    assert rejected.value.code == gold_execution.GOLD_TARGET_IDENTITY_CHANGED
+    assert state.review_snapshot["sql_text"] not in {
+        command for command, _ in pool.connection_instance.cursor_instance.commands
+    }
+
+
+def test_missing_candidate_namespace_uses_real_resolver_and_public_drift_code(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_missing_candidate_namespace"
+    state = _approve_seeded_run(monkeypatch, run_id)
+    direct_cursor = _MissingCandidateNamespaceExecutionCursor()
+    with pytest.raises(GoldCatalogResolutionError) as unresolved:
+        gold_catalog.resolve_gold_execution_catalog(
+            direct_cursor,
+            selected_sources=state.selected_sources,
+            target=state.target,
+            candidate=state.candidate,
+        )
+    assert unresolved.value.area == "candidate_namespace"
+
+    pool = _ExecutionPool()
+    execution_cursor = _MissingCandidateNamespaceExecutionCursor()
+    pool.connection_instance.cursor_instance = execution_cursor
+    monkeypatch.setattr(
+        router,
+        "execute_gold_candidate",
+        lambda claimed_state, sql_text: gold_execution.execute_gold_candidate(
+            claimed_state,
+            sql_text,
+            pool=pool,
+        ),
+    )
+
+    response = client.post(
+        f"/api/v1/gold/execute/{run_id}",
+        json={"overwrite": False},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": gold_execution.GOLD_TARGET_IDENTITY_CHANGED
+    }
+    assert not any(
+        isinstance(command, str) and command.startswith("CREATE TABLE")
+        for command, _ in execution_cursor.commands
+    )
+    with get_connection() as conn:
+        persisted = conn.execute(
+            """
+            SELECT run.status,
+                   security.execution_failure_code,
+                   security.candidate_identity_json
+            FROM generated_sql_review AS run
+            JOIN gold_security_state AS security USING (run_id)
+            WHERE run.run_id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+    assert tuple(persisted) == (
+        "EXECUTION_FAILED",
+        gold_execution.GOLD_TARGET_IDENTITY_CHANGED,
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    "target_identity",
+    [
+        {
+            "state": "existing",
+            "database_oid": 101,
+            "namespace_oid": 103,
+            "relation_oid": 999,
+            "schema": SCHEMAS.gold,
+            "relation_name": "approved_output",
+            "relation_kind": "r",
+        },
+        {
+            "state": "absent",
+            "database_oid": 101,
+            "namespace_oid": 999,
+            "schema": SCHEMAS.gold,
+            "relation_name": "approved_output",
+        },
+    ],
+)
+def test_execution_rejects_target_identity_drift(
+    trusted_gold,
+    monkeypatch,
+    target_identity,
+):
+    run_id = f"run_target_drift_{target_identity['namespace_oid']}"
+    state = _approve_seeded_run(monkeypatch, run_id)
+    live = _live_execution_snapshot(state)
+    changed = GoldExecutionCatalogSnapshot(
+        database_oid=live.database_oid,
+        database_name=live.database_name,
+        source_identities=live.source_identities,
+        target_identity=target_identity,
+        candidate_namespace_identity=live.candidate_namespace_identity,
+        candidate_identity=None,
+    )
+    monkeypatch.setattr(
+        gold_execution,
+        "resolve_gold_execution_catalog",
+        lambda *args, **kwargs: changed,
+    )
+    with pytest.raises(GoldExecutionRejected) as rejected:
+        gold_execution.execute_gold_candidate(
+            state,
+            state.review_snapshot["sql_text"],
+            pool=_ExecutionPool(),
+        )
+    assert rejected.value.code == gold_execution.GOLD_TARGET_IDENTITY_CHANGED
+
+
+@pytest.mark.parametrize(
+    "changed_target",
+    [
+        _target_absent(),
+        {**_target_existing(), "relation_oid": 999},
+        {**_target_existing(), "relation_kind": "r"},
+    ],
+)
+def test_execution_rejects_existing_target_disappearance_or_replacement(
+    trusted_gold,
+    monkeypatch,
+    changed_target,
+):
+    run_id = f"run_target_existing_{changed_target['state']}_{changed_target.get('relation_oid', 0)}"
+    state = _approve_seeded_run(
+        monkeypatch,
+        run_id,
+        target_identity=_target_existing(),
+        overwrite=True,
+    )
+    live = _live_execution_snapshot(state)
+    changed = GoldExecutionCatalogSnapshot(
+        database_oid=live.database_oid,
+        database_name=live.database_name,
+        source_identities=live.source_identities,
+        target_identity=changed_target,
+        candidate_namespace_identity=live.candidate_namespace_identity,
+        candidate_identity=None,
+    )
+    monkeypatch.setattr(
+        gold_execution,
+        "resolve_gold_execution_catalog",
+        lambda *args, **kwargs: changed,
+    )
+    with pytest.raises(GoldExecutionRejected) as rejected:
+        gold_execution.execute_gold_candidate(
+            state,
+            state.review_snapshot["sql_text"],
+            pool=_ExecutionPool(),
+        )
+    assert rejected.value.code == gold_execution.GOLD_TARGET_IDENTITY_CHANGED
+
+
+def test_candidate_conflict_fails_closed_without_ctas(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_candidate_conflict"
+    state = _approve_seeded_run(monkeypatch, run_id)
+    existing = _candidate_identity(state, relation_oid=777)
+    live = _live_execution_snapshot(state, candidate_identity=existing)
+    monkeypatch.setattr(
+        gold_execution,
+        "resolve_gold_execution_catalog",
+        lambda *args, **kwargs: live,
+    )
+    pool = _ExecutionPool()
+    with pytest.raises(GoldExecutionRejected) as rejected:
+        gold_execution.execute_gold_candidate(
+            state,
+            state.review_snapshot["sql_text"],
+            pool=pool,
+        )
+    assert rejected.value.code == gold_execution.GOLD_CANDIDATE_CONFLICT
+    assert state.review_snapshot["sql_text"] not in {
+        command for command, _ in pool.connection_instance.cursor_instance.commands
+    }
+
+
+def test_missing_source_is_sanitized_and_fails_before_ctas(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_missing_source"
+    state = _approve_seeded_run(monkeypatch, run_id)
+
+    def missing_source(*args, **kwargs):
+        raise GoldCatalogResolutionError("source", "raw catalog detail")
+
+    monkeypatch.setattr(
+        gold_execution,
+        "resolve_gold_execution_catalog",
+        missing_source,
+    )
+    pool = _ExecutionPool()
+    with pytest.raises(GoldExecutionRejected) as rejected:
+        gold_execution.execute_gold_candidate(
+            state,
+            state.review_snapshot["sql_text"],
+            pool=pool,
+        )
+    assert rejected.value.code == gold_execution.GOLD_SOURCE_IDENTITY_CHANGED
+    assert "raw catalog detail" not in str(rejected.value)
+    assert state.review_snapshot["sql_text"] not in {
+        command for command, _ in pool.connection_instance.cursor_instance.commands
+    }
+
+
+def test_wrong_candidate_identity_after_ctas_rolls_back_as_known_failure(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_wrong_candidate"
+    state = _approve_seeded_run(monkeypatch, run_id)
+    wrong = {
+        **_candidate_identity(state),
+        "relation_name": "different_candidate",
+    }
+    snapshots = [
+        _live_execution_snapshot(state),
+        _live_execution_snapshot(state, candidate_identity=wrong),
+    ]
+    monkeypatch.setattr(
+        gold_execution,
+        "resolve_gold_execution_catalog",
+        lambda *args, **kwargs: snapshots.pop(0),
+    )
+    with pytest.raises(GoldExecutionRejected) as rejected:
+        gold_execution.execute_gold_candidate(
+            state,
+            state.review_snapshot["sql_text"],
+            pool=_ExecutionPool(),
+        )
+    assert rejected.value.code == gold_execution.GOLD_EXECUTION_FAILED
+
+
+def test_lost_commit_acknowledgement_is_reported_as_unknown(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_lost_commit_ack"
+    state = _approve_seeded_run(monkeypatch, run_id)
+    created = _candidate_identity(state)
+    snapshots = [
+        _live_execution_snapshot(state),
+        _live_execution_snapshot(state, candidate_identity=created),
+    ]
+    monkeypatch.setattr(
+        gold_execution,
+        "resolve_gold_execution_catalog",
+        lambda *args, **kwargs: snapshots.pop(0),
+    )
+    pool = _ExecutionPool(commit_error=psycopg.OperationalError("lost ack"))
+    with pytest.raises(GoldCommitOutcomeUnknown):
+        gold_execution.execute_gold_candidate(
+            state,
+            state.review_snapshot["sql_text"],
+            pool=pool,
+        )
+
+
+def test_generic_commit_error_is_reported_as_unknown(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_generic_commit_error"
+    state = _approve_seeded_run(monkeypatch, run_id)
+    created = _candidate_identity(state)
+    snapshots = [
+        _live_execution_snapshot(state),
+        _live_execution_snapshot(state, candidate_identity=created),
+    ]
+    monkeypatch.setattr(
+        gold_execution,
+        "resolve_gold_execution_catalog",
+        lambda *args, **kwargs: snapshots.pop(0),
+    )
+    with pytest.raises(GoldCommitOutcomeUnknown):
+        gold_execution.execute_gold_candidate(
+            state,
+            state.review_snapshot["sql_text"],
+            pool=_ExecutionPool(commit_error=RuntimeError("commit ack lost")),
+        )
+
+
+def test_ctas_statement_error_is_known_rollback(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_ctas_statement_error"
+    state = _approve_seeded_run(monkeypatch, run_id)
+    monkeypatch.setattr(
+        gold_execution,
+        "resolve_gold_execution_catalog",
+        lambda *args, **kwargs: _live_execution_snapshot(state),
+    )
+    with pytest.raises(GoldExecutionRejected) as rejected:
+        gold_execution.execute_gold_candidate(
+            state,
+            state.review_snapshot["sql_text"],
+            pool=_ExecutionPool(ctas_error=RuntimeError("statement failed")),
+        )
+    assert rejected.value.code == gold_execution.GOLD_EXECUTION_FAILED
+
+
+def test_acknowledged_commit_survives_generic_pool_cleanup_error(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_post_commit_pool_cleanup"
+    state = _approve_seeded_run(monkeypatch, run_id)
+    created = _candidate_identity(state)
+    snapshots = [
+        _live_execution_snapshot(state),
+        _live_execution_snapshot(state, candidate_identity=created),
+    ]
+    monkeypatch.setattr(
+        gold_execution,
+        "resolve_gold_execution_catalog",
+        lambda *args, **kwargs: snapshots.pop(0),
+    )
+    result = gold_execution.execute_gold_candidate(
+        state,
+        state.review_snapshot["sql_text"],
+        pool=_ExecutionPool(
+            cleanup_error=RuntimeError("pool return failed after commit")
+        ),
+    )
+    assert result == created
+
+
+def test_post_commit_sqlite_handoff_failure_requires_reconciliation_and_no_retry(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_post_commit_sqlite_handoff"
+    _approve_seeded_run(monkeypatch, run_id)
+    executor_calls = {"count": 0}
+
+    def committed_candidate(state, sql_text):
+        executor_calls["count"] += 1
+        return _candidate_identity(state)
+
+    monkeypatch.setattr(router, "execute_gold_candidate", committed_candidate)
+    real_get_connection = router.get_connection
+    connection_calls = {"count": 0}
+
+    def fail_handoff_connection():
+        connection_calls["count"] += 1
+        if connection_calls["count"] == 2:
+            raise RuntimeError("isolated SQLite handoff failure")
+        return real_get_connection()
+
+    monkeypatch.setattr(router, "get_connection", fail_handoff_connection)
+    first = client.post(
+        f"/api/v1/gold/execute/{run_id}",
+        json={"overwrite": False},
+    )
+    monkeypatch.setattr(router, "get_connection", real_get_connection)
+    retry = client.post(
+        f"/api/v1/gold/execute/{run_id}",
+        json={"overwrite": False},
+    )
+    assert first.status_code == 409
+    assert first.json() == {"detail": router.GOLD_RECONCILIATION_REQUIRED}
+    assert retry.status_code == 409
+    assert retry.json() == {"detail": router.GOLD_RECONCILIATION_REQUIRED}
+    assert executor_calls["count"] == 1
+    with get_connection() as conn:
+        persisted = conn.execute(
+            """
+            SELECT run.status,
+                   security.execution_failure_code,
+                   security.candidate_identity_json
+            FROM generated_sql_review AS run
+            JOIN gold_security_state AS security USING (run_id)
+            WHERE run.run_id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+    assert tuple(persisted) == (
+        "EXECUTING",
+        router.GOLD_RECONCILIATION_REQUIRED,
+        None,
+    )
+
+
+def test_source_lock_order_and_identifier_quoting_are_deterministic():
+    first = _ExecutionCursor()
+    second = _ExecutionCursor()
+    sources = (
+        {"schema": "tenant_schema", "table": "z_table"},
+        {"schema": "tenant_schema", "table": "A_table"},
+    )
+    lock_gold_sources(first, sources)
+    lock_gold_sources(second, tuple(reversed(sources)))
+    expected = [
+        'LOCK TABLE "tenant_schema"."A_table" IN ACCESS SHARE MODE',
+        'LOCK TABLE "tenant_schema"."z_table" IN ACCESS SHARE MODE',
+    ]
+    assert [command for command, _ in first.commands] == expected
+    assert [command for command, _ in second.commands] == expected

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from psycopg import sql
+
 from src.db_config import get_generated_sql_pool
 
 
@@ -25,6 +27,17 @@ class GoldCatalogSnapshot:
     database_name: str
     source_identities: tuple[dict[str, Any], ...]
     target_identity: dict[str, Any]
+    candidate_namespace_identity: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class GoldExecutionCatalogSnapshot:
+    database_oid: int
+    database_name: str
+    source_identities: tuple[dict[str, Any], ...]
+    target_identity: dict[str, Any]
+    candidate_namespace_identity: dict[str, Any]
+    candidate_identity: dict[str, Any] | None
 
 
 def _database_identity(cursor: Any) -> tuple[int, str]:
@@ -54,6 +67,19 @@ def _namespace_oid(cursor: Any, schema: str, *, area: str) -> int:
     if row is None:
         raise GoldCatalogResolutionError(area, "configured namespace is unresolved")
     return int(row[0])
+
+
+def _namespace_identity(
+    *,
+    database_oid: int,
+    namespace_oid: int,
+    schema: str,
+) -> dict[str, Any]:
+    return {
+        "database_oid": database_oid,
+        "namespace_oid": namespace_oid,
+        "schema": schema,
+    }
 
 
 def _relation_identity(
@@ -94,8 +120,9 @@ def resolve_gold_approval_catalog(
     *,
     selected_sources: Sequence[Mapping[str, str]],
     target: Mapping[str, str],
+    candidate: Mapping[str, str],
 ) -> GoldCatalogSnapshot:
-    """Capture source and target identities in one read-only catalog transaction."""
+    """Capture all approval identities in one read-only catalog transaction."""
     with get_generated_sql_pool().connection() as connection:
         with connection.transaction():
             with connection.cursor() as cursor:
@@ -106,9 +133,11 @@ def resolve_gold_approval_catalog(
                 namespace_oids: dict[str, int] = {}
                 for schema in sorted(
                     {item["schema"] for item in selected_sources}
-                    | {target["schema"]}
+                    | {target["schema"], candidate["schema"]}
                 ):
                     area = "target" if schema == target["schema"] else "source"
+                    if schema == candidate["schema"]:
+                        area = "candidate_namespace"
                     namespace_oids[schema] = _namespace_oid(
                         cursor,
                         schema,
@@ -153,10 +182,112 @@ def resolve_gold_approval_catalog(
                         "state": "existing",
                         **target_identity,
                     }
+                candidate_namespace_identity = _namespace_identity(
+                    database_oid=database_oid,
+                    namespace_oid=namespace_oids[candidate["schema"]],
+                    schema=candidate["schema"],
+                )
 
     return GoldCatalogSnapshot(
         database_oid=database_oid,
         database_name=database_name,
         source_identities=tuple(source_identities),
         target_identity=target_identity,
+        candidate_namespace_identity=candidate_namespace_identity,
+    )
+
+
+def lock_gold_sources(
+    cursor: Any,
+    selected_sources: Sequence[Mapping[str, str]],
+) -> None:
+    """Acquire deterministic, identifier-safe ACCESS SHARE locks."""
+    for source in sorted(
+        selected_sources,
+        key=lambda item: (item["schema"], item["table"]),
+    ):
+        cursor.execute(
+            sql.SQL("LOCK TABLE {}.{} IN ACCESS SHARE MODE").format(
+                sql.Identifier(source["schema"]),
+                sql.Identifier(source["table"]),
+            )
+        )
+
+
+def resolve_gold_execution_catalog(
+    cursor: Any,
+    *,
+    selected_sources: Sequence[Mapping[str, str]],
+    target: Mapping[str, str],
+    candidate: Mapping[str, str],
+) -> GoldExecutionCatalogSnapshot:
+    """Resolve all execution identities after source locks are held."""
+    database_oid, database_name = _database_identity(cursor)
+    namespace_oids: dict[str, int] = {}
+    source_schemas = {item["schema"] for item in selected_sources}
+    for schema in sorted(source_schemas | {target["schema"], candidate["schema"]}):
+        if schema == target["schema"]:
+            area = "target"
+        elif schema == candidate["schema"]:
+            area = "candidate_namespace"
+        else:
+            area = "source"
+        namespace_oids[schema] = _namespace_oid(cursor, schema, area=area)
+
+    source_identities: list[dict[str, Any]] = []
+    for source in selected_sources:
+        identity = _relation_identity(
+            cursor,
+            database_oid=database_oid,
+            namespace_oid=namespace_oids[source["schema"]],
+            schema=source["schema"],
+            relation_name=source["table"],
+            area="source",
+        )
+        if identity is None:
+            raise GoldCatalogResolutionError(
+                "source",
+                "selected source relation is unresolved",
+            )
+        source_identities.append(identity)
+
+    target_identity = _relation_identity(
+        cursor,
+        database_oid=database_oid,
+        namespace_oid=namespace_oids[target["schema"]],
+        schema=target["schema"],
+        relation_name=target["table"],
+        area="target",
+    )
+    if target_identity is None:
+        target_identity = {
+            "state": "absent",
+            "database_oid": database_oid,
+            "namespace_oid": namespace_oids[target["schema"]],
+            "schema": target["schema"],
+            "relation_name": target["table"],
+        }
+    else:
+        target_identity = {"state": "existing", **target_identity}
+
+    candidate_identity = _relation_identity(
+        cursor,
+        database_oid=database_oid,
+        namespace_oid=namespace_oids[candidate["schema"]],
+        schema=candidate["schema"],
+        relation_name=candidate["table"],
+        area="candidate",
+    )
+    candidate_namespace_identity = _namespace_identity(
+        database_oid=database_oid,
+        namespace_oid=namespace_oids[candidate["schema"]],
+        schema=candidate["schema"],
+    )
+    return GoldExecutionCatalogSnapshot(
+        database_oid=database_oid,
+        database_name=database_name,
+        source_identities=tuple(source_identities),
+        target_identity=target_identity,
+        candidate_namespace_identity=candidate_namespace_identity,
+        candidate_identity=candidate_identity,
     )

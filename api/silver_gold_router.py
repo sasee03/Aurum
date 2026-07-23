@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
 from typing import List
 
 from fastapi import APIRouter, HTTPException, Query
@@ -35,8 +36,19 @@ from src.gold_security import (
     load_persisted_gold_security_state,
     revision_for,
 )
+from src.gold_execution import (
+    GOLD_CANDIDATE_CONFLICT,
+    GOLD_DATABASE_UNAVAILABLE,
+    GOLD_EXECUTION_FAILED,
+    GOLD_SOURCE_IDENTITY_CHANGED,
+    GOLD_SQL_REJECTED,
+    GOLD_TARGET_IDENTITY_CHANGED,
+    GoldCommitOutcomeUnknown,
+    GoldExecutionRejected,
+    execute_gold_candidate,
+    validate_approved_gold_sql,
+)
 from src.generator_trust import GeneratorTrustPolicy
-from src.sql_safety import validate_generated_sql
 
 router = APIRouter(prefix="/api/v1/gold", tags=["gold"])
 logger = logging.getLogger(__name__)
@@ -61,9 +73,7 @@ GOLD_RUN_MALFORMED = "GOLD_RUN_MALFORMED"
 GOLD_APPROVAL_REQUIRED = "GOLD_APPROVAL_REQUIRED"
 GOLD_APPROVAL_STALE = "GOLD_APPROVAL_STALE"
 GOLD_STATE_CONFLICT = "GOLD_STATE_CONFLICT"
-GOLD_SOURCE_IDENTITY_CHANGED = "GOLD_SOURCE_IDENTITY_CHANGED"
-GOLD_TARGET_IDENTITY_CHANGED = "GOLD_TARGET_IDENTITY_CHANGED"
-GOLD_DATABASE_UNAVAILABLE = "GOLD_DATABASE_UNAVAILABLE"
+GOLD_RECONCILIATION_REQUIRED = "GOLD_RECONCILIATION_REQUIRED"
 
 class GenerateGoldPayload(BaseModel):
     target_table_name: str
@@ -214,7 +224,7 @@ def review_gold_sql(run_id: str):
         row = conn.execute(
             """
             SELECT run_id, table_name, sql_text, planned_changes_json,
-                   candidate_schema, generator_provenance
+                   status, candidate_schema, generator_provenance
             FROM generated_sql_review
             WHERE run_id = ?
             """,
@@ -240,13 +250,7 @@ def review_gold_sql(run_id: str):
             configured_gold_schema=schemas.gold,
             configured_candidate_schema=schemas.gold_candidates,
         )
-        validated_sql = validate_generated_sql(
-            row["sql_text"],
-            expected_schema=schemas.gold_candidates,
-            expected_table_name=state.target["table"],
-            run_id=run_id,
-            expected_step_count=None,
-        )
+        validated_sql = validate_approved_gold_sql(state, row["sql_text"])
         planned_changes = json.loads(row["planned_changes_json"])
     except (GoldStateMalformed, GoldStateStale, TypeError, ValueError):
         raise HTTPException(status_code=422, detail=GOLD_RUN_MALFORMED) from None
@@ -325,13 +329,7 @@ def approve_gold_sql(run_id: str, payload: ApproveGoldPayload):
                         security_row,
                         row,
                     )
-                    validate_generated_sql(
-                        row["sql_text"],
-                        expected_schema=state.candidate["schema"],
-                        expected_table_name=state.target["table"],
-                        run_id=run_id,
-                        expected_step_count=None,
-                    )
+                    validate_approved_gold_sql(state, row["sql_text"])
                 except GoldStateStale:
                     raise HTTPException(
                         status_code=409,
@@ -387,13 +385,7 @@ def approve_gold_sql(run_id: str, payload: ApproveGoldPayload):
             if payload.review_revision != state.review_revision:
                 raise HTTPException(status_code=409, detail=GOLD_APPROVAL_STALE)
             try:
-                validate_generated_sql(
-                    row["sql_text"],
-                    expected_schema=schemas.gold_candidates,
-                    expected_table_name=state.target["table"],
-                    run_id=run_id,
-                    expected_step_count=None,
-                )
+                validate_approved_gold_sql(state, row["sql_text"])
             except Exception:
                 raise HTTPException(
                     status_code=422,
@@ -404,6 +396,7 @@ def approve_gold_sql(run_id: str, payload: ApproveGoldPayload):
                 catalog = resolve_gold_approval_catalog(
                     selected_sources=state.selected_sources,
                     target=state.target,
+                    candidate=state.candidate,
                 )
             except GoldCatalogResolutionError as exc:
                 if exc.area == "database":
@@ -411,7 +404,7 @@ def approve_gold_sql(run_id: str, payload: ApproveGoldPayload):
                         status_code=503,
                         detail=GOLD_DATABASE_UNAVAILABLE,
                     ) from None
-                if exc.area == "target":
+                if exc.area in {"target", "candidate_namespace"}:
                     raise HTTPException(
                         status_code=409,
                         detail=GOLD_TARGET_IDENTITY_CHANGED,
@@ -453,6 +446,9 @@ def approve_gold_sql(run_id: str, payload: ApproveGoldPayload):
                     database_name=catalog.database_name,
                     source_identities=catalog.source_identities,
                     target_identity=catalog.target_identity,
+                    candidate_namespace_identity=(
+                        catalog.candidate_namespace_identity
+                    ),
                     overwrite_authorized=payload.overwrite,
                 )
             except GoldStateMalformed:
@@ -509,35 +505,250 @@ def approve_gold_sql(run_id: str, payload: ApproveGoldPayload):
 
 @router.post("/execute/{run_id}")
 def execute_gold_sql(run_id: str, payload: ExecuteGoldPayload):
-    """Fail closed before PostgreSQL until later execution controls exist."""
-    with get_connection() as conn_db:
-        row, security_row = _load_gold_rows(conn_db, run_id)
-
-    if row is None:
-        raise HTTPException(status_code=404, detail=GOLD_RUN_NOT_FOUND)
-    if not GOLD_GENERATOR_TRUST.trusts_run(row["generator_provenance"]):
-        raise HTTPException(status_code=503, detail=GOLD_EXECUTION_UNAVAILABLE)
-    if row["status"] != "PENDING":
-        raise HTTPException(status_code=409, detail=GOLD_APPROVAL_STALE)
-
+    """Atomically claim and create one approved Gold candidate."""
+    execution_claim_id = f"exec_{uuid.uuid4().hex}"
     try:
         schemas = load_layer_schemas()
-        state = load_gold_security_state(
-            security_row,
-            row,
-            configured_silver_schema=schemas.silver,
-            configured_gold_schema=schemas.gold,
-            configured_candidate_schema=schemas.gold_candidates,
-        )
-    except GoldStateStale:
-        raise HTTPException(status_code=409, detail=GOLD_APPROVAL_STALE) from None
-    except GoldStateMalformed:
-        raise HTTPException(status_code=422, detail=GOLD_RUN_MALFORMED) from None
     except Exception:
-        logger.exception("Gold execution preflight configuration failed")
+        logger.exception("Gold execution configuration failed")
         raise HTTPException(status_code=503, detail=GOLD_UNAVAILABLE) from None
-    if state.approved_revision is None:
-        raise HTTPException(status_code=409, detail=GOLD_APPROVAL_REQUIRED)
-    if payload.overwrite != state.overwrite_authorized:
-        raise HTTPException(status_code=409, detail=GOLD_APPROVAL_STALE)
-    raise HTTPException(status_code=503, detail=GOLD_EXECUTION_UNAVAILABLE)
+
+    with get_connection() as conn_db:
+        try:
+            conn_db.execute("BEGIN IMMEDIATE")
+            row, security_row = _load_gold_rows(conn_db, run_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail=GOLD_RUN_NOT_FOUND)
+            if not GOLD_GENERATOR_TRUST.trusts_run(row["generator_provenance"]):
+                raise HTTPException(
+                    status_code=503,
+                    detail=GOLD_EXECUTION_UNAVAILABLE,
+                )
+            if row["status"] in {"EXECUTING", "PROMOTING"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail=GOLD_RECONCILIATION_REQUIRED,
+                )
+            if row["status"] != "PENDING":
+                raise HTTPException(status_code=409, detail=GOLD_STATE_CONFLICT)
+            try:
+                state = load_gold_security_state(
+                    security_row,
+                    row,
+                    configured_silver_schema=schemas.silver,
+                    configured_gold_schema=schemas.gold,
+                    configured_candidate_schema=schemas.gold_candidates,
+                )
+            except GoldStateStale:
+                raise HTTPException(
+                    status_code=409,
+                    detail=GOLD_APPROVAL_STALE,
+                ) from None
+            except GoldStateMalformed:
+                raise HTTPException(
+                    status_code=422,
+                    detail=GOLD_RUN_MALFORMED,
+                ) from None
+            if state.approved_revision is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=GOLD_APPROVAL_REQUIRED,
+                )
+            if payload.overwrite != state.overwrite_authorized:
+                raise HTTPException(
+                    status_code=409,
+                    detail=GOLD_APPROVAL_STALE,
+                )
+            claimed_at = approval_timestamp()
+            security_claim = conn_db.execute(
+                """
+                UPDATE gold_security_state
+                SET execution_claim_id = ?,
+                    execution_claimed_at = ?,
+                    execution_failure_code = NULL
+                WHERE run_id = ?
+                  AND approved_revision = ?
+                  AND execution_claim_id IS NULL
+                """,
+                (
+                    execution_claim_id,
+                    claimed_at,
+                    run_id,
+                    state.approved_revision,
+                ),
+            )
+            envelope_claim = conn_db.execute(
+                """
+                UPDATE generated_sql_review
+                SET status = 'EXECUTING'
+                WHERE run_id = ?
+                  AND status = 'PENDING'
+                """,
+                (run_id,),
+            )
+            if security_claim.rowcount != 1 or envelope_claim.rowcount != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail=GOLD_STATE_CONFLICT,
+                )
+            conn_db.commit()
+        except HTTPException:
+            conn_db.rollback()
+            raise
+
+    try:
+        candidate_identity = execute_gold_candidate(state, row["sql_text"])
+    except GoldCommitOutcomeUnknown:
+        _mark_gold_reconciliation_required(run_id, execution_claim_id)
+        raise HTTPException(
+            status_code=409,
+            detail=GOLD_RECONCILIATION_REQUIRED,
+        ) from None
+    except GoldExecutionRejected as exc:
+        if not _mark_gold_execution_failed(
+            run_id,
+            execution_claim_id,
+            exc.code,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=GOLD_RECONCILIATION_REQUIRED,
+            ) from None
+        status_code = (
+            422
+            if exc.code == GOLD_SQL_REJECTED
+            else 409
+            if exc.code
+            in {
+                GOLD_SOURCE_IDENTITY_CHANGED,
+                GOLD_TARGET_IDENTITY_CHANGED,
+                GOLD_CANDIDATE_CONFLICT,
+            }
+            else 503
+            if exc.code == GOLD_DATABASE_UNAVAILABLE
+            else 500
+        )
+        raise HTTPException(status_code=status_code, detail=exc.code) from None
+
+    try:
+        with get_connection() as conn_db:
+            conn_db.execute("BEGIN IMMEDIATE")
+            identity_update = conn_db.execute(
+                """
+                UPDATE gold_security_state
+                SET candidate_identity_json = ?,
+                    execution_failure_code = NULL
+                WHERE run_id = ?
+                  AND execution_claim_id = ?
+                  AND candidate_identity_json IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM generated_sql_review
+                      WHERE generated_sql_review.run_id = gold_security_state.run_id
+                        AND generated_sql_review.status = 'EXECUTING'
+                  )
+                """,
+                (
+                    canonical_json(candidate_identity),
+                    run_id,
+                    execution_claim_id,
+                ),
+            )
+            status_update = conn_db.execute(
+                """
+                UPDATE generated_sql_review
+                SET status = 'PROMOTING'
+                WHERE run_id = ?
+                  AND status = 'EXECUTING'
+                """,
+                (run_id,),
+            )
+            if identity_update.rowcount != 1 or status_update.rowcount != 1:
+                conn_db.rollback()
+                raise RuntimeError("Gold candidate handoff state conflict")
+            conn_db.commit()
+    except Exception:
+        logger.exception("Gold candidate committed but SQLite handoff failed")
+        _mark_gold_reconciliation_required(run_id, execution_claim_id)
+        raise HTTPException(
+            status_code=409,
+            detail=GOLD_RECONCILIATION_REQUIRED,
+        ) from None
+
+    return {
+        "status": "PROMOTING",
+        "run_id": run_id,
+        "execution_claim_id": execution_claim_id,
+        "candidate": {
+            "schema": candidate_identity["schema"],
+            "table": candidate_identity["relation_name"],
+        },
+    }
+
+
+def _mark_gold_execution_failed(
+    run_id: str,
+    execution_claim_id: str,
+    failure_code: str,
+) -> bool:
+    try:
+        with get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            security_update = conn.execute(
+                """
+                UPDATE gold_security_state
+                SET execution_failure_code = ?
+                WHERE run_id = ?
+                  AND execution_claim_id = ?
+                  AND candidate_identity_json IS NULL
+                """,
+                (failure_code, run_id, execution_claim_id),
+            )
+            status_update = conn.execute(
+                """
+                UPDATE generated_sql_review
+                SET status = 'EXECUTION_FAILED'
+                WHERE run_id = ?
+                  AND status = 'EXECUTING'
+                """,
+                (run_id,),
+            )
+            if security_update.rowcount != 1 or status_update.rowcount != 1:
+                conn.rollback()
+                return False
+            conn.commit()
+            return True
+    except Exception:
+        logger.exception("Failed to persist deterministic Gold execution failure")
+        return False
+
+
+def _mark_gold_reconciliation_required(
+    run_id: str,
+    execution_claim_id: str,
+) -> None:
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE gold_security_state
+                SET execution_failure_code = ?
+                WHERE run_id = ?
+                  AND execution_claim_id = ?
+                  AND candidate_identity_json IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM generated_sql_review
+                      WHERE generated_sql_review.run_id = gold_security_state.run_id
+                        AND generated_sql_review.status = 'EXECUTING'
+                  )
+                """,
+                (
+                    GOLD_RECONCILIATION_REQUIRED,
+                    run_id,
+                    execution_claim_id,
+                ),
+            )
+            conn.commit()
+    except Exception:
+        logger.exception("Failed to persist Gold reconciliation marker")

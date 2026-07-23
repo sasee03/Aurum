@@ -109,6 +109,10 @@ CREATE TABLE IF NOT EXISTS gold_security_state (
         CHECK (overwrite_authorized IS NULL OR overwrite_authorized IN (0, 1)),
     source_identities_json TEXT,
     target_identity_json TEXT,
+    execution_claim_id TEXT,
+    execution_claimed_at TEXT,
+    candidate_identity_json TEXT,
+    execution_failure_code TEXT,
     FOREIGN KEY (run_id) REFERENCES generated_sql_review(run_id)
 );
 """
@@ -157,6 +161,30 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "generated_sql_review", "generator_provenance", "generator_provenance TEXT")
     _ensure_column(conn, "table_rules", "rule_revision", "rule_revision TEXT")
     _ensure_column(conn, "generated_sql_review", "rule_revision", "rule_revision TEXT")
+    _ensure_column(
+        conn,
+        "gold_security_state",
+        "execution_claim_id",
+        "execution_claim_id TEXT",
+    )
+    _ensure_column(
+        conn,
+        "gold_security_state",
+        "execution_claimed_at",
+        "execution_claimed_at TEXT",
+    )
+    _ensure_column(
+        conn,
+        "gold_security_state",
+        "candidate_identity_json",
+        "candidate_identity_json TEXT",
+    )
+    _ensure_column(
+        conn,
+        "gold_security_state",
+        "execution_failure_code",
+        "execution_failure_code TEXT",
+    )
 
     # Migration: Backfill existing valid table_rules rows where rule_revision IS NULL
     try:
