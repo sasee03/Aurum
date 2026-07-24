@@ -61,6 +61,13 @@ class GoldSecurityState:
     execution_claimed_at: str | None
     candidate_identity: dict[str, Any] | None
     execution_failure_code: str | None
+    promotion_claim_id: str | None
+    promotion_claimed_at: str | None
+    promotion_failure_code: str | None
+    promoted_target_identity: dict[str, Any] | None
+    backup_identity: dict[str, Any] | None
+    backup_cleanup_eligible: bool | None
+    promotion_committed_at: str | None
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -191,6 +198,22 @@ def expected_candidate_name(target_name: str, run_id: str) -> str:
     return _require_identifier(
         f"{target_name}_candidate_{run_id}",
         field="candidate_name",
+    )
+
+
+def promotion_backup_name(target_name: str, promotion_claim_id: str) -> str:
+    """Derive the unique server-owned backup name without using it as authority."""
+    target_name = _require_identifier(target_name, field="target_name")
+    promotion_claim_id = _require_generator_token(
+        promotion_claim_id,
+        field="promotion_claim_id",
+    )
+    suffix = hashlib.sha256(promotion_claim_id.encode("utf-8")).hexdigest()[:16]
+    marker = f"__aurum_backup_{suffix}"
+    stem_bytes = POSTGRES_IDENTIFIER_MAX_BYTES - len(marker.encode("ascii"))
+    return _require_identifier(
+        f"{target_name[:stem_bytes]}{marker}",
+        field="backup_name",
     )
 
 
@@ -829,8 +852,38 @@ def load_gold_security_state(
         execution_claimed_at=None,
         candidate_identity=None,
         execution_failure_code=None,
+        promotion_claim_id=None,
+        promotion_claimed_at=None,
+        promotion_failure_code=None,
+        promoted_target_identity=None,
+        backup_identity=None,
+        backup_cleanup_eligible=None,
+        promotion_committed_at=None,
     )
     if not any(present.values()):
+        if _row_value(envelope_row, "status") != "PENDING":
+            raise GoldStateMalformed(
+                "unapproved run has an invalid lifecycle status"
+            )
+        if any(
+            _row_value(security_row, field) is not None
+            for field in (
+                "execution_claim_id",
+                "execution_claimed_at",
+                "candidate_identity_json",
+                "execution_failure_code",
+                "promotion_claim_id",
+                "promotion_claimed_at",
+                "promotion_failure_code",
+                "promoted_target_identity_json",
+                "backup_identity_json",
+                "backup_cleanup_eligible",
+                "promotion_committed_at",
+            )
+        ):
+            raise GoldStateMalformed(
+                "unapproved run contains execution or promotion metadata"
+            )
         return state
 
     approval_snapshot = strict_json_loads(
@@ -871,6 +924,10 @@ def load_gold_security_state(
         target_identity_value,
         target=target,
     )
+    if (target_identity["state"] == "existing") != overwrite_authorized:
+        raise GoldStateMalformed(
+            "overwrite authorization is inconsistent with target approval"
+        )
     approved_state = GoldSecurityState(
         **{
             **state.__dict__,
@@ -918,6 +975,25 @@ def load_gold_security_state(
         execution_failure_code,
     )
     if all(value is None for value in execution_values):
+        if any(
+            _row_value(security_row, field) is not None
+            for field in (
+                "promotion_claim_id",
+                "promotion_claimed_at",
+                "promotion_failure_code",
+                "promoted_target_identity_json",
+                "backup_identity_json",
+                "backup_cleanup_eligible",
+                "promotion_committed_at",
+            )
+        ):
+            raise GoldStateMalformed(
+                "unexecuted run contains promotion metadata"
+            )
+        if _row_value(envelope_row, "status") != "PENDING":
+            raise GoldStateMalformed(
+                "run status requires execution metadata"
+            )
         return approved_state
     execution_claim_id = _require_generator_token(
         execution_claim_id,
@@ -974,14 +1050,215 @@ def load_gold_security_state(
             execution_failure_code,
             field="execution_failure_code",
         )
+
+    promotion_claim_id = _row_value(security_row, "promotion_claim_id")
+    promotion_claimed_at = _row_value(security_row, "promotion_claimed_at")
+    promotion_failure_code = _row_value(
+        security_row,
+        "promotion_failure_code",
+    )
+    promoted_target_identity_json = _row_value(
+        security_row,
+        "promoted_target_identity_json",
+    )
+    backup_identity_json = _row_value(security_row, "backup_identity_json")
+    backup_cleanup_eligible_raw = _row_value(
+        security_row,
+        "backup_cleanup_eligible",
+    )
+    promotion_committed_at = _row_value(
+        security_row,
+        "promotion_committed_at",
+    )
+    promotion_values = (
+        promotion_claim_id,
+        promotion_claimed_at,
+        promotion_failure_code,
+        promoted_target_identity_json,
+        backup_identity_json,
+        backup_cleanup_eligible_raw,
+        promotion_committed_at,
+    )
+    promotion_present = any(value is not None for value in promotion_values)
+    promoted_target_identity = None
+    backup_identity = None
+    backup_cleanup_eligible = None
+    if promotion_present:
+        promotion_claim_id = _require_generator_token(
+            promotion_claim_id,
+            field="promotion_claim_id",
+        )
+        promotion_claimed_at = _require_nonempty_string(
+            promotion_claimed_at,
+            field="promotion_claimed_at",
+        )
+        try:
+            promotion_timestamp = datetime.fromisoformat(promotion_claimed_at)
+        except ValueError as exc:
+            raise GoldStateMalformed(
+                "promotion_claimed_at is not an ISO-8601 timestamp"
+            ) from exc
+        if promotion_timestamp.tzinfo is None:
+            raise GoldStateMalformed(
+                "promotion_claimed_at must include a timezone"
+            )
+        if promotion_failure_code is not None:
+            promotion_failure_code = _require_generator_token(
+                promotion_failure_code,
+                field="promotion_failure_code",
+            )
+        if promoted_target_identity_json is not None:
+            promoted_target_identity = _parse_relation_identity(
+                strict_json_loads(
+                    promoted_target_identity_json,
+                    field="promoted_target_identity_json",
+                ),
+                field="promoted target identity",
+            )
+            if candidate_identity is None or (
+                promoted_target_identity["database_oid"]
+                != candidate_identity["database_oid"]
+                or promoted_target_identity["namespace_oid"]
+                != target_identity["namespace_oid"]
+                or promoted_target_identity["relation_oid"]
+                != candidate_identity["relation_oid"]
+                or promoted_target_identity["schema"] != target["schema"]
+                or promoted_target_identity["relation_name"] != target["table"]
+                or promoted_target_identity["relation_kind"] != "r"
+            ):
+                raise GoldStateMalformed(
+                    "promoted target does not prove candidate OID lineage"
+                )
+        if backup_identity_json is not None:
+            backup_identity = _parse_relation_identity(
+                strict_json_loads(
+                    backup_identity_json,
+                    field="backup_identity_json",
+                ),
+                field="backup identity",
+            )
+            if (
+                target_identity["state"] != "existing"
+                or backup_identity["database_oid"]
+                != target_identity["database_oid"]
+                or backup_identity["namespace_oid"]
+                != target_identity["namespace_oid"]
+                or backup_identity["relation_oid"]
+                != target_identity["relation_oid"]
+                or backup_identity["schema"] != target_identity["schema"]
+                or backup_identity["relation_name"]
+                != promotion_backup_name(target["table"], promotion_claim_id)
+                or backup_identity["relation_kind"]
+                != target_identity["relation_kind"]
+            ):
+                raise GoldStateMalformed(
+                    "backup identity does not prove approved-target lineage"
+                )
+        if backup_cleanup_eligible_raw is not None:
+            if (
+                type(backup_cleanup_eligible_raw) is not int
+                or backup_cleanup_eligible_raw not in (0, 1)
+            ):
+                raise GoldStateMalformed(
+                    "backup cleanup eligibility is malformed"
+                )
+            backup_cleanup_eligible = bool(backup_cleanup_eligible_raw)
+        if (backup_identity is None) != (
+            backup_cleanup_eligible is None
+        ):
+            raise GoldStateMalformed(
+                "backup cleanup eligibility is only partially persisted"
+            )
+        if backup_cleanup_eligible:
+            raise GoldStateMalformed(
+                "Batch 4.5C cannot mark backup cleanup eligible"
+            )
+        if promotion_committed_at is not None:
+            promotion_committed_at = _require_nonempty_string(
+                promotion_committed_at,
+                field="promotion_committed_at",
+            )
+            try:
+                committed_timestamp = datetime.fromisoformat(
+                    promotion_committed_at
+                )
+            except ValueError as exc:
+                raise GoldStateMalformed(
+                    "promotion_committed_at is not an ISO-8601 timestamp"
+                ) from exc
+            if committed_timestamp.tzinfo is None:
+                raise GoldStateMalformed(
+                    "promotion_committed_at must include a timezone"
+                )
+
     if status == "EXECUTING":
-        if candidate_identity is not None:
+        if candidate_identity is not None or promotion_present:
             raise GoldStateMalformed("executing state cannot contain candidate identity")
     elif status == "PROMOTING":
         if candidate_identity is None or execution_failure_code is not None:
             raise GoldStateMalformed("promoting state is internally inconsistent")
+        if promotion_present and any(
+            value is not None
+            for value in (
+                promotion_failure_code,
+                promoted_target_identity,
+                backup_identity,
+                backup_cleanup_eligible,
+                promotion_committed_at,
+            )
+        ):
+            raise GoldStateMalformed(
+                "active promotion cannot contain terminal outcome metadata"
+            )
+    elif status == "PROMOTED":
+        if (
+            candidate_identity is None
+            or execution_failure_code is not None
+            or not promotion_present
+            or promotion_failure_code is not None
+            or promoted_target_identity is None
+            or promotion_committed_at is None
+        ):
+            raise GoldStateMalformed("promoted state is internally inconsistent")
+        if target_identity["state"] == "existing" and backup_identity is None:
+            raise GoldStateMalformed(
+                "overwrite promotion is missing exact backup identity"
+            )
+        if target_identity["state"] == "absent" and backup_identity is not None:
+            raise GoldStateMalformed(
+                "absent-target promotion cannot contain a backup identity"
+            )
+    elif status == "PROMOTION_FAILED":
+        if (
+            candidate_identity is None
+            or execution_failure_code is not None
+            or not promotion_present
+            or promotion_failure_code is None
+            or promoted_target_identity is not None
+            or backup_identity is not None
+            or promotion_committed_at is not None
+        ):
+            raise GoldStateMalformed(
+                "failed promotion state is internally inconsistent"
+            )
+    elif status == "AMBIGUOUS_PROMOTION":
+        if (
+            candidate_identity is None
+            or execution_failure_code is not None
+            or not promotion_present
+            or promotion_failure_code is not None
+            or promoted_target_identity is not None
+            or promotion_committed_at is not None
+        ):
+            raise GoldStateMalformed(
+                "ambiguous promotion state is internally inconsistent"
+            )
     elif status == "EXECUTION_FAILED":
-        if candidate_identity is not None or execution_failure_code is None:
+        if (
+            candidate_identity is not None
+            or execution_failure_code is None
+            or promotion_present
+        ):
             raise GoldStateMalformed("failed execution state is internally inconsistent")
     else:
         raise GoldStateMalformed("execution metadata is invalid for run status")
@@ -992,6 +1269,13 @@ def load_gold_security_state(
             "execution_claimed_at": execution_claimed_at,
             "candidate_identity": candidate_identity,
             "execution_failure_code": execution_failure_code,
+            "promotion_claim_id": promotion_claim_id,
+            "promotion_claimed_at": promotion_claimed_at,
+            "promotion_failure_code": promotion_failure_code,
+            "promoted_target_identity": promoted_target_identity,
+            "backup_identity": backup_identity,
+            "backup_cleanup_eligible": backup_cleanup_eligible,
+            "promotion_committed_at": promotion_committed_at,
         }
     )
 

@@ -33,6 +33,310 @@ _FORBIDDEN_NODES = (
     exp.Command,
 )
 
+_FORBIDDEN_FUNCTIONS = frozenset({
+    # Session / Runtime configuration & role switching
+    "set_config",
+    "current_setting",
+    "set_user",
+    "set_session_authorization",
+    "reset_session_authorization",
+})
+
+_ALLOWED_FUNCTION_CLASSES: tuple[type[exp.Expression], ...] = (
+    # Aggregates
+    exp.Sum,
+    exp.Count,
+    exp.Avg,
+    exp.Min,
+    exp.Max,
+    exp.Stddev,
+    exp.Variance,
+    # Logic / Nulls / Conditionals
+    exp.Coalesce,
+    exp.Nullif,
+    exp.If,
+    exp.Case,
+    exp.Least,
+    exp.Greatest,
+    exp.Exists,
+    # Strings
+    exp.Lower,
+    exp.Upper,
+    exp.Concat,
+    exp.Substring,
+    exp.Trim,
+    exp.Replace,
+    exp.Length,
+    exp.StrPosition,
+    # Math
+    exp.Round,
+    exp.Abs,
+    exp.Ceil,
+    exp.Floor,
+    exp.Sqrt,
+    exp.Log,
+    exp.Exp,
+    exp.Mod,
+    # Date / Time
+    exp.Extract,
+    exp.TimestampTrunc,
+    exp.DateTrunc,
+    exp.CurrentTimestamp,
+    exp.CurrentDate,
+    exp.CurrentTime,
+    exp.DateAdd,
+    exp.DateSub,
+    exp.DateDiff,
+    exp.TimeToStr,
+    exp.StrToTime,
+    exp.Date,
+    # Conversion / Casting
+    exp.Cast,
+    exp.TryCast,
+    # Window functions
+    exp.RowNumber,
+    exp.Lag,
+    exp.Lead,
+    exp.FirstValue,
+    exp.LastValue,
+)
+
+_ALLOWED_ANONYMOUS_FUNCTIONS: frozenset[str] = frozenset({
+    "sum",
+    "count",
+    "avg",
+    "min",
+    "max",
+    "coalesce",
+    "nullif",
+    "round",
+    "lower",
+    "upper",
+    "length",
+    "concat",
+    "substring",
+    "trim",
+    "ltrim",
+    "rtrim",
+    "replace",
+    "abs",
+    "ceil",
+    "floor",
+    "sqrt",
+    "power",
+    "log",
+    "exp",
+    "extract",
+    "date_trunc",
+    "now",
+    "current_timestamp",
+    "current_date",
+    "current_time",
+    "row_number",
+    "rank",
+    "dense_rank",
+    "ntile",
+    "lag",
+    "lead",
+    "first_value",
+    "last_value",
+    "cast",
+    "try_cast",
+    "least",
+    "greatest",
+    "stddev",
+    "variance",
+    "median",
+    "mode",
+    "percentile_cont",
+    "percentile_disc",
+    "to_char",
+    "to_date",
+    "to_timestamp",
+    "to_number",
+    "split_part",
+})
+
+
+_ALLOWED_CAST_TYPES = frozenset({
+    exp.DataType.Type.SMALLINT,
+    exp.DataType.Type.INT,
+    exp.DataType.Type.BIGINT,
+    exp.DataType.Type.DECIMAL,
+    exp.DataType.Type.FLOAT,
+    exp.DataType.Type.DOUBLE,
+    exp.DataType.Type.TEXT,
+    exp.DataType.Type.VARCHAR,
+    exp.DataType.Type.CHAR,
+    exp.DataType.Type.BOOLEAN,
+    exp.DataType.Type.DATE,
+    exp.DataType.Type.TIMESTAMP,
+    exp.DataType.Type.TIMESTAMPTZ,
+    exp.DataType.Type.TIME,
+    exp.DataType.Type.INTERVAL,
+    exp.DataType.Type.JSON,
+    exp.DataType.Type.JSONB,
+    exp.DataType.Type.UUID,
+})
+
+
+_ALLOWED_CATALOG_TYPES = frozenset({
+    "int2",
+    "int4",
+    "int8",
+    "numeric",
+    "float4",
+    "float8",
+    "text",
+    "varchar",
+    "bpchar",
+    "bool",
+    "date",
+    "timestamp",
+    "timestamptz",
+    "time",
+    "timetz",
+    "interval",
+    "json",
+    "jsonb",
+    "uuid",
+})
+
+
+def get_referenced_physical_columns(stmt: exp.Expression, approved_sources: tuple[tuple[str, str], ...]) -> dict[tuple[str, str], set[str]]:
+    """Extract physical source columns referenced in the query mapped by (schema, table)."""
+    sources_map = {(schema.lower(), table.lower()): (schema, table) for schema, table in approved_sources}
+    result: dict[tuple[str, str], set[str]] = {src: set() for src in sources_map.values()}
+
+    for node in stmt.walk():
+        if isinstance(node, exp.Star):
+            for src in result:
+                result[src].add("*")
+        elif isinstance(node, exp.Column):
+            col_name = node.name.lower() if node.name else None
+            tbl_name = node.table.lower() if node.table else None
+            db_name = node.db.lower() if node.db else None
+
+            if db_name and tbl_name:
+                key = (db_name, tbl_name)
+                if key in sources_map:
+                    result[sources_map[key]].add(col_name if col_name else "*")
+            elif len(result) == 1:
+                single_src = list(result.keys())[0]
+                result[single_src].add(col_name if col_name else "*")
+            else:
+                for src in result:
+                    result[src].add(col_name if col_name else "*")
+
+    for src in result:
+        if not result[src]:
+            result[src].add("*")
+
+    return result
+
+
+def validate_catalog_source_types(cursor, physical_relations: Any) -> None:
+    """Validate catalog type capabilities of physical source relations in PostgreSQL.
+
+    Queries pg_attribute, pg_type, pg_namespace under relation lock.
+    Enforces that ALL non-dropped user columns on EACH physical relation used by the SQL
+    resolve to allowed pg_catalog built-in base types.
+    Fails closed on custom domains, enums, composites, ranges, or unapproved types.
+    """
+    if isinstance(physical_relations, dict):
+        relations = list(physical_relations.keys())
+    else:
+        relations = list(physical_relations)
+
+    for (schema_name, table_name) in relations:
+        cursor.execute(
+            """
+            SELECT
+                a.attname,
+                t.typname,
+                n.nspname AS type_nspname,
+                t.typtype,
+                t.oid AS type_oid
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n_tbl ON n_tbl.oid = c.relnamespace
+            JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+            JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
+            JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+            WHERE n_tbl.nspname = %s AND c.relname = %s AND a.attnum > 0 AND NOT a.attisdropped
+            """,
+            (schema_name, table_name),
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            raise SqlSafetyViolation(f"Physical source table {schema_name}.{table_name} missing from catalog.")
+
+        found_cols: dict[str, tuple[str, str, str]] = {}
+        for row in rows:
+            attname = str(row[0])
+            typname = str(row[1])
+            type_nspname = str(row[2])
+            typtype = row[3].decode("utf-8") if isinstance(row[3], bytes) else str(row[3])
+            found_cols[attname.lower()] = (typname.lower(), type_nspname.lower(), typtype.lower())
+
+        for col, (typname, type_nspname, typtype) in found_cols.items():
+            if type_nspname != "pg_catalog":
+                raise SqlSafetyViolation(
+                    f"Physical source column '{col}' in {schema_name}.{table_name} uses non-pg_catalog type "
+                    f"'{type_nspname}.{typname}'. Custom source types are forbidden."
+                )
+
+            if typtype != "b":
+                raise SqlSafetyViolation(
+                    f"Physical source column '{col}' in {schema_name}.{table_name} uses non-base type "
+                    f"'{typname}' (typtype='{typtype}'). Domains, enums, composites, and ranges are forbidden."
+                )
+
+            if typname not in _ALLOWED_CATALOG_TYPES:
+                raise SqlSafetyViolation(
+                    f"Physical source column '{col}' in {schema_name}.{table_name} uses unapproved built-in type "
+                    f"'{typname}'. Fail closed."
+                )
+
+
+
+def _validate_no_unsafe_functions(stmt: exp.Expression) -> None:
+    if list(stmt.find_all(exp.Set)):
+        raise SqlSafetyViolation("Generated SQL cannot contain SET statements.")
+
+    for node in stmt.walk():
+        if isinstance(node, exp.Operator):
+            raise SqlSafetyViolation("Explicit PostgreSQL OPERATOR(...) syntax is forbidden.")
+
+        if isinstance(node, exp.Dot):
+            if isinstance(node.expression, (exp.Func, exp.Anonymous)) or isinstance(node.this, (exp.Func, exp.Anonymous)):
+                raise SqlSafetyViolation("Schema-qualified function calls are forbidden.")
+
+        if isinstance(node, (exp.Cast, exp.TryCast)):
+            dt = node.to
+            if not isinstance(dt, exp.DataType):
+                raise SqlSafetyViolation("Invalid cast target expression.")
+            if dt.args.get("kind") is not None:
+                raise SqlSafetyViolation("Schema-qualified or custom cast types are forbidden.")
+            if dt.this not in _ALLOWED_CAST_TYPES:
+                raise SqlSafetyViolation(f"Cast target type '{dt.sql('postgres')}' is forbidden or unclassified.")
+
+        if isinstance(node, exp.Func):
+            if isinstance(node, exp.Anonymous):
+                name = node.this if isinstance(node.this, str) else str(node.this)
+                name_clean = name.strip().lower()
+                if name_clean not in _ALLOWED_ANONYMOUS_FUNCTIONS:
+                    raise SqlSafetyViolation(
+                        f"Generated SQL contains unclassified or forbidden function: {name_clean}"
+                    )
+            else:
+                if not isinstance(node, _ALLOWED_FUNCTION_CLASSES):
+                    raise SqlSafetyViolation(
+                        f"Generated SQL contains forbidden or unclassified function node: {type(node).__name__}"
+                    )
+            if node.args.get("db") is not None or node.args.get("catalog") is not None:
+                raise SqlSafetyViolation("Schema-qualified functions are forbidden.")
+
+
 
 def _is_select_like(expression: exp.Expression) -> bool:
     return isinstance(expression, (exp.Select, exp.Union, exp.Intersect, exp.Except))
@@ -75,7 +379,7 @@ def _validate_gold_sources(
     select_expression: exp.Expression,
     *,
     selected_sources: tuple[tuple[str, str], ...],
-) -> None:
+) -> tuple[tuple[str, str], ...]:
     allowed = frozenset(selected_sources)
     physical_sources: set[tuple[str, str]] = set()
 
@@ -127,6 +431,25 @@ def _validate_gold_sources(
         raise SqlSafetyViolation(
             "Gold SQL must read at least one approved physical Silver source."
         )
+
+    return tuple(sorted(physical_sources))
+
+
+def extract_gold_physical_sources(
+    sql_str: str,
+    *,
+    selected_sources: tuple[tuple[str, str], ...],
+) -> tuple[tuple[str, str], ...]:
+    """Parse and return the exact physical used Gold source relations from AST validation."""
+    statements = sqlglot.parse(sql_str, read="postgres")
+    if not statements or not statements[0]:
+        raise SqlSafetyViolation("Empty SQL statement.")
+    stmt = statements[0]
+    expression = stmt.args.get("expression")
+    if not expression:
+        raise SqlSafetyViolation("Gold SQL missing SELECT body.")
+    return _validate_gold_sources(expression, selected_sources=selected_sources)
+
 
 
 def validate_generated_sql(
@@ -187,6 +510,8 @@ def validate_generated_sql(
     for node_type in _FORBIDDEN_NODES:
         for node in stmt.find_all(node_type):
             raise SqlSafetyViolation(f"Forbidden operation found: {type(node).__name__}")
+
+    _validate_no_unsafe_functions(stmt)
 
     if isinstance(stmt, exp.Create):
         if stmt.args.get("kind") != "TABLE":
@@ -389,10 +714,12 @@ def execute_candidate_sql(
     expected_table_name: str | None = None,
     expected_bronze_schema: str | None = None,
     mode: str = "generic",
-) -> None:
+    expected_bronze_identity: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Execute LLM-generated SQL and immediately transfer ownership of the created candidate table."""
     import psycopg.sql as psql
-    
+    from src.db_config import get_promotion_pool
+
     # 1. Validate the SQL (will raise SqlSafetyViolation if malicious/invalid)
     validated_sql = validate_generated_sql(
         sql_str,
@@ -402,10 +729,10 @@ def execute_candidate_sql(
         run_id=run_id,
         mode=mode,
     )
-    
+
     # 2. Extract target table and schema for the ALTER statement
     stmt = sqlglot.parse_one(validated_sql, read="postgres")
-    
+
     if isinstance(stmt, exp.Create):
         this = stmt.args.get("this")
         target_schema = this.args.get("db").name
@@ -415,32 +742,78 @@ def execute_candidate_sql(
         # we don't have a table to hand off.
         with conn.cursor() as cur:
             cur.execute(validated_sql)
-        return
+        return None
 
-    from src.db_config import postgres_promotion_conninfo
-    from src.promotion import discard_candidate_table
+    if mode == "p2_silver":
+        if not expected_bronze_identity:
+            raise SqlSafetyViolation("Silver transformation requires pre-bound 6-field Bronze physical source identity.")
 
-    with conn.cursor() as cur:
-        # Check if candidate table already exists (e.g. from a prior failed execution attempt)
-        cur.execute(
-            "SELECT to_regclass(%s)",
-            (f'"{target_schema}"."{target_table}"',)
-        )
-        if cur.fetchone()[0] is not None:
-            # Safely drop stale candidate table using trusted promotion role
-            discard_candidate_table(target_table, target_schema, postgres_promotion_conninfo())
+    with get_promotion_pool().connection() as p_conn:
+        with p_conn.transaction():
+            with p_conn.cursor() as p_cur:
+                # Check if candidate table already exists — FAIL CLOSED on collision
+                p_cur.execute(
+                    "SELECT to_regclass(%s)",
+                    (f'"{target_schema}"."{target_table}"',)
+                )
+                if p_cur.fetchone()[0] is not None:
+                    raise SqlSafetyViolation(
+                        f"Candidate table {target_schema}.{target_table} already exists."
+                    )
 
-        # Execute the validated LLM statement to create the table
-        cur.execute(validated_sql)
-        # Immediately transfer ownership to aurum_promotion
-        cur.execute(psql.SQL("ALTER TABLE {}.{} OWNER TO aurum_promotion").format(
-            psql.Identifier(target_schema), psql.Identifier(target_table)
-        ))
+                # Lock Bronze source table & validate whole-relation catalog types under lock
+                req_bronze_schema = expected_bronze_schema or "bronze"
+                req_bronze_table = expected_table_name or target_table.replace(f"_candidate_{run_id}" if run_id else "_candidate_", "")
+                p_cur.execute(
+                    psql.SQL("LOCK TABLE {}.{} IN ACCESS SHARE MODE").format(
+                        psql.Identifier(req_bronze_schema), psql.Identifier(req_bronze_table)
+                    )
+                )
+                from src.promotion import resolve_relation_identity
+                live_bronze = resolve_relation_identity(p_conn, req_bronze_schema, req_bronze_table)
+                if live_bronze is None:
+                    raise SqlSafetyViolation(f"Source relation {req_bronze_schema}.{req_bronze_table} not found.")
 
-    # Grant SELECT on candidate table to aurum_generated_sql so it can preview before promotion
-    import psycopg
-    with psycopg.connect(postgres_promotion_conninfo()) as p_conn:
-        with p_conn.cursor() as p_cur:
-            p_cur.execute(psql.SQL("GRANT SELECT ON {}.{} TO aurum_generated_sql").format(
-                psql.Identifier(target_schema), psql.Identifier(target_table)
-            ))
+                if mode == "p2_silver" and expected_bronze_identity:
+                    for k in ("database_oid", "namespace_oid", "relation_oid", "schema", "relation_name", "relation_kind"):
+                        if expected_bronze_identity.get(k) != live_bronze.get(k):
+                            raise SqlSafetyViolation(
+                                f"Bronze source relation identity mismatch on key '{k}': live={live_bronze.get(k)} vs expected={expected_bronze_identity.get(k)}."
+                            )
+
+                validate_catalog_source_types(p_cur, ((req_bronze_schema, req_bronze_table),))
+
+                p_cur.execute("SELECT pg_catalog.set_config(%s, %s, true)", ("search_path", "pg_catalog"))
+                p_cur.execute("SET LOCAL ROLE aurum_generated_sql")
+                p_cur.execute(validated_sql)
+
+                # Revert role to session_user (aurum_promotion) for single-transaction ownership handoff
+                p_cur.execute("RESET ROLE")
+                p_cur.execute(psql.SQL("ALTER TABLE {}.{} OWNER TO aurum_promotion").format(
+                    psql.Identifier(target_schema), psql.Identifier(target_table)
+                ))
+                p_cur.execute(psql.SQL("GRANT SELECT ON {}.{} TO aurum_generated_sql").format(
+                    psql.Identifier(target_schema), psql.Identifier(target_table)
+                ))
+
+                p_cur.execute(
+                    """
+                    SELECT c.oid, n.oid, c.relname, n.nspname, c.relkind, (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())
+                    FROM pg_catalog.pg_class c
+                    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = %s AND c.relname = %s
+                    """,
+                    (target_schema, target_table),
+                )
+                row = p_cur.fetchone()
+                if not row:
+                    raise SqlSafetyViolation(f"Candidate table {target_schema}.{target_table} relation resolution failed.")
+
+                return {
+                    "relation_oid": int(row[0]),
+                    "namespace_oid": int(row[1]),
+                    "relation_name": str(row[2]),
+                    "schema": str(row[3]),
+                    "relation_kind": row[4].decode("utf-8") if isinstance(row[4], bytes) else str(row[4]),
+                    "database_oid": int(row[5]) if row[5] is not None else 0,
+                }

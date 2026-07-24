@@ -27,6 +27,9 @@ import psycopg_pool
 
 load_dotenv()
 
+POSTGRES_PROMOTION_ROLE = "aurum_promotion"
+POSTGRES_GENERATED_SQL_ROLE = "aurum_generated_sql"
+
 
 @dataclass(frozen=True)
 class PostgresConfig:
@@ -107,9 +110,125 @@ def postgres_promotion_conninfo() -> str:
         f"host={cfg.host} "
         f"port={cfg.port} "
         f"dbname={cfg.dbname} "
-        f"user=aurum_promotion "
-        f"password=aurum_promotion"
+        f"user={POSTGRES_PROMOTION_ROLE} "
+        f"password={POSTGRES_PROMOTION_ROLE}"
     )
+
+def postgres_generated_sql_conninfo() -> str:
+    """Return the connection string for aurum_generated_sql role."""
+    cfg = load_postgres_config()
+    return (
+        f"host={cfg.host} "
+        f"port={cfg.port} "
+        f"dbname={cfg.dbname} "
+        f"user={POSTGRES_GENERATED_SQL_ROLE} "
+        f"password={POSTGRES_GENERATED_SQL_ROLE}"
+    )
+
+
+
+def apply_role_setup(
+    conn_or_conninfo: Any | None = None,
+    schemas: LayerSchemas | None = None,
+) -> None:
+    """Apply config-driven layer schema creation and role permissions.
+
+    Dynamically resolves physical schema names from authoritative deployment
+    configuration (load_layer_schemas()) and executes structural identifier-quoted
+    schema creation and role grants.
+    """
+    if schemas is None:
+        schemas = load_layer_schemas()
+
+    from psycopg import sql
+
+    def _execute_grants(conn: Any) -> None:
+        with conn.cursor() as cur:
+            for s in (
+                schemas.source,
+                schemas.bronze,
+                schemas.silver,
+                schemas.gold,
+                schemas.silver_candidates,
+                schemas.gold_candidates,
+            ):
+                cur.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                        sql.Identifier(s)
+                    )
+                )
+
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'aurum_ingestion') THEN
+                        CREATE ROLE aurum_ingestion WITH LOGIN PASSWORD 'aurum_ingestion';
+                    END IF;
+                    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'aurum_generated_sql') THEN
+                        CREATE ROLE aurum_generated_sql WITH LOGIN PASSWORD 'aurum_generated_sql' NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS NOINHERIT;
+                    END IF;
+                    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'aurum_promotion') THEN
+                        CREATE ROLE aurum_promotion WITH LOGIN PASSWORD 'aurum_promotion' NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS INHERIT;
+                    END IF;
+                    ALTER ROLE aurum_generated_sql NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS NOINHERIT;
+                    ALTER ROLE aurum_promotion NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS INHERIT;
+                END
+                $$;
+            """)
+
+            # Ingestion grants
+            cur.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO aurum_ingestion").format(sql.Identifier(schemas.source)))
+            cur.execute(sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA {} TO aurum_ingestion").format(sql.Identifier(schemas.source)))
+            cur.execute(sql.SQL("GRANT USAGE, CREATE ON SCHEMA {} TO aurum_ingestion").format(sql.Identifier(schemas.bronze)))
+
+            # Generated SQL grants: USAGE on execution read layers, CREATE ONLY on candidates
+            cur.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO aurum_generated_sql").format(sql.Identifier(schemas.bronze)))
+            cur.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO aurum_generated_sql").format(sql.Identifier(schemas.silver)))
+            cur.execute(sql.SQL("GRANT USAGE, CREATE ON SCHEMA {} TO aurum_generated_sql").format(sql.Identifier(schemas.silver_candidates)))
+            cur.execute(sql.SQL("GRANT USAGE, CREATE ON SCHEMA {} TO aurum_generated_sql").format(sql.Identifier(schemas.gold_candidates)))
+
+            # Generated SQL SELECT on existing tables in read layers (Bronze and Silver)
+            for s in (schemas.bronze, schemas.silver):
+                cur.execute(sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA {} TO aurum_generated_sql").format(sql.Identifier(s)))
+
+            # Creator-role-specific default privileges derived from actual production creators
+            for creator in ("aurum_ingestion", "aurum"):
+                cur.execute(
+                    sql.SQL("ALTER DEFAULT PRIVILEGES FOR ROLE {} IN SCHEMA {} GRANT SELECT ON TABLES TO aurum_generated_sql").format(
+                        sql.Identifier(creator), sql.Identifier(schemas.bronze)
+                    )
+                )
+            cur.execute(
+                sql.SQL("ALTER DEFAULT PRIVILEGES FOR ROLE aurum IN SCHEMA {} GRANT SELECT ON TABLES TO aurum_generated_sql").format(
+                    sql.Identifier(schemas.silver)
+                )
+            )
+
+            # Promotion grants: USAGE and CREATE for metadata movements/handoffs
+            cur.execute(sql.SQL("GRANT USAGE, CREATE ON SCHEMA {} TO aurum_promotion").format(sql.Identifier(schemas.silver)))
+            cur.execute(sql.SQL("GRANT USAGE, CREATE ON SCHEMA {} TO aurum_promotion").format(sql.Identifier(schemas.gold)))
+            cur.execute(sql.SQL("GRANT USAGE, CREATE ON SCHEMA {} TO aurum_promotion").format(sql.Identifier(schemas.silver_candidates)))
+            cur.execute(sql.SQL("GRANT USAGE, CREATE ON SCHEMA {} TO aurum_promotion").format(sql.Identifier(schemas.gold_candidates)))
+
+            # Database connect grants
+            cur.execute("SELECT current_database()")
+            curr_db = cur.fetchone()[0]
+            cur.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO aurum_ingestion, aurum_generated_sql, aurum_promotion").format(sql.Identifier(curr_db)))
+
+            # Role hierarchy invariant: aurum_promotion holds membership in aurum_generated_sql
+            cur.execute("REVOKE aurum_promotion FROM aurum_generated_sql;")
+            cur.execute("REVOKE aurum_generated_sql FROM aurum_promotion;")
+            cur.execute("GRANT aurum_generated_sql TO aurum_promotion WITH INHERIT TRUE, SET TRUE;")
+
+        conn.commit()
+
+    if conn_or_conninfo is None or isinstance(conn_or_conninfo, str):
+        target = conn_or_conninfo or postgres_conninfo()
+        import psycopg
+        with psycopg.connect(target) as conn:
+            _execute_grants(conn)
+    else:
+        _execute_grants(conn_or_conninfo)
 
 
 def postgres_target_info() -> dict[str, str | int]:
@@ -167,7 +286,7 @@ def init_pools():
         open=True
     )
     _promotion_pool = psycopg_pool.ConnectionPool(
-        _conninfo_for("aurum_promotion", "aurum_promotion"),
+        _conninfo_for(POSTGRES_PROMOTION_ROLE, POSTGRES_PROMOTION_ROLE),
         kwargs={"autocommit": True},
         configure=_configure_pool_conn,
         min_size=1,
@@ -220,3 +339,8 @@ def close_pools():
 
 import atexit
 atexit.register(close_pools)
+
+
+if __name__ == "__main__":
+    apply_role_setup()
+    print("Idempotent Aurum role and schema setup completed successfully.")

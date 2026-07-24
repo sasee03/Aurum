@@ -11,8 +11,8 @@ import pytest
 
 import src.candidate_cleanup as candidate_cleanup
 from src.db_config import load_layer_schemas, postgres_promotion_conninfo, get_generated_sql_pool
-from src.sql_safety import execute_candidate_sql
-from src.promotion import discard_candidate_table
+from src.sql_safety import execute_candidate_sql, SqlSafetyViolation
+from src.promotion import discard_candidate_table, resolve_relation_identity
 from src.app_state.db import get_connection, init_schema
 from src.candidate_cleanup import cleanup_orphaned_candidate_tables
 from src.gold_security import (
@@ -135,7 +135,9 @@ def _seed_gold_cleanup_state(
                 execution_claim_id = ?,
                 execution_claimed_at = ?,
                 candidate_identity_json = ?,
-                execution_failure_code = ?
+                execution_failure_code = ?,
+                promotion_claim_id = ?,
+                promotion_claimed_at = ?
             WHERE run_id = ?
             """,
             (
@@ -152,6 +154,16 @@ def _seed_gold_cleanup_state(
                     else None
                 ),
                 failure_code,
+                (
+                    f"promo_{run_id}"
+                    if status == "AMBIGUOUS_PROMOTION"
+                    else None
+                ),
+                (
+                    approval_timestamp()
+                    if status == "AMBIGUOUS_PROMOTION"
+                    else None
+                ),
                 run_id,
             ),
         )
@@ -208,6 +220,50 @@ def _mock_cleanup_catalog(monkeypatch, schemas, identities):
         "connect",
         lambda *args, **kwargs: Connection(),
     )
+
+
+def _seed_silver_cleanup_state(
+    schemas,
+    *,
+    run_id,
+    target,
+    status,
+    candidate_identity,
+    promoted_target_identity=None,
+):
+    old_time = (
+        datetime.datetime.now(datetime.timezone.utc)
+        - datetime.timedelta(days=1)
+    ).isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review (
+                run_id, table_name, sql_text, planned_changes_json,
+                created_at, status, candidate_schema, candidate_identity_json,
+                promoted_target_identity_json
+            )
+            VALUES (?, ?, ?, '{}', ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                target,
+                (
+                    f"CREATE TABLE {schemas.silver_candidates}."
+                    f"{candidate_identity['relation_name']} AS SELECT 1"
+                ),
+                old_time,
+                status,
+                schemas.silver_candidates,
+                json.dumps(candidate_identity),
+                (
+                    json.dumps(promoted_target_identity)
+                    if isinstance(promoted_target_identity, dict)
+                    else promoted_target_identity
+                ),
+            ),
+        )
+        conn.commit()
 
 
 class _GoldCleanupCursor:
@@ -318,9 +374,16 @@ def test_no_valid_batch45b_gold_lifecycle_reaches_destructive_cleanup(
 ):
     schemas = load_layer_schemas()
     identities = []
-    for status in ("EXECUTING", "PROMOTING", "EXECUTION_FAILED"):
-        run_id = f"run_cleanup_{status.lower()}"
-        target = f"active_{status.lower()}"
+    for index, status in enumerate(
+        (
+            "EXECUTING",
+            "PROMOTING",
+            "AMBIGUOUS_PROMOTION",
+            "EXECUTION_FAILED",
+        )
+    ):
+        run_id = f"run_cleanup_{index}"
+        target = f"active_{index}"
         identity = _candidate_identity(
             schemas,
             target=target,
@@ -332,7 +395,11 @@ def test_no_valid_batch45b_gold_lifecycle_reaches_destructive_cleanup(
             run_id=run_id,
             target=target,
             status=status,
-            candidate_identity=identity if status == "PROMOTING" else None,
+            candidate_identity=(
+                identity
+                if status in {"PROMOTING", "AMBIGUOUS_PROMOTION"}
+                else None
+            ),
             failure_code=(
                 "GOLD_EXECUTION_FAILED"
                 if status == "EXECUTION_FAILED"
@@ -349,10 +416,10 @@ def test_no_valid_batch45b_gold_lifecycle_reaches_destructive_cleanup(
     )
     result = cleanup_orphaned_candidate_tables(age_threshold_seconds=1)
     assert {item["table"] for item in result["in_flight_candidates"]} == set(
-        item["relation_name"] for item in identities[:2]
+        item["relation_name"] for item in identities[:3]
     )
     assert [item["table"] for item in result["untracked_candidates"]] == [
-        identities[2]["relation_name"]
+        identities[3]["relation_name"]
     ]
     assert result["removed_candidates"] == []
 
@@ -627,96 +694,208 @@ def test_gold_cleanup_malformed_security_state_is_preserved(monkeypatch):
     ]
 
 
-def test_silver_cleanup_stale_and_active_behavior_is_unchanged(monkeypatch):
+def test_silver_cleanup_noneligible_lifecycle_states_are_preserved(monkeypatch):
     schemas = load_layer_schemas()
-    old_time = (
-        datetime.datetime.now(datetime.timezone.utc)
-        - datetime.timedelta(days=1)
-    ).isoformat()
     identities = []
-    with get_connection() as conn:
-        for status in ("PENDING", "EXECUTING"):
-            run_id = f"run_silver_cleanup_{status.lower()}"
-            target = f"silver_{status.lower()}"
-            table = f"{target}_candidate_{run_id}"
-            conn.execute(
-                """
-                INSERT INTO generated_sql_review (
-                    run_id, table_name, sql_text, planned_changes_json,
-                    created_at, status, candidate_schema
-                )
-                VALUES (?, ?, ?, '{}', ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    target,
-                    (
-                        f"CREATE TABLE {schemas.silver_candidates}.{table} "
-                        "AS SELECT 1"
-                    ),
-                    old_time,
-                    status,
-                    schemas.silver_candidates,
-                ),
-            )
-            identities.append({
-                "database_oid": 101,
-                "namespace_oid": 105,
-                "relation_oid": 501 + len(identities),
-                "schema": schemas.silver_candidates,
-                "relation_name": table,
-                "relation_kind": "r",
-            })
-        conn.commit()
+    statuses = (
+        "PENDING",
+        "EXECUTING",
+        "PROMOTING",
+        "PROMOTED",
+        "AMBIGUOUS_PROMOTION",
+        "FUTURE_STATE",
+    )
+    for status in statuses:
+        run_id = f"run_silver_cleanup_{status.lower()}"
+        target = f"silver_{status.lower()}"
+        table = f"{target}_candidate_{run_id}"
+        ident = {
+            "database_oid": 101,
+            "namespace_oid": 105,
+            "relation_oid": 501 + len(identities),
+            "schema": schemas.silver_candidates,
+            "relation_name": table,
+            "relation_kind": "r",
+        }
+        identities.append(ident)
+        _seed_silver_cleanup_state(
+            schemas,
+            run_id=run_id,
+            target=target,
+            status=status,
+            candidate_identity=ident,
+            promoted_target_identity=(
+                {
+                    **ident,
+                    "schema": schemas.silver,
+                    "relation_name": target,
+                }
+                if status == "PROMOTED"
+                else None
+            ),
+        )
     _mock_cleanup_catalog(monkeypatch, schemas, identities)
-    discarded = []
     monkeypatch.setattr(
         candidate_cleanup,
-        "discard_candidate_table",
-        lambda table, schema, conninfo: discarded.append((schema, table)),
+        "discard_owned_gold_candidate",
+        lambda **kwargs: pytest.fail(
+            "non-cleanup-eligible Silver lifecycle must never reach DROP"
+        ),
     )
 
     result = cleanup_orphaned_candidate_tables(age_threshold_seconds=1)
 
-    assert discarded == [
-        (schemas.silver_candidates, identities[0]["relation_name"])
+    assert result["removed_candidates"] == []
+    assert {item["table"] for item in result["in_flight_candidates"]} == {
+        identities[index]["relation_name"] for index in (1, 2, 4)
+    }
+    assert {item["table"] for item in result["untracked_candidates"]} == {
+        identities[index]["relation_name"] for index in (0, 3, 5)
+    }
+
+
+def test_silver_cleanup_promoted_with_malformed_final_identity_is_preserved(
+    monkeypatch,
+):
+    schemas = load_layer_schemas()
+    run_id = "run_silver_cleanup_promoted_malformed"
+    target = "silver_promoted_malformed"
+    identity = {
+        "database_oid": 101,
+        "namespace_oid": 105,
+        "relation_oid": 601,
+        "schema": schemas.silver_candidates,
+        "relation_name": f"{target}_candidate_{run_id}",
+        "relation_kind": "r",
+    }
+    _seed_silver_cleanup_state(
+        schemas,
+        run_id=run_id,
+        target=target,
+        status="PROMOTED",
+        candidate_identity=identity,
+        promoted_target_identity="{malformed",
+    )
+    _mock_cleanup_catalog(monkeypatch, schemas, [identity])
+    monkeypatch.setattr(
+        candidate_cleanup,
+        "discard_owned_gold_candidate",
+        lambda **kwargs: pytest.fail(
+            "malformed PROMOTED state must never reach DROP"
+        ),
+    )
+
+    result = cleanup_orphaned_candidate_tables(age_threshold_seconds=1)
+
+    assert result["removed_candidates"] == []
+    assert [item["table"] for item in result["untracked_candidates"]] == [
+        identity["relation_name"]
     ]
-    assert [item["table"] for item in result["in_flight_candidates"]] == [
-        identities[1]["relation_name"]
+
+
+def test_silver_cleanup_failed_exact_identity_is_cleanup_eligible(monkeypatch):
+    schemas = load_layer_schemas()
+    run_id = "run_silver_cleanup_failed"
+    target = "silver_failed"
+    identity = {
+        "database_oid": 101,
+        "namespace_oid": 105,
+        "relation_oid": 701,
+        "schema": schemas.silver_candidates,
+        "relation_name": f"{target}_candidate_{run_id}",
+        "relation_kind": "r",
+    }
+    _seed_silver_cleanup_state(
+        schemas,
+        run_id=run_id,
+        target=target,
+        status="FAILED",
+        candidate_identity=identity,
+    )
+    _mock_cleanup_catalog(monkeypatch, schemas, [identity])
+    discarded = []
+    monkeypatch.setattr(
+        candidate_cleanup,
+        "discard_owned_gold_candidate",
+        lambda expected_identity, expected_database_name, promotion_conninfo: (
+            discarded.append(expected_identity)
+            or candidate_cleanup.GOLD_CLEANUP_REMOVED
+        ),
+    )
+
+    result = cleanup_orphaned_candidate_tables(age_threshold_seconds=1)
+
+    assert discarded == [identity]
+    assert [item["table"] for item in result["removed_candidates"]] == [
+        identity["relation_name"]
+    ]
+
+
+def test_silver_cleanup_failed_same_name_oid_drift_is_preserved(monkeypatch):
+    schemas = load_layer_schemas()
+    run_id = "run_silver_cleanup_failed_drift"
+    target = "silver_failed_drift"
+    persisted = {
+        "database_oid": 101,
+        "namespace_oid": 105,
+        "relation_oid": 801,
+        "schema": schemas.silver_candidates,
+        "relation_name": f"{target}_candidate_{run_id}",
+        "relation_kind": "r",
+    }
+    live = {**persisted, "relation_oid": 802}
+    _seed_silver_cleanup_state(
+        schemas,
+        run_id=run_id,
+        target=target,
+        status="FAILED",
+        candidate_identity=persisted,
+    )
+    _mock_cleanup_catalog(monkeypatch, schemas, [live])
+    monkeypatch.setattr(
+        candidate_cleanup,
+        "discard_owned_gold_candidate",
+        lambda **kwargs: pytest.fail("OID drift must never reach DROP"),
+    )
+
+    result = cleanup_orphaned_candidate_tables(age_threshold_seconds=1)
+
+    assert result["removed_candidates"] == []
+    assert [item["table"] for item in result["untracked_candidates"]] == [
+        live["relation_name"]
     ]
 
 
 def test_retry_collision_recovery():
-    """Verify execute_candidate_sql safely removes stale leftovers before re-creating candidate table."""
+    """Verify execute_candidate_sql fails closed when candidate table already exists."""
     schemas = load_layer_schemas()
     run_id = f"test_retry_{uuid.uuid4().hex[:8]}"
     target_table = f"orders_retry_{run_id}"
     candidate_table = f"{target_table}_candidate_{run_id}"
     
-    # 1. Simulate a mid-execution leftover table owned by aurum_promotion
-    with get_generated_sql_pool().connection() as conn:
-        with conn.cursor() as cur:
+    # 1. Simulate an existing candidate table owned by aurum_promotion
+    with psycopg.connect(postgres_promotion_conninfo()) as pconn:
+        with pconn.cursor() as cur:
             cur.execute(f'CREATE TABLE "{schemas.silver_candidates}"."{candidate_table}" (id int)')
-            cur.execute(f'ALTER TABLE "{schemas.silver_candidates}"."{candidate_table}" OWNER TO aurum_promotion')
-            conn.commit()
+            pconn.commit()
 
-    # Verify stale table exists
+    # Verify existing table exists
     with get_generated_sql_pool().connection() as conn:
         with conn.cursor() as cur:
             cur.execute(f'SELECT to_regclass(\'"{schemas.silver_candidates}"."{candidate_table}"\')')
             assert cur.fetchone()[0] is not None
 
-    # 2. Retry execution using execute_candidate_sql
+    # 2. Re-attempt execution using execute_candidate_sql -> expect SqlSafetyViolation fail-closed
     sql = f'CREATE TABLE {schemas.silver_candidates}.{candidate_table} AS SELECT 1 AS id'
     with get_generated_sql_pool().connection() as conn:
-        execute_candidate_sql(sql, conn, expected_schema=schemas.silver_candidates, run_id=run_id)
-        conn.commit()
+        with pytest.raises(SqlSafetyViolation, match="already exists"):
+            execute_candidate_sql(sql, conn, expected_schema=schemas.silver_candidates, run_id=run_id, expected_table_name=target_table)
 
-    # 3. Confirm execution succeeded without collision error
+    # 3. Confirm existing candidate table remains intact in Postgres
     with get_generated_sql_pool().connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(f'SELECT COUNT(*) FROM "{schemas.silver_candidates}"."{candidate_table}"')
-            assert cur.fetchone()[0] == 1
+            cur.execute(f'SELECT to_regclass(\'"{schemas.silver_candidates}"."{candidate_table}"\')')
+            assert cur.fetchone()[0] is not None
 
     # Cleanup after test
     discard_candidate_table(candidate_table, schemas.silver_candidates, postgres_promotion_conninfo())
@@ -733,23 +912,10 @@ def test_bulk_cleanup_utility_differentiation():
     tbl_fresh = f"fresh_test_candidate_{run_fresh}"
     tbl_untracked = f"untracked_test_candidate_run_{uuid.uuid4().hex[:8]}"
     
-    # Seed SQLite metadata with candidate_schema
-    stale_time = (datetime.datetime.utcnow() - datetime.timedelta(hours=2)).isoformat()
-    fresh_time = datetime.datetime.utcnow().isoformat()
+    # Seed SQLite metadata with candidate_schema and candidate_identity_json
+    stale_time = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)).isoformat()
+    fresh_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
     
-    with get_connection() as conn:
-        init_schema(conn)
-        conn.execute(
-            "INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (run_stale, "stale_test", f"CREATE TABLE {schemas.silver_candidates}.{tbl_stale} AS SELECT 1", "{}", stale_time, "PENDING", schemas.silver_candidates)
-        )
-        conn.execute(
-            "INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (run_fresh, "fresh_test", f"CREATE TABLE {schemas.silver_candidates}.{tbl_fresh} AS SELECT 1", "{}", fresh_time, "PENDING", schemas.silver_candidates)
-        )
-        conn.commit()
-        
-    # Create candidate tables in Postgres via aurum_promotion
     with psycopg.connect(postgres_promotion_conninfo()) as p_conn:
         with p_conn.cursor() as cur:
             cur.execute(f'CREATE TABLE "{schemas.silver_candidates}"."{tbl_stale}" (id int)')
@@ -757,6 +923,21 @@ def test_bulk_cleanup_utility_differentiation():
             cur.execute(f'CREATE TABLE "{schemas.silver_candidates}"."{tbl_untracked}" (id int)')
         p_conn.commit()
 
+    with psycopg.connect(postgres_promotion_conninfo()) as p_conn:
+        stale_ident = resolve_relation_identity(p_conn, schemas.silver_candidates, tbl_stale)
+        fresh_ident = resolve_relation_identity(p_conn, schemas.silver_candidates, tbl_fresh)
+
+    with get_connection() as conn:
+        init_schema(conn)
+        conn.execute(
+            "INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema, candidate_identity_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (run_stale, "stale_test", f"CREATE TABLE {schemas.silver_candidates}.{tbl_stale} AS SELECT 1", "{}", stale_time, "FAILED", schemas.silver_candidates, json.dumps(stale_ident))
+        )
+        conn.execute(
+            "INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema, candidate_identity_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (run_fresh, "fresh_test", f"CREATE TABLE {schemas.silver_candidates}.{tbl_fresh} AS SELECT 1", "{}", fresh_time, "FAILED", schemas.silver_candidates, json.dumps(fresh_ident))
+        )
+        conn.commit()
     # Run cleanup utility (1 hour threshold)
     res = cleanup_orphaned_candidate_tables(age_threshold_seconds=3600)
     

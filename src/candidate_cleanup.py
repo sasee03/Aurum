@@ -9,7 +9,7 @@ from typing import Dict, List, Any, Optional
 
 import psycopg
 from psycopg import sql
-from src.app_state.db import get_connection
+from src.app_state.db import get_connection, validate_promoted_identity_json
 from src.db_config import load_layer_schemas, postgres_promotion_conninfo, get_generated_sql_pool
 from src.gold_security import (
     GoldSecurityError,
@@ -28,6 +28,7 @@ _CANDIDATE_PARSE_REGEX = re.compile(
 GOLD_CLEANUP_REMOVED = "removed"
 GOLD_CLEANUP_MISSING = "missing"
 GOLD_CLEANUP_IDENTITY_MISMATCH = "identity_mismatch"
+SILVER_CLEANUP_ELIGIBLE_STATUSES = frozenset({"FAILED"})
 
 
 class GoldCandidateCleanupError(RuntimeError):
@@ -261,15 +262,22 @@ def _discard_cleanup_candidate(
     schema: str,
     promotion_conninfo: str,
     gold_state: Any | None,
+    silver_candidate_identity: dict[str, Any] | None = None,
+    database_name: str = "aurum",
 ) -> str:
-    if gold_state is None:
-        discard_candidate_table(table, schema, promotion_conninfo)
-        return GOLD_CLEANUP_REMOVED
-    return discard_owned_gold_candidate(
-        expected_identity=gold_state.candidate_identity,
-        expected_database_name=gold_state.approval_snapshot["database"]["name"],
-        promotion_conninfo=promotion_conninfo,
-    )
+    if gold_state is not None:
+        return discard_owned_gold_candidate(
+            expected_identity=gold_state.candidate_identity,
+            expected_database_name=gold_state.approval_snapshot["database"]["name"],
+            promotion_conninfo=promotion_conninfo,
+        )
+    if silver_candidate_identity is not None:
+        return discard_owned_gold_candidate(
+            expected_identity=silver_candidate_identity,
+            expected_database_name=database_name,
+            promotion_conninfo=promotion_conninfo,
+        )
+    return GOLD_CLEANUP_IDENTITY_MISMATCH
 
 
 def _gold_cleanup_non_removal_reason(result: str) -> str:
@@ -466,7 +474,7 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
                     ),
                 })
                 continue
-            if status in {"EXECUTING", "PROMOTING"}:
+            if status in {"EXECUTING", "PROMOTING", "AMBIGUOUS_PROMOTION"}:
                 in_flight_candidates.append({
                     "schema": schema,
                     "table": table,
@@ -492,7 +500,54 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
                 })
                 continue
 
-        if status in {"EXECUTING", "PROMOTING"}:
+        silver_cand_ident = None
+        if not is_gold_candidate:
+            if status not in SILVER_CLEANUP_ELIGIBLE_STATUSES:
+                protected = {
+                    "EXECUTING",
+                    "PROMOTING",
+                    "AMBIGUOUS_PROMOTION",
+                }
+                destination = (
+                    in_flight_candidates
+                    if status in protected
+                    else untracked_candidates
+                )
+                destination.append({
+                    "schema": schema,
+                    "table": table,
+                    "run_id": parsed_run_id,
+                    "age_seconds": int(age_seconds),
+                    "reason": (
+                        f"Silver lifecycle state {status!r} is not explicitly "
+                        "cleanup-eligible; candidate preserved for safety."
+                    ),
+                })
+                continue
+
+            silver_cand_ident = validate_promoted_identity_json(rec.get("candidate_identity_json"))
+            if silver_cand_ident is None:
+                untracked_candidates.append({
+                    "schema": schema,
+                    "table": table,
+                    "reason": "Silver candidate authority missing or invalid; candidate preserved for safety.",
+                })
+                continue
+            if not _gold_candidate_identity_matches(
+                silver_cand_ident,
+                candidate.get("identity"),
+            ) or (
+                candidate.get("database_name")
+                != silver_cand_ident.get("database_name", candidate.get("database_name"))
+            ):
+                untracked_candidates.append({
+                    "schema": schema,
+                    "table": table,
+                    "reason": "Silver candidate identity does not match live relation; preserved for safety.",
+                })
+                continue
+
+        if status in {"EXECUTING", "PROMOTING", "AMBIGUOUS_PROMOTION"}:
             in_flight_candidates.append({
                 "schema": schema,
                 "table": table,
@@ -501,6 +556,13 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
                 "reason": f"Protected active candidate state: {status}.",
             })
         elif is_promoted:
+            if not is_gold_candidate:
+                untracked_candidates.append({
+                    "schema": schema,
+                    "table": table,
+                    "reason": "Silver candidate for PROMOTED run preserved for safety.",
+                })
+                continue
             # Table is marked promoted but still present in candidate schema (unexpected edge case)
             if age_seconds > age_threshold_seconds:
                 try:
@@ -509,6 +571,8 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
                         schema=schema,
                         promotion_conninfo=postgres_promotion_conninfo(),
                         gold_state=gold_state,
+                        silver_candidate_identity=silver_cand_ident,
+                        database_name=candidate.get("database_name", "aurum"),
                     )
                     if cleanup_result != GOLD_CLEANUP_REMOVED:
                         untracked_candidates.append({
@@ -564,6 +628,8 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
                     schema=schema,
                     promotion_conninfo=postgres_promotion_conninfo(),
                     gold_state=gold_state,
+                    silver_candidate_identity=silver_cand_ident,
+                    database_name=candidate.get("database_name", "aurum"),
                 )
                 if cleanup_result != GOLD_CLEANUP_REMOVED:
                     untracked_candidates.append({

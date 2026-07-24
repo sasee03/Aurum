@@ -182,3 +182,48 @@ Out of current scope. Would require: authentication and accounts, multi-tenancy,
 ## 8. The one-line summary for any agent picking this up
 
 > Phase 1 (bulletproof demo) is complete. Phase 2 makes the engine validate real user tables — starting with the Stage 1 decision about what Aurum checks on unseen data, then surgical, gated, verified stages over ~2 weeks. Never fake a number, never let the UI change the verdict, never trust an unverified assertion, build one small unit at a time.
+
+---
+
+## Tracked prerequisite before production Gold — backup cleanup
+
+Batch 4.5C overwrite promotion creates and retains an exact old-target backup
+relation. Production-safe backup-artifact cleanup is required before Gold is
+enabled for real users and must receive a separate implementation and
+independent verification.
+
+Cleanup authority must bind the exact persisted database identity, namespace
+OID, relation OID, schema, relation name, and relation kind throughout the
+destructive transaction. A backup name, prefix, run ID, or age is never
+ownership proof. Active and ambiguous promotion artifacts must never be
+automatically removed. See `docs/gold_promotion.md`.
+
+## Batch 4.5C Silver containment boundary
+
+Production Silver generation remains intentionally unavailable and returns
+HTTP 503. Batch 4.5C does not enable a generator, frontend flow, or Batch 5.
+Its contained execution seam accepts only reviews with explicit server-bound
+project, connection, `silver-lineage-v2`, and exact six-field Bronze relation
+authority.
+
+The canonical lineage-v2 payload contains `version`, `project_id`,
+`connection_id`, `database_name`, `bronze_schema`, `bronze_relation`,
+`silver_schema`, and `silver_target_relation`. Every value is explicit and
+non-empty; defaults never become authority. A future production generator must
+bind this authority before enablement.
+
+Destructive Silver candidate cleanup is eligible only for `FAILED`, and only
+with strict persisted candidate identity plus locked live OID equality.
+`PENDING`, `EXECUTING`, `PROMOTING`, `PROMOTED`,
+`AMBIGUOUS_PROMOTION`, malformed, and unknown/future states preserve the
+candidate.
+
+Promotion distinguishes deterministic pre-commit failure, commit-in-progress
+uncertainty, and acknowledged commit. Once PostgreSQL commit returns
+successfully, later pool/context cleanup cannot downgrade the result to
+FAILED or ambiguous. SQLite must then persist PROMOTED plus exact final
+identity; failure of that persistence uses the existing post-commit
+reconciliation path without rerunning PostgreSQL DDL.
+
+`python -m src.db_config` is the sole executable deployment authority.
+`scripts/setup_roles.sql` is pointer-only.

@@ -336,3 +336,84 @@ def test_gold_ctas_requires_quotes_for_case_sensitive_approved_identifier():
         'SELECT * FROM curated."Orders"'
     )
     assert _validate_gold(quoted, sources=("Orders",)).startswith("CREATE TABLE")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT nextval('seq') FROM curated.orders",
+        "SELECT set_config('role', 'aurum_promotion', true) FROM curated.orders",
+        "SELECT pg_advisory_lock(1) FROM curated.orders",
+        "SELECT pg_read_file('/etc/passwd') FROM curated.orders",
+        "SELECT pg_sleep(5) FROM curated.orders",
+        "SELECT SUM(nextval('seq')) FROM curated.orders",
+        "SELECT COALESCE(set_config('a', 'b', true), '0') FROM curated.orders",
+        "SELECT public.custom_func(id) FROM curated.orders",
+        "SELECT evil_func(id) FROM curated.orders",
+    ],
+)
+def test_reject_unclassified_or_forbidden_functions(sql):
+    ctas = f"CREATE TABLE gold_work.business_output_candidate_run_gold AS {sql}"
+    with pytest.raises(SqlSafetyViolation):
+        _validate_gold(ctas)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT SUM(amount), COUNT(*), AVG(amount), MIN(amount), MAX(amount) FROM curated.orders",
+        "SELECT COALESCE(amount, 0), NULLIF(amount, 0), ROUND(amount, 2), LOWER(status), UPPER(status) FROM curated.orders",
+        "SELECT EXTRACT(year FROM created_at), DATE_TRUNC('month', created_at), NOW(), CURRENT_TIMESTAMP FROM curated.orders",
+        "SELECT CAST(id AS int), SUBSTRING(status, 1, 3), TRIM(status), ABS(amount) FROM curated.orders",
+        "SELECT ROW_NUMBER() OVER (ORDER BY id), LAG(amount, 1) OVER () FROM curated.orders",
+        "SELECT a + b, a - b, a * b, a / b, a = b, a < b, a > b FROM curated.orders",
+        "SELECT id::integer, amount::numeric, status::varchar, created_at::timestamp FROM curated.orders",
+    ],
+)
+def test_allow_analytical_functions(sql):
+    ctas = f"CREATE TABLE gold_work.business_output_candidate_run_gold AS {sql}"
+    assert _validate_gold(ctas).startswith("CREATE TABLE")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 1 OPERATOR(public.+) 2 FROM curated.orders",
+        "SELECT status::public.custom_type FROM curated.orders",
+        "SELECT amount::custom_unclassified_type FROM curated.orders",
+        "SELECT public.evil_func(id) FROM curated.orders",
+        "SELECT CAST(id AS public.my_type) FROM curated.orders",
+    ],
+)
+def test_reject_operator_and_custom_cast_bypasses(sql):
+    ctas = f"CREATE TABLE gold_work.business_output_candidate_run_gold AS {sql}"
+    with pytest.raises(SqlSafetyViolation):
+        _validate_gold(ctas)
+
+
+def test_validate_catalog_source_types_rejects_non_base_types():
+    from src.sql_safety import validate_catalog_source_types, SqlSafetyViolation
+
+    class MockCursor:
+        def execute(self, query, params):
+            pass
+        def fetchall(self):
+            # Return column 'status' as enum type (typtype='e')
+            return [("status", "my_enum", "public", "e", 1234)]
+
+    with pytest.raises(SqlSafetyViolation, match="non-pg_catalog type|non-base type"):
+        validate_catalog_source_types(MockCursor(), {("bronze", "orders"): {"status"}})
+
+
+def test_validate_catalog_source_types_allows_pg_catalog_base_types():
+    from src.sql_safety import validate_catalog_source_types
+
+    class MockCursor:
+        def execute(self, query, params):
+            pass
+        def fetchall(self):
+            # Return column 'id' as int4 (typtype='b', nspname='pg_catalog')
+            return [("id", "int4", "pg_catalog", "b", 23)]
+
+    # Should complete without error
+    validate_catalog_source_types(MockCursor(), {("bronze", "orders"): {"id"}})

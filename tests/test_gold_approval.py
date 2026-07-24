@@ -156,11 +156,15 @@ def _candidate_namespace_identity(*, namespace_oid: int = 104) -> dict:
     }
 
 
-def _catalog(target_identity: dict | None = None) -> GoldCatalogSnapshot:
+def _catalog(
+    target_identity: dict | None = None,
+    *,
+    source_identities: tuple[dict, ...] | None = None,
+) -> GoldCatalogSnapshot:
     return GoldCatalogSnapshot(
         database_oid=101,
         database_name="isolated_test_database",
-        source_identities=(_source_identity(),),
+        source_identities=source_identities or (_source_identity(),),
         target_identity=target_identity or _target_absent(),
         candidate_namespace_identity=_candidate_namespace_identity(),
     )
@@ -630,6 +634,10 @@ def test_review_is_read_only_and_does_not_imply_approval(trusted_gold):
     record = _seed_run(run_id)
     response = client.get(f"/api/v1/gold/review/{run_id}")
     assert response.status_code == 200
+    assert isinstance(response.json()["sql_text"], str)
+    assert response.json()["sql_text"] == json.loads(
+        record["review_snapshot_json"]
+    )["sql_text"]
     assert response.json()["review_revision"] == record["review_revision"]
     assert response.json()["approved_revision"] is None
     assert _load_state(run_id).approved_revision is None
@@ -1462,12 +1470,17 @@ def _approve_seeded_run(
     *,
     target_identity=None,
     overwrite: bool = False,
+    sources: tuple[str, ...] = ("source_a",),
+    source_identities: tuple[dict, ...] | None = None,
 ):
-    record = _seed_run(run_id)
+    record = _seed_run(run_id, sources=sources)
     monkeypatch.setattr(
         router,
         "resolve_gold_approval_catalog",
-        lambda **kwargs: _catalog(target_identity),
+        lambda **kwargs: _catalog(
+            target_identity,
+            source_identities=source_identities,
+        ),
     )
     response = client.post(
         f"/api/v1/gold/approve/{run_id}",
@@ -1757,6 +1770,7 @@ class _ExecutionCursor:
     def __init__(self, *, ctas_error=None):
         self.commands = []
         self.ctas_error = ctas_error
+        self.current_params = None
 
     def __enter__(self):
         return self
@@ -1765,14 +1779,23 @@ class _ExecutionCursor:
         return False
 
     def execute(self, query, params=None):
-        rendered = query.as_string(None) if hasattr(query, "as_string") else query
+        try:
+            rendered = query.as_string(None) if hasattr(query, "as_string") else str(query)
+        except Exception:
+            rendered = str(query)
         self.commands.append((rendered, params))
+        self.current_params = params
         if (
             self.ctas_error is not None
             and isinstance(rendered, str)
             and rendered.startswith("CREATE TABLE")
         ):
             raise self.ctas_error
+
+    def fetchall(self):
+        if self.current_params == (SCHEMAS.silver, "source_b"):
+            return [("unsupported_col", "money", "pg_catalog", "b", 790)]
+        return [("id", "int4", "pg_catalog", "b", 23)]
 
 
 class _MissingCandidateNamespaceExecutionCursor(_ExecutionCursor):
@@ -1872,7 +1895,12 @@ class _ExecutionPool:
         return self.connection_instance
 
 
-def _live_execution_snapshot(state, *, candidate_identity=None):
+def _live_execution_snapshot(
+    state,
+    *,
+    candidate_identity=None,
+    source_identities=None,
+):
     assert state.approval_snapshot is not None
     assert state.source_identities is not None
     assert state.target_identity is not None
@@ -1880,7 +1908,11 @@ def _live_execution_snapshot(state, *, candidate_identity=None):
     return GoldExecutionCatalogSnapshot(
         database_oid=state.approval_snapshot["database"]["oid"],
         database_name=state.approval_snapshot["database"]["name"],
-        source_identities=state.source_identities,
+        source_identities=(
+            state.source_identities
+            if source_identities is None
+            else source_identities
+        ),
         target_identity=state.target_identity,
         candidate_namespace_identity=state.candidate_namespace_identity,
         candidate_identity=candidate_identity,
@@ -1915,14 +1947,84 @@ def test_candidate_transaction_uses_safe_search_path_locks_exact_sql_and_oid(
         "SELECT pg_catalog.set_config(%s, %s, true)",
         ("search_path", "pg_catalog"),
     )
-    assert commands[1][0] == (
+    assert commands[1] == ("SET LOCAL ROLE aurum_generated_sql", None)
+    assert commands[2][0] == (
         'LOCK TABLE "configured_silver"."source_a" IN ACCESS SHARE MODE'
     )
-    assert commands[2] == (state.review_snapshot["sql_text"], None)
+    assert "a.attname" in commands[3][0] or "pg_attribute" in commands[3][0]
+    assert commands[4] == (state.review_snapshot["sql_text"], None)
+    assert commands[5] == ("RESET ROLE", None)
+    assert commands[6] == (
+        (
+            f'ALTER TABLE "{state.candidate["schema"]}".'
+            f'"{state.candidate["table"]}" OWNER TO "aurum_promotion"'
+        ),
+        None,
+    )
+    assert commands[7] == (
+        (
+            f'GRANT SELECT ON "{state.candidate["schema"]}".'
+            f'"{state.candidate["table"]}" TO aurum_generated_sql'
+        ),
+        None,
+    )
     assert all(
         "configured_gold.approved_output" not in command
         for command, _ in commands
         if isinstance(command, str)
+    )
+
+
+def test_gold_execution_ignores_unused_approved_source_with_unsupported_type(
+    trusted_gold,
+    monkeypatch,
+):
+    run_id = "run_unused_unsupported_source"
+    source_identities = (
+        _source_identity("source_a", relation_oid=201),
+        _source_identity("source_b", relation_oid=202),
+    )
+    state = _approve_seeded_run(
+        monkeypatch,
+        run_id,
+        sources=("source_a", "source_b"),
+        source_identities=source_identities,
+    )
+    created = _candidate_identity(state)
+    snapshots = [
+        _live_execution_snapshot(
+            state,
+            source_identities=(source_identities[0],),
+        ),
+        _live_execution_snapshot(
+            state,
+            candidate_identity=created,
+            source_identities=(source_identities[0],),
+        ),
+    ]
+    monkeypatch.setattr(
+        gold_execution,
+        "resolve_gold_execution_catalog",
+        lambda *args, **kwargs: snapshots.pop(0),
+    )
+    pool = _ExecutionPool()
+
+    result = gold_execution.execute_gold_candidate(
+        state,
+        state.review_snapshot["sql_text"],
+        pool=pool,
+    )
+
+    assert result == created
+    commands = pool.connection_instance.cursor_instance.commands
+    assert any(
+        '"configured_silver"."source_a"' in command
+        for command, _ in commands
+    )
+    assert all(
+        "source_b" not in command
+        and params != (SCHEMAS.silver, "source_b")
+        for command, params in commands
     )
 
 

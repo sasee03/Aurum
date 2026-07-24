@@ -113,6 +113,15 @@ CREATE TABLE IF NOT EXISTS gold_security_state (
     execution_claimed_at TEXT,
     candidate_identity_json TEXT,
     execution_failure_code TEXT,
+    promotion_claim_id TEXT,
+    promotion_claimed_at TEXT,
+    promotion_failure_code TEXT,
+    promoted_target_identity_json TEXT,
+    backup_identity_json TEXT,
+    backup_cleanup_eligible INTEGER
+        CHECK (backup_cleanup_eligible IS NULL
+               OR backup_cleanup_eligible IN (0, 1)),
+    promotion_committed_at TEXT,
     FOREIGN KEY (run_id) REFERENCES generated_sql_review(run_id)
 );
 """
@@ -146,6 +155,81 @@ def compute_rule_revision(rules: Any) -> str | None:
     return hashlib.sha256(canonical_json.encode('utf-8')).hexdigest().lower()
 
 
+def compute_silver_lineage_id(
+    *,
+    project_id: str,
+    connection_id: str,
+    database_name: str,
+    bronze_schema: str,
+    bronze_relation: str,
+    silver_schema: str,
+    silver_target_relation: str,
+) -> str:
+    """Compute canonical versioned lineage identity SHA-256 for a Silver pipeline.
+
+    Every security-relevant input MUST be an explicit non-empty string.
+    No default authority is synthesized. Missing/empty fields raise ValueError.
+    Note: The real production Silver generator remains disabled; future generation
+    must populate this server-side before execution enablement.
+    """
+    fields = {
+        "project_id": project_id,
+        "connection_id": connection_id,
+        "database_name": database_name,
+        "bronze_schema": bronze_schema,
+        "bronze_relation": bronze_relation,
+        "silver_schema": silver_schema,
+        "silver_target_relation": silver_target_relation,
+    }
+    for name, val in fields.items():
+        if not isinstance(val, str) or not val.strip():
+            raise ValueError(f"compute_silver_lineage_id requires explicit non-empty {name}")
+
+    payload = {
+        "version": "silver-lineage-v2",
+        "project_id": project_id.strip(),
+        "connection_id": connection_id.strip(),
+        "database_name": database_name.strip(),
+        "bronze_schema": bronze_schema.strip(),
+        "bronze_relation": bronze_relation.strip(),
+        "silver_schema": silver_schema.strip(),
+        "silver_target_relation": silver_target_relation.strip(),
+    }
+    canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def validate_promoted_identity_json(raw_json: Any) -> dict[str, Any] | None:
+    """Validate that raw_json (string or dict) is a complete, valid promoted target identity dict.
+
+    Returns the validated dict, or None if missing, malformed, or incomplete.
+    Required exact keys: database_oid (int > 0), namespace_oid (int > 0), relation_oid (int > 0), schema (str non-empty), relation_name (str non-empty), relation_kind ('r' or 'p').
+    """
+    if not raw_json:
+        return None
+    try:
+        data = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+        if not isinstance(data, dict):
+            return None
+        required_keys = {"database_oid", "namespace_oid", "relation_oid", "schema", "relation_name", "relation_kind"}
+        if set(data.keys()) != required_keys:
+            return None
+        for k in ("database_oid", "namespace_oid", "relation_oid"):
+            v = data[k]
+            if type(v) is not int or v <= 0:
+                return None
+        for k in ("schema", "relation_name"):
+            v = data[k]
+            if not isinstance(v, str) or not v.strip():
+                return None
+        kind = data["relation_kind"]
+        if not isinstance(kind, str) or kind not in ("r", "p"):
+            return None
+        return data
+    except Exception:
+        return None
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA_SQL)
     # Migrate older DBs created before source_schema/source_table existed.
@@ -159,6 +243,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "generated_sql_review", "candidate_schema", "candidate_schema TEXT")
     _ensure_column(conn, "generated_sql_review", "attribution_log_json", "attribution_log_json TEXT")
     _ensure_column(conn, "generated_sql_review", "generator_provenance", "generator_provenance TEXT")
+    _ensure_column(conn, "generated_sql_review", "candidate_identity_json", "candidate_identity_json TEXT")
+    _ensure_column(conn, "generated_sql_review", "target_identity_json", "target_identity_json TEXT")
+    _ensure_column(conn, "generated_sql_review", "promoted_target_identity_json", "promoted_target_identity_json TEXT")
+    _ensure_column(conn, "generated_sql_review", "project_id", "project_id TEXT")
+    _ensure_column(conn, "generated_sql_review", "connection_id", "connection_id TEXT")
+    _ensure_column(conn, "generated_sql_review", "silver_lineage_id", "silver_lineage_id TEXT")
+    _ensure_column(conn, "generated_sql_review", "source_identity_json", "source_identity_json TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_silver_lineage ON generated_sql_review(silver_lineage_id, status)")
     _ensure_column(conn, "table_rules", "rule_revision", "rule_revision TEXT")
     _ensure_column(conn, "generated_sql_review", "rule_revision", "rule_revision TEXT")
     _ensure_column(
@@ -184,6 +276,52 @@ def init_schema(conn: sqlite3.Connection) -> None:
         "gold_security_state",
         "execution_failure_code",
         "execution_failure_code TEXT",
+    )
+    _ensure_column(
+        conn,
+        "gold_security_state",
+        "promotion_claim_id",
+        "promotion_claim_id TEXT",
+    )
+    _ensure_column(
+        conn,
+        "gold_security_state",
+        "promotion_claimed_at",
+        "promotion_claimed_at TEXT",
+    )
+    _ensure_column(
+        conn,
+        "gold_security_state",
+        "promotion_failure_code",
+        "promotion_failure_code TEXT",
+    )
+    _ensure_column(
+        conn,
+        "gold_security_state",
+        "promoted_target_identity_json",
+        "promoted_target_identity_json TEXT",
+    )
+    _ensure_column(
+        conn,
+        "gold_security_state",
+        "backup_identity_json",
+        "backup_identity_json TEXT",
+    )
+    _ensure_column(
+        conn,
+        "gold_security_state",
+        "backup_cleanup_eligible",
+        (
+            "backup_cleanup_eligible INTEGER "
+            "CHECK (backup_cleanup_eligible IS NULL "
+            "OR backup_cleanup_eligible IN (0, 1))"
+        ),
+    )
+    _ensure_column(
+        conn,
+        "gold_security_state",
+        "promotion_committed_at",
+        "promotion_committed_at TEXT",
     )
 
     # Migration: Backfill existing valid table_rules rows where rule_revision IS NULL

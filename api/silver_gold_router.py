@@ -48,6 +48,17 @@ from src.gold_execution import (
     execute_gold_candidate,
     validate_approved_gold_sql,
 )
+from src.gold_promotion import (
+    GOLD_CANDIDATE_IDENTITY_CHANGED,
+    GOLD_OVERWRITE_NOT_AUTHORIZED,
+    GOLD_PROMOTION_AMBIGUOUS,
+    GOLD_PROMOTION_NOT_COMMITTED,
+    GOLD_PROMOTION_RECONCILIATION_REQUIRED,
+    GoldPromotionOutcomeUnknown,
+    GoldPromotionRejected,
+    promote_gold_candidate,
+    reconcile_gold_promotion,
+)
 from src.generator_trust import GeneratorTrustPolicy
 
 router = APIRouter(prefix="/api/v1/gold", tags=["gold"])
@@ -752,3 +763,529 @@ def _mark_gold_reconciliation_required(
             conn.commit()
     except Exception:
         logger.exception("Failed to persist Gold reconciliation marker")
+
+
+def _promotion_response(state) -> dict:
+    assert state.promoted_target_identity is not None
+    assert state.promotion_claim_id is not None
+    return {
+        "status": "PROMOTED",
+        "run_id": state.run_id,
+        "promotion_claim_id": state.promotion_claim_id,
+        "promotion_committed_at": state.promotion_committed_at,
+        "target": {
+            "schema": state.promoted_target_identity["schema"],
+            "table": state.promoted_target_identity["relation_name"],
+            "relation_oid": state.promoted_target_identity["relation_oid"],
+        },
+        "backup": (
+            {
+                "schema": state.backup_identity["schema"],
+                "table": state.backup_identity["relation_name"],
+                "relation_oid": state.backup_identity["relation_oid"],
+            }
+            if state.backup_identity is not None
+            else None
+        ),
+    }
+
+
+def _committed_result_response(
+    run_id: str,
+    promotion_claim_id: str,
+    *,
+    final_target_identity: dict,
+    backup_identity: dict | None,
+) -> dict:
+    """Return proven committed identities when a post-persist reload fails."""
+    return {
+        "status": "PROMOTED",
+        "run_id": run_id,
+        "promotion_claim_id": promotion_claim_id,
+        "promotion_committed_at": None,
+        "target": {
+            "schema": final_target_identity["schema"],
+            "table": final_target_identity["relation_name"],
+            "relation_oid": final_target_identity["relation_oid"],
+        },
+        "backup": (
+            {
+                "schema": backup_identity["schema"],
+                "table": backup_identity["relation_name"],
+                "relation_oid": backup_identity["relation_oid"],
+            }
+            if backup_identity is not None
+            else None
+        ),
+    }
+
+
+def _load_promotion_state(run_id: str):
+    with get_connection() as conn:
+        row, security_row = _load_gold_rows(conn, run_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=GOLD_RUN_NOT_FOUND)
+        try:
+            state = load_persisted_gold_security_state(security_row, row)
+        except (GoldStateMalformed, GoldStateStale):
+            raise HTTPException(
+                status_code=422,
+                detail=GOLD_RUN_MALFORMED,
+            ) from None
+    return row, state
+
+
+def _persist_gold_promoted(
+    run_id: str,
+    promotion_claim_id: str,
+    *,
+    final_target_identity: dict,
+    backup_identity: dict | None,
+) -> bool:
+    proven_at = approval_timestamp()
+    try:
+        with get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            security_update = conn.execute(
+                """
+                UPDATE gold_security_state
+                SET promoted_target_identity_json = ?,
+                    backup_identity_json = ?,
+                    backup_cleanup_eligible = ?,
+                    promotion_failure_code = NULL,
+                    promotion_committed_at = ?
+                WHERE run_id = ?
+                  AND promotion_claim_id = ?
+                  AND promoted_target_identity_json IS NULL
+                  AND promotion_failure_code IS NULL
+                  AND promotion_committed_at IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM generated_sql_review
+                      WHERE generated_sql_review.run_id = gold_security_state.run_id
+                        AND generated_sql_review.status
+                            IN ('PROMOTING', 'AMBIGUOUS_PROMOTION')
+                  )
+                """,
+                (
+                    canonical_json(final_target_identity),
+                    (
+                        canonical_json(backup_identity)
+                        if backup_identity is not None
+                        else None
+                    ),
+                    0 if backup_identity is not None else None,
+                    proven_at,
+                    run_id,
+                    promotion_claim_id,
+                ),
+            )
+            status_update = conn.execute(
+                """
+                UPDATE generated_sql_review
+                SET status = 'PROMOTED',
+                    promoted_at = ?
+                WHERE run_id = ?
+                  AND status IN ('PROMOTING', 'AMBIGUOUS_PROMOTION')
+                """,
+                (proven_at, run_id),
+            )
+            if security_update.rowcount != 1 or status_update.rowcount != 1:
+                conn.rollback()
+                return False
+            conn.commit()
+            return True
+    except Exception:
+        logger.exception(
+            "Failed to persist proven Gold promotion for run %s",
+            run_id,
+        )
+        return False
+
+
+def _persist_gold_promotion_failed(
+    run_id: str,
+    promotion_claim_id: str,
+    failure_code: str,
+) -> bool:
+    try:
+        with get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            security_update = conn.execute(
+                """
+                UPDATE gold_security_state
+                SET promotion_failure_code = ?,
+                    promoted_target_identity_json = NULL,
+                    backup_identity_json = NULL,
+                    backup_cleanup_eligible = NULL,
+                    promotion_committed_at = NULL
+                WHERE run_id = ?
+                  AND promotion_claim_id = ?
+                  AND promotion_failure_code IS NULL
+                  AND promoted_target_identity_json IS NULL
+                  AND promotion_committed_at IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM generated_sql_review
+                      WHERE generated_sql_review.run_id = gold_security_state.run_id
+                        AND generated_sql_review.status
+                            IN ('PROMOTING', 'AMBIGUOUS_PROMOTION')
+                  )
+                """,
+                (failure_code, run_id, promotion_claim_id),
+            )
+            status_update = conn.execute(
+                """
+                UPDATE generated_sql_review
+                SET status = 'PROMOTION_FAILED'
+                WHERE run_id = ?
+                  AND status IN ('PROMOTING', 'AMBIGUOUS_PROMOTION')
+                """,
+                (run_id,),
+            )
+            if security_update.rowcount != 1 or status_update.rowcount != 1:
+                conn.rollback()
+                return False
+            conn.commit()
+            return True
+    except Exception:
+        logger.exception(
+            "Failed to persist deterministic Gold promotion failure"
+        )
+        return False
+
+
+def _persist_gold_promotion_ambiguous(
+    run_id: str,
+    promotion_claim_id: str,
+    *,
+    backup_identity: dict | None = None,
+) -> bool:
+    try:
+        with get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            security_update = conn.execute(
+                """
+                UPDATE gold_security_state
+                SET backup_identity_json =
+                        COALESCE(backup_identity_json, ?),
+                    backup_cleanup_eligible =
+                        CASE
+                            WHEN backup_identity_json IS NOT NULL
+                                 OR ? IS NOT NULL
+                            THEN 0
+                            ELSE NULL
+                        END,
+                    promotion_failure_code = NULL,
+                    promoted_target_identity_json = NULL,
+                    promotion_committed_at = NULL
+                WHERE run_id = ?
+                  AND promotion_claim_id = ?
+                  AND promotion_failure_code IS NULL
+                  AND promoted_target_identity_json IS NULL
+                  AND promotion_committed_at IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM generated_sql_review
+                      WHERE generated_sql_review.run_id = gold_security_state.run_id
+                        AND generated_sql_review.status
+                            IN ('PROMOTING', 'AMBIGUOUS_PROMOTION')
+                  )
+                """,
+                (
+                    (
+                        canonical_json(backup_identity)
+                        if backup_identity is not None
+                        else None
+                    ),
+                    (
+                        canonical_json(backup_identity)
+                        if backup_identity is not None
+                        else None
+                    ),
+                    run_id,
+                    promotion_claim_id,
+                ),
+            )
+            status_update = conn.execute(
+                """
+                UPDATE generated_sql_review
+                SET status = 'AMBIGUOUS_PROMOTION'
+                WHERE run_id = ?
+                  AND status IN ('PROMOTING', 'AMBIGUOUS_PROMOTION')
+                """,
+                (run_id,),
+            )
+            if security_update.rowcount != 1 or status_update.rowcount != 1:
+                conn.rollback()
+                return False
+            conn.commit()
+            return True
+    except Exception:
+        logger.exception("Failed to persist ambiguous Gold promotion")
+        return False
+
+
+def _promotion_failure_http_status(code: str) -> int:
+    if code == GOLD_DATABASE_UNAVAILABLE:
+        return 503
+    if code in {
+        GOLD_CANDIDATE_IDENTITY_CHANGED,
+        GOLD_TARGET_IDENTITY_CHANGED,
+        GOLD_OVERWRITE_NOT_AUTHORIZED,
+        GOLD_PROMOTION_NOT_COMMITTED,
+    }:
+        return 409
+    return 500
+
+
+def _persisted_terminal_promotion(run_id: str) -> dict | None:
+    try:
+        _row, state = _load_promotion_state(run_id)
+    except Exception:
+        logger.exception(
+            "Could not reload Gold terminal state for run %s",
+            run_id,
+        )
+        return None
+    if state.promoted_target_identity is not None:
+        return _promotion_response(state)
+    if state.promotion_failure_code is not None:
+        raise HTTPException(
+            status_code=_promotion_failure_http_status(
+                state.promotion_failure_code
+            ),
+            detail=state.promotion_failure_code,
+        )
+    return None
+
+
+def _reconcile_claimed_gold_promotion(run_id: str, state):
+    assert state.promotion_claim_id is not None
+    try:
+        reconciliation = reconcile_gold_promotion(state)
+    except GoldPromotionRejected as exc:
+        if exc.code == GOLD_DATABASE_UNAVAILABLE:
+            raise HTTPException(
+                status_code=503,
+                detail=GOLD_DATABASE_UNAVAILABLE,
+            ) from None
+        raise HTTPException(
+            status_code=409,
+            detail=GOLD_PROMOTION_RECONCILIATION_REQUIRED,
+        ) from None
+
+    if reconciliation.outcome == "promoted":
+        assert reconciliation.final_target_identity is not None
+        if _persist_gold_promoted(
+            run_id,
+            state.promotion_claim_id,
+            final_target_identity=reconciliation.final_target_identity,
+            backup_identity=reconciliation.backup_identity,
+        ):
+            try:
+                _row, promoted_state = _load_promotion_state(run_id)
+                return _promotion_response(promoted_state)
+            except Exception:
+                logger.exception(
+                    "Proven reconciled promotion could not be reloaded"
+                )
+                return _committed_result_response(
+                    run_id,
+                    state.promotion_claim_id,
+                    final_target_identity=(
+                        reconciliation.final_target_identity
+                    ),
+                    backup_identity=reconciliation.backup_identity,
+                )
+    elif reconciliation.outcome == "not_committed":
+        if _persist_gold_promotion_failed(
+            run_id,
+            state.promotion_claim_id,
+            GOLD_PROMOTION_NOT_COMMITTED,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=GOLD_PROMOTION_NOT_COMMITTED,
+            )
+    else:
+        _persist_gold_promotion_ambiguous(
+            run_id,
+            state.promotion_claim_id,
+            backup_identity=reconciliation.backup_identity,
+        )
+
+    terminal = _persisted_terminal_promotion(run_id)
+    if terminal is not None:
+        return terminal
+    raise HTTPException(
+        status_code=409,
+        detail=GOLD_PROMOTION_RECONCILIATION_REQUIRED,
+    )
+
+
+@router.post("/promote/{run_id}")
+def promote_gold_sql(run_id: str):
+    """Claim, serialize, and promote only the exact approved Gold candidate."""
+    promotion_claim_id = f"promo_{uuid.uuid4().hex}"
+    reconcile_state = None
+    claimed_state = None
+    with get_connection() as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row, security_row = _load_gold_rows(conn, run_id)
+            if row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=GOLD_RUN_NOT_FOUND,
+                )
+            if not GOLD_GENERATOR_TRUST.trusts_run(
+                row["generator_provenance"]
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail=GOLD_EXECUTION_UNAVAILABLE,
+                )
+            try:
+                state = load_persisted_gold_security_state(
+                    security_row,
+                    row,
+                )
+            except (GoldStateMalformed, GoldStateStale):
+                raise HTTPException(
+                    status_code=422,
+                    detail=GOLD_RUN_MALFORMED,
+                ) from None
+
+            if row["status"] == "PROMOTED":
+                conn.rollback()
+                return _promotion_response(state)
+            if row["status"] == "PROMOTION_FAILED":
+                assert state.promotion_failure_code is not None
+                raise HTTPException(
+                    status_code=_promotion_failure_http_status(
+                        state.promotion_failure_code
+                    ),
+                    detail=state.promotion_failure_code,
+                )
+            if row["status"] not in {
+                "PROMOTING",
+                "AMBIGUOUS_PROMOTION",
+            }:
+                raise HTTPException(
+                    status_code=409,
+                    detail=GOLD_STATE_CONFLICT,
+                )
+            if state.promotion_claim_id is not None:
+                reconcile_state = state
+                conn.rollback()
+            else:
+                claimed_at = approval_timestamp()
+                claim = conn.execute(
+                    """
+                    UPDATE gold_security_state
+                    SET promotion_claim_id = ?,
+                        promotion_claimed_at = ?,
+                        promotion_failure_code = NULL
+                    WHERE run_id = ?
+                      AND approved_revision = ?
+                      AND execution_claim_id = ?
+                      AND candidate_identity_json IS NOT NULL
+                      AND promotion_claim_id IS NULL
+                      AND EXISTS (
+                          SELECT 1
+                          FROM generated_sql_review
+                          WHERE generated_sql_review.run_id =
+                                gold_security_state.run_id
+                            AND generated_sql_review.status = 'PROMOTING'
+                      )
+                    """,
+                    (
+                        promotion_claim_id,
+                        claimed_at,
+                        run_id,
+                        state.approved_revision,
+                        state.execution_claim_id,
+                    ),
+                )
+                if claim.rowcount != 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=GOLD_STATE_CONFLICT,
+                    )
+                refreshed_security = conn.execute(
+                    "SELECT * FROM gold_security_state WHERE run_id = ?",
+                    (run_id,),
+                ).fetchone()
+                claimed_state = load_persisted_gold_security_state(
+                    refreshed_security,
+                    row,
+                )
+                conn.commit()
+        except HTTPException:
+            conn.rollback()
+            raise
+
+    if reconcile_state is not None:
+        return _reconcile_claimed_gold_promotion(run_id, reconcile_state)
+    assert claimed_state is not None
+
+    try:
+        result = promote_gold_candidate(claimed_state)
+    except GoldPromotionOutcomeUnknown as exc:
+        _persist_gold_promotion_ambiguous(
+            run_id,
+            promotion_claim_id,
+            backup_identity=exc.result.backup_identity,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=GOLD_PROMOTION_AMBIGUOUS,
+        ) from None
+    except GoldPromotionRejected as exc:
+        if not _persist_gold_promotion_failed(
+            run_id,
+            promotion_claim_id,
+            exc.code,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=GOLD_PROMOTION_RECONCILIATION_REQUIRED,
+            ) from None
+        raise HTTPException(
+            status_code=_promotion_failure_http_status(exc.code),
+            detail=exc.code,
+        ) from None
+
+    if not _persist_gold_promoted(
+        run_id,
+        promotion_claim_id,
+        final_target_identity=result.final_target_identity,
+        backup_identity=result.backup_identity,
+    ):
+        _persist_gold_promotion_ambiguous(
+            run_id,
+            promotion_claim_id,
+            backup_identity=result.backup_identity,
+        )
+        terminal = _persisted_terminal_promotion(run_id)
+        if terminal is not None:
+            return terminal
+        raise HTTPException(
+            status_code=409,
+            detail=GOLD_PROMOTION_RECONCILIATION_REQUIRED,
+        )
+
+    try:
+        _row, promoted_state = _load_promotion_state(run_id)
+        return _promotion_response(promoted_state)
+    except Exception:
+        logger.exception(
+            "Committed Gold promotion could not be reloaded"
+        )
+        return _committed_result_response(
+            run_id,
+            promotion_claim_id,
+            final_target_identity=result.final_target_identity,
+            backup_identity=result.backup_identity,
+        )

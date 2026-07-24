@@ -101,9 +101,17 @@ def test_p2_review_executed_mapping(temp_sqlite_db):
     assert data["executed"] is False
     assert data["status"] == "PENDING"
 
-    # Update status to PROMOTED
+    # Update status to PROMOTED and set valid target identity
+    promoted_ident = json.dumps({
+        "database_oid": 12345,
+        "namespace_oid": 10,
+        "relation_oid": 100,
+        "schema": "silver",
+        "relation_name": table_name,
+        "relation_kind": "r",
+    })
     with get_connection() as conn:
-        conn.execute("UPDATE generated_sql_review SET status = 'PROMOTED' WHERE run_id = ?", (run_id,))
+        conn.execute("UPDATE generated_sql_review SET status = 'PROMOTED', promoted_target_identity_json = ? WHERE run_id = ?", (promoted_ident, run_id))
         conn.commit()
 
     # Review promoted run -> executed must be True
@@ -129,11 +137,19 @@ def test_p2_execute_idempotency_and_safety_checks(temp_sqlite_db):
     # 2. Already PROMOTED run returns stored result idempotently
     promoted_run_id = "run_promoted_1"
     attr_log = ["Initial Bronze Rows: 100", "Step 1: 10 rows removed"]
+    promoted_ident = json.dumps({
+        "database_oid": 12345,
+        "namespace_oid": 10,
+        "relation_oid": 100,
+        "schema": "silver",
+        "relation_name": "src_orders_test",
+        "relation_kind": "r",
+    })
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status, attribution_log_json)
-            VALUES (?, ?, ?, ?, ?, 'PROMOTED', ?)
+            INSERT INTO generated_sql_review (run_id, table_name, sql_text, planned_changes_json, created_at, status, attribution_log_json, promoted_target_identity_json)
+            VALUES (?, ?, ?, ?, ?, 'PROMOTED', ?, ?)
             """,
             (
                 promoted_run_id,
@@ -141,7 +157,8 @@ def test_p2_execute_idempotency_and_safety_checks(temp_sqlite_db):
                 valid_sql,
                 json.dumps({"summary": "1 step", "rules": ["Step 1: test rule"]}),
                 "2026-07-23T00:00:00Z",
-                json.dumps(attr_log)
+                json.dumps(attr_log),
+                promoted_ident,
             )
         )
         conn.commit()

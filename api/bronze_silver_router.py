@@ -11,15 +11,16 @@ from typing import List, Optional, Set, Tuple, Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from src.app_state.db import get_connection, compute_rule_revision, is_valid_rule_revision
+from src.app_state.db import get_connection, compute_rule_revision, is_valid_rule_revision, compute_silver_lineage_id, validate_promoted_identity_json
 from src.db_config import (
     get_ingestion_pool, 
     get_generated_sql_pool, 
     postgres_promotion_conninfo,
-    load_layer_schemas
+    load_layer_schemas,
+    load_postgres_config,
 )
 from src.sql_safety import validate_generated_sql, execute_candidate_sql
-from src.promotion import promote_candidate_table
+from src.promotion import promote_candidate_table, resolve_relation_identity
 from src.generator_trust import GeneratorTrustPolicy
 import sqlglot
 
@@ -242,11 +243,11 @@ def get_rules(table_name: str):
 
 @router.post("/generate")
 def generate_sql(payload: GeneratePayload):
-    """P2.2 & P2.3: Generate SQL via LLM for the requested table."""
-    try:
-        validate_sql_identifier(payload.table_name)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    """P2.2 & P2.3: Generate SQL via LLM for the requested table (503 contained)."""
+    raise HTTPException(
+        status_code=503,
+        detail="Production Silver generation is unavailable."
+    )
 
     # 1. Fetch rules
     rules_resp = get_rules(payload.table_name)
@@ -281,7 +282,7 @@ def review_sql(run_id: str):
     with get_connection() as conn:
         row = conn.execute(
             """
-            SELECT table_name, sql_text, planned_changes_json, created_at, status, generator_provenance, rule_revision
+            SELECT table_name, sql_text, planned_changes_json, created_at, status, generator_provenance, rule_revision, promoted_target_identity_json
             FROM generated_sql_review
             WHERE run_id = ?
             """,
@@ -310,7 +311,16 @@ def review_sql(run_id: str):
     rules_info = get_rules(table_name)
     current_table_rule_rev = rules_info.get("rule_revision")
 
-    executed = (status_val == "PROMOTED")
+    if status_val == "PROMOTED":
+        promoted_ident = validate_promoted_identity_json(row["promoted_target_identity_json"])
+        if not promoted_ident:
+            raise HTTPException(
+                status_code=409,
+                detail="Run status is PROMOTED but promoted target identity is missing or malformed. Manual reconciliation required."
+            )
+        executed = True
+    else:
+        executed = False
 
     # Check structural SQL validity
     sql_is_valid = False
@@ -369,7 +379,8 @@ def execute_sql(run_id: str):
     with get_connection() as conn_db:
         row = conn_db.execute(
             """
-            SELECT table_name, sql_text, planned_changes_json, status, generator_provenance, rule_revision
+            SELECT table_name, sql_text, planned_changes_json, status, generator_provenance, rule_revision,
+                   project_id, connection_id, silver_lineage_id, source_identity_json
             FROM generated_sql_review
             WHERE run_id = ?
             """,
@@ -387,9 +398,15 @@ def execute_sql(run_id: str):
     if status_val == "PROMOTED":
         with get_connection() as conn_db:
             promoted_row = conn_db.execute(
-                "SELECT attribution_log_json FROM generated_sql_review WHERE run_id = ?",
+                "SELECT attribution_log_json, promoted_target_identity_json FROM generated_sql_review WHERE run_id = ?",
                 (run_id,)
             ).fetchone()
+        promoted_ident = validate_promoted_identity_json(promoted_row["promoted_target_identity_json"] if promoted_row else None)
+        if not promoted_ident:
+            raise HTTPException(
+                status_code=409,
+                detail="Run status is PROMOTED but promoted target identity is missing or malformed. Manual reconciliation required."
+            )
         attr_log, attr_avail = parse_attribution_log(promoted_row["attribution_log_json"] if promoted_row else None)
         return {
             "status": "success",
@@ -410,6 +427,35 @@ def execute_sql(run_id: str):
         raise HTTPException(status_code=400, detail="Run execution failed previously and cannot be re-executed.")
     elif status_val != "PENDING":
         raise HTTPException(status_code=400, detail=f"Run is not eligible for execution (status: {status_val}).")
+
+    # Enforce strict pre-bound authority for all Silver transformations (fail closed on legacy unbound rows)
+    proj_id = row["project_id"] if "project_id" in row.keys() else None
+    conn_id = row["connection_id"] if "connection_id" in row.keys() else None
+    lineage_id = row["silver_lineage_id"] if "silver_lineage_id" in row.keys() else None
+    raw_src_ident = row["source_identity_json"] if "source_identity_json" in row.keys() else None
+
+    if not proj_id or not conn_id or not lineage_id or not raw_src_ident:
+        logger.error("Review run %s is missing pre-bound Silver authority (project_id, connection_id, silver_lineage_id, source_identity_json).", run_id)
+        raise HTTPException(
+            status_code=400,
+            detail="Review run is missing pre-bound lineage and source authority."
+        )
+
+    try:
+        source_authority = json.loads(raw_src_ident) if isinstance(raw_src_ident, str) else raw_src_ident
+        source_authority = validate_promoted_identity_json(source_authority)
+    except Exception as e:
+        logger.error("Review run %s has invalid source_identity_json: %s", run_id, e)
+        raise HTTPException(
+            status_code=400,
+            detail="Review run contains malformed source_identity_json authority."
+        )
+
+    if not source_authority:
+        raise HTTPException(
+            status_code=400,
+            detail="Review run contains missing or invalid source_identity_json authority."
+        )
 
     if not is_trusted_provenance(provenance):
         raise HTTPException(status_code=400, detail="Run is untrusted or missing valid generator provenance.")
@@ -549,8 +595,42 @@ def execute_sql(run_id: str):
                         attribution_results.append(f"{rule_label}: Transformation applied (Remaining: {curr_count})")
 
         candidate_name = f"{table_name}_candidate_{run_id}"
+
+        # 1. Resolve live target relation identity in Silver schema
+        live_target_ident = None
         with get_generated_sql_pool().connection() as conn:
-            execute_candidate_sql(
+            live_target_ident = resolve_relation_identity(conn, silver_schema, table_name)
+
+        # 2. Derive legitimate target replacement authority strictly from exact silver_lineage_id prior PROMOTED state
+        target_authority = None
+        if live_target_ident is not None:
+            with get_connection() as conn_db:
+                row = conn_db.execute(
+                    """
+                    SELECT promoted_target_identity_json
+                    FROM generated_sql_review
+                    WHERE silver_lineage_id = ? AND table_name = ? AND status = 'PROMOTED'
+                    ORDER BY rowid DESC LIMIT 1
+                    """,
+                    (lineage_id, table_name),
+                ).fetchone()
+                if row and row["promoted_target_identity_json"]:
+                    target_authority = validate_promoted_identity_json(row["promoted_target_identity_json"])
+
+            if not target_authority:
+                logger.error("Target table %s.%s exists but no pre-existing promoted authority for lineage %s in SQLite (run %s)", silver_schema, table_name, lineage_id, run_id)
+                _update_run_status(run_id, "FAILED")
+                raise HTTPException(status_code=403, detail="Target relation overwrite unauthorized: missing pre-existing replacement authority.")
+
+            for k in ("database_oid", "namespace_oid", "relation_oid", "schema", "relation_name", "relation_kind"):
+                if target_authority.get(k) != live_target_ident.get(k):
+                    logger.error("Target relation identity mismatch for run %s on key %s: live=%s vs authority=%s", run_id, k, live_target_ident.get(k), target_authority.get(k))
+                    _update_run_status(run_id, "FAILED")
+                    raise HTTPException(status_code=403, detail="Target relation identity mismatch: live relation does not match pre-existing replacement authority.")
+
+        cand_identity = None
+        with get_generated_sql_pool().connection() as conn:
+            cand_identity = execute_candidate_sql(
                 sql_text,
                 conn,
                 expected_schema=candidates_schema,
@@ -558,46 +638,101 @@ def execute_sql(run_id: str):
                 expected_table_name=table_name,
                 expected_bronze_schema=bronze_schema,
                 mode="p2_silver",
+                expected_bronze_identity=source_authority,
             )
             conn.commit()
     except Exception as e:
         logger.error("Post-claim PostgreSQL execution failed for run %s: %s", run_id, e)
         _update_run_status(run_id, "FAILED")
+        if isinstance(e, HTTPException):
+            raise e
         if is_db_connection_error(e):
             raise HTTPException(status_code=503, detail="Database service is currently unavailable.")
         raise HTTPException(status_code=500, detail="Internal server error.")
 
-    # 4. TRANSITION TO PROMOTING state before initiating promotion
-    promoted_durable = _update_run_status(run_id, "PROMOTING")
+    # 4. SINGLE ATOMIC SQLite TRANSITION TO PROMOTING STATE with candidate and target identities
+    promoted_durable = _update_run_status(
+        run_id,
+        "PROMOTING",
+        candidate_identity_json=json.dumps(cand_identity),
+        target_identity_json=json.dumps(target_authority) if target_authority else None,
+    )
     if not promoted_durable:
-        logger.error("Failed to durably set run %s status to PROMOTING before promotion", run_id)
+        logger.error("Failed to durably set run %s status to PROMOTING in SQLite", run_id)
         _update_run_status(run_id, "FAILED")
         raise HTTPException(status_code=500, detail="Internal server error.")
 
-    # 5. PROMOTE CANDIDATE TABLE TO SILVER
+    # 5. RELOAD PERSISTED IDENTITIES FROM SQLite BEFORE PROMOTION
+    reloaded_cand_ident = None
+    reloaded_target_ident = None
+    with get_connection() as conn_db:
+        row = conn_db.execute(
+            "SELECT candidate_identity_json, target_identity_json FROM generated_sql_review WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if row:
+            if row["candidate_identity_json"]:
+                reloaded_cand_ident = json.loads(row["candidate_identity_json"])
+            if row["target_identity_json"]:
+                reloaded_target_ident = json.loads(row["target_identity_json"])
+
+    if not reloaded_cand_ident:
+        logger.error("Failed to reload persisted candidate identity for run %s", run_id)
+        _update_run_status(run_id, "FAILED")
+        raise HTTPException(status_code=500, detail="Internal server error.")
+
+    # 6. PROMOTE CANDIDATE TABLE TO SILVER WITH BOUNDED POOL & EXACT IDENTITY REVALIDATION
+    final_target_ident = None
     try:
-        promote_candidate_table(
+        from src.promotion import SilverPromotionFailedBeforeCommit, SilverPromotionCommitUnknown
+        final_target_ident, _ = promote_candidate_table(
             candidate_table=candidate_name,
             candidate_schema=candidates_schema,
             target_table=table_name,
             target_schema=silver_schema,
-            promotion_conninfo=postgres_promotion_conninfo()
+            promotion_conninfo=None,
+            expected_candidate_identity=reloaded_cand_ident,
+            expected_target_identity=reloaded_target_ident,
+            run_id=run_id,
         )
-    except Exception as e:
-        logger.error("PostgreSQL promotion failed for run %s: %s", run_id, e)
+    except SilverPromotionFailedBeforeCommit as e:
+        logger.error("PostgreSQL promotion failed before commit for run %s: %s", run_id, e)
+        _update_run_status(run_id, "FAILED")
+        raise HTTPException(
+            status_code=500,
+            detail="Table promotion failed before commit."
+        )
+    except SilverPromotionCommitUnknown as e:
+        logger.error("PostgreSQL promotion outcome ambiguous for run %s: %s", run_id, e)
         _update_run_status(run_id, "AMBIGUOUS_PROMOTION")
         raise HTTPException(
             status_code=500,
             detail="Promotion failed or outcome ambiguous. Manual reconciliation required."
         )
+    except Exception as e:
+        logger.error("Unexpected promotion error for run %s: %s", run_id, e)
+        _update_run_status(run_id, "FAILED")
+        raise HTTPException(
+            status_code=500,
+            detail="Table promotion failed before commit."
+        )
 
-    # 6. POST-PROMOTION SQLite STATUS UPDATE TO PROMOTED
+    # 7. POST-PROMOTION SQLite STATUS UPDATE TO PROMOTED WITH PERSISTED FINAL TARGET IDENTITY
+    if not final_target_ident or not isinstance(final_target_ident, dict):
+        logger.critical("PostgreSQL promotion committed for run %s but final target identity is missing", run_id)
+        _update_run_status(run_id, "AMBIGUOUS_PROMOTION")
+        raise HTTPException(
+            status_code=500,
+            detail="Promotion committed in database, but final target identity resolution failed. Reconciliation required."
+        )
+
     now_promoted = datetime.datetime.utcnow().isoformat()
     promoted_ok = _update_run_status(
         run_id,
         "PROMOTED",
         promoted_at=now_promoted,
-        attribution_log_json=json.dumps(attribution_results)
+        attribution_log_json=json.dumps(attribution_results),
+        promoted_target_identity_json=json.dumps(final_target_ident),
     )
 
     if not promoted_ok:
