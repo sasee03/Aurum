@@ -21,7 +21,10 @@ from src.app_state.store import (
     save_validation_report,
     save_validation_run,
 )
-from src.csv_ingest import CsvSchemaMismatch, run_validation_from_raw_orders
+from src.csv_ingest import (
+    CsvSchemaMismatch,
+    run_connector_validation_from_raw_orders as _run_connector_validation,
+)
 from src.config_loader import ConfigResolutionError, resolve_config_for_project_or_table
 from src.db_config import postgres_target_info
 from src.postgres_connector import (
@@ -43,6 +46,11 @@ router = APIRouter(tags=["connectors"])
 logger = logging.getLogger(__name__)
 
 CONNECTOR_NARRATIVE_TIMEOUT_SECONDS = 15
+
+
+def run_validation_from_raw_orders(*args, **kwargs):
+    """Compatibility seam delegating to authority-producing connector ETL."""
+    return _run_connector_validation(*args, **kwargs)
 
 
 class PostgresTestRequest(BaseModel):
@@ -297,7 +305,15 @@ def validate_postgres_table(body: PostgresValidateRequest) -> dict:
     source_schema = body.schema_name.strip()
     source_table = body.table.strip()
     try:
-        report, session_schema = run_validation_from_raw_orders(frame, run_id=run_id, cfg=cfg)
+        (
+            report,
+            session_schema,
+            bronze_identity,
+        ) = run_validation_from_raw_orders(
+            frame,
+            run_id=run_id,
+            cfg=cfg,
+        )
         report = attach_trust_narrative(
             report,
             timeout_seconds=CONNECTOR_NARRATIVE_TIMEOUT_SECONDS,
@@ -318,6 +334,7 @@ def validate_postgres_table(body: PostgresValidateRequest) -> dict:
             source_table=source_table,
             session_schema=session_schema,
             dataset_config=cfg.config_name,
+            bronze_identity=bronze_identity,
         )
         save_validation_report(persisted_run_id, report)
     except Exception:  # noqa: BLE001

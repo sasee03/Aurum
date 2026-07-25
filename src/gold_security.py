@@ -1169,10 +1169,6 @@ def load_gold_security_state(
             raise GoldStateMalformed(
                 "backup cleanup eligibility is only partially persisted"
             )
-        if backup_cleanup_eligible:
-            raise GoldStateMalformed(
-                "Batch 4.5C cannot mark backup cleanup eligible"
-            )
         if promotion_committed_at is not None:
             promotion_committed_at = _require_nonempty_string(
                 promotion_committed_at,
@@ -1228,6 +1224,10 @@ def load_gold_security_state(
             raise GoldStateMalformed(
                 "absent-target promotion cannot contain a backup identity"
             )
+        if backup_identity is None and backup_cleanup_eligible is not None:
+            raise GoldStateMalformed(
+                "backup cleanup eligibility requires exact backup identity"
+            )
     elif status == "PROMOTION_FAILED":
         if (
             candidate_identity is None
@@ -1262,6 +1262,10 @@ def load_gold_security_state(
             raise GoldStateMalformed("failed execution state is internally inconsistent")
     else:
         raise GoldStateMalformed("execution metadata is invalid for run status")
+    if status != "PROMOTED" and backup_cleanup_eligible:
+        raise GoldStateMalformed(
+            "only a strictly PROMOTED run can authorize backup cleanup"
+        )
     return GoldSecurityState(
         **{
             **approved_state.__dict__,

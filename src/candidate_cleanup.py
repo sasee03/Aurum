@@ -5,7 +5,8 @@ from __future__ import annotations
 import datetime
 import logging
 import re
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Callable
+import uuid
 
 import psycopg
 from psycopg import sql
@@ -37,6 +38,10 @@ class GoldCandidateCleanupError(RuntimeError):
 
 class GoldCandidateCleanupOutcomeUnknown(RuntimeError):
     """Gold DROP ran, but PostgreSQL did not acknowledge its commit outcome."""
+
+
+class GoldCandidateCleanupRollbackUnknown(RuntimeError):
+    """Commit was not requested, but rollback acknowledgement is unknown."""
 
 
 def _parse_iso_datetime(dt_str: str) -> Optional[datetime.datetime]:
@@ -127,6 +132,7 @@ def discard_owned_gold_candidate(
     expected_identity: dict[str, Any],
     expected_database_name: str,
     promotion_conninfo: str,
+    before_commit: Callable[[], None] | None = None,
 ) -> str:
     """Drop an exactly owned Gold candidate in one locked transaction.
 
@@ -217,15 +223,24 @@ def discard_owned_gold_candidate(
                     )
                     drop_executed = True
                     result = GOLD_CLEANUP_REMOVED
+                    if before_commit is not None:
+                        before_commit()
     except Exception as exc:
+        rollback_acknowledged = True
         try:
             transaction.__exit__(type(exc), exc, exc.__traceback__)
-        except Exception:
+        except Exception as rollback_exc:
+            rollback_acknowledged = False
             logger.warning(
                 "Gold candidate cleanup rollback failed",
                 exc_info=True,
             )
-        if isinstance(exc, psycopg.errors.UndefinedTable):
+            pending_cause = rollback_exc
+        if not rollback_acknowledged:
+            pending_error = GoldCandidateCleanupRollbackUnknown(
+                "Gold candidate cleanup rollback acknowledgement is unknown"
+            )
+        elif isinstance(exc, psycopg.errors.UndefinedTable):
             result = GOLD_CLEANUP_MISSING
         else:
             pending_error = GoldCandidateCleanupError(

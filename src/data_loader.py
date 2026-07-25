@@ -236,6 +236,67 @@ class DataLoader:
         """Read-only name of the isolated Postgres schema for this loader session."""
         return self._schema
 
+    def authorize_bronze_for_silver(
+        self,
+        bronze_table: str,
+    ) -> dict[str, Any]:
+        """Grant the generated-SQL role access to one exact retained Bronze table.
+
+        The grant is scoped to this run's random session schema and this one
+        relation.  The returned six-field identity is resolved by the server
+        from PostgreSQL immediately after the grant; callers persist it as the
+        Connect-to-Bronze authority for later Silver execution.
+        """
+        from .db_config import POSTGRES_GENERATED_SQL_ROLE
+
+        schema_ident = _quote_ident(self._schema)
+        table_ident = _quote_ident(bronze_table)
+        role_ident = _quote_ident(POSTGRES_GENERATED_SQL_ROLE)
+        with self._pg_conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                    schema_ident,
+                    role_ident,
+                )
+            )
+            cur.execute(
+                sql.SQL("GRANT SELECT ON TABLE {}.{} TO {}").format(
+                    schema_ident,
+                    table_ident,
+                    role_ident,
+                )
+            )
+            cur.execute(
+                """
+                SELECT database.oid,
+                       namespace.oid,
+                       relation.oid,
+                       namespace.nspname,
+                       relation.relname,
+                       relation.relkind
+                FROM pg_catalog.pg_class AS relation
+                JOIN pg_catalog.pg_namespace AS namespace
+                  ON namespace.oid = relation.relnamespace
+                JOIN pg_catalog.pg_database AS database
+                  ON database.datname = pg_catalog.current_database()
+                WHERE namespace.nspname = %s
+                  AND relation.relname = %s
+                  AND relation.relkind IN ('r', 'p')
+                """,
+                (self._schema, bronze_table),
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise RuntimeError("Retained Bronze relation identity could not be resolved")
+        return {
+            "database_oid": int(row[0]),
+            "namespace_oid": int(row[1]),
+            "relation_oid": int(row[2]),
+            "schema": str(row[3]),
+            "relation_name": str(row[4]),
+            "relation_kind": str(row[5]),
+        }
+
     # ------------------------------------------------------------------ build
     def _create_session_schema(self) -> None:
         with self._pg_conn.cursor() as cur:

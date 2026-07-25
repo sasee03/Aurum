@@ -205,3 +205,27 @@ def run_validation_from_raw_orders(
         return report, loader.session_schema
     finally:
         loader.close()
+
+
+def run_connector_validation_from_raw_orders(
+    df: pd.DataFrame,
+    run_id: str,
+    cfg: Optional[AurumDatasetConfig] = None,
+) -> tuple[dict, str, dict]:
+    """Run a connector validation and bind its real retained Bronze identity.
+
+    Unlike the general upload helper, this production connector path grants the
+    generated-SQL role access to only the retained Bronze relation and returns
+    the exact PostgreSQL identity that must be persisted with the connector run.
+    """
+    if cfg is None:
+        cfg = load_dataset_config()
+    loader = DataLoader.from_frames({cfg.tables.raw: df})
+    try:
+        materialize_upload_pipeline(loader, cfg)
+        report = build_report(loader, run_id=run_id, cfg=cfg)
+        bronze_identity = loader.authorize_bronze_for_silver(cfg.tables.bronze)
+        loader.retain_schema_on_close = True
+        return report, loader.session_schema, bronze_identity
+    finally:
+        loader.close()

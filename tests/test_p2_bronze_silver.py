@@ -25,10 +25,10 @@ def test_p2_rules_validation_and_persistence(temp_sqlite_db):
     base_url = "/api/v1/transform"
     table_name = "src_orders_test"
 
-    # 1. Reject empty rules
+    # 1. Empty rules are an explicit zero-transformation plan.
     resp = client.post(f"{base_url}/rules", json={"table_name": table_name, "rules": []})
-    assert resp.status_code == 400
-    assert "Rules must not be empty" in resp.json()["detail"]
+    assert resp.status_code == 200
+    assert len(resp.json()["rule_revision"]) == 64
 
     # 2. Reject whitespace-only rules
     resp = client.post(f"{base_url}/rules", json={"table_name": table_name, "rules": ["   "]})

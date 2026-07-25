@@ -112,6 +112,7 @@ def save_validation_run(
     display_name: Optional[str] = None,
     session_schema: Optional[str] = None,
     dataset_config: Optional[str] = None,
+    bronze_identity: Optional[dict[str, Any]] = None,
 ) -> None:
     started = started_at or _utc_now()
     finished = finished_at or _utc_now()
@@ -121,8 +122,9 @@ def save_validation_run(
             INSERT OR REPLACE INTO validation_runs (
                 run_id, project_id, connection_id, status, mode,
                 started_at, finished_at, error_message,
-                source_schema, source_table, display_name, session_schema, dataset_config
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_schema, source_table, display_name, session_schema,
+                dataset_config, bronze_identity_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -138,6 +140,11 @@ def save_validation_run(
                 display_name,
                 session_schema,
                 dataset_config,
+                (
+                    json.dumps(bronze_identity, sort_keys=True, separators=(",", ":"))
+                    if bronze_identity is not None
+                    else None
+                ),
             ),
         )
         if project_id:
@@ -156,7 +163,8 @@ def get_validation_run(run_id: str) -> Optional[dict[str, Any]]:
             SELECT
                 run_id, project_id, connection_id, status, mode,
                 started_at, finished_at, error_message,
-                source_schema, source_table, display_name, session_schema, dataset_config
+                source_schema, source_table, display_name, session_schema,
+                dataset_config, bronze_identity_json
             FROM validation_runs
             WHERE run_id = ?
             """,
@@ -184,6 +192,7 @@ def get_validation_run(run_id: str) -> Optional[dict[str, Any]]:
         ),
         "session_schema": row["session_schema"],
         "dataset_config": row["dataset_config"],
+        "bronze_identity_json": row["bronze_identity_json"],
     }
 
 
@@ -231,6 +240,7 @@ def list_validation_runs() -> list[dict[str, Any]]:
                 r.display_name,
                 r.session_schema,
                 r.dataset_config,
+                r.bronze_identity_json,
                 rep.report_json
             FROM validation_runs r
             LEFT JOIN validation_reports rep ON rep.run_id = r.run_id
@@ -270,6 +280,7 @@ def list_validation_runs() -> list[dict[str, Any]]:
                 ),
                 "session_schema": row["session_schema"],
                 "dataset_config": row["dataset_config"],
+                "bronze_identity_json": row["bronze_identity_json"],
                 "trust_score": trust_score,
                 "final_verdict": final_verdict,
             }

@@ -458,6 +458,7 @@ def validate_generated_sql(
     expected_schema: str,
     expected_table_name: str | None = None,
     expected_bronze_schema: str | None = None,
+    expected_bronze_table_name: str | None = None,
     run_id: str | None = None,
     layer_schemas: LayerSchemas | None = None,
     expected_step_count: int | None = None,
@@ -634,15 +635,21 @@ def validate_generated_sql(
                 req_bronze_schema = expected_bronze_schema or "bronze"
                 if tbl_schema is None:
                     raise SqlSafetyViolation(
-                        f"step_1 must read from schema-qualified Bronze table '{req_bronze_schema}.{expected_table_name or tbl_name}'"
+                        f"step_1 must read from schema-qualified Bronze table '{req_bronze_schema}.{expected_bronze_table_name or expected_table_name or tbl_name}'"
                     )
                 if tbl_schema != req_bronze_schema:
                     raise SqlSafetyViolation(
                         f"step_1 must read from permitted Bronze schema {req_bronze_schema}, found: {tbl_schema}"
                     )
-                if expected_table_name is not None and tbl_name != expected_table_name:
+                required_bronze_table = (
+                    expected_bronze_table_name or expected_table_name
+                )
+                if (
+                    required_bronze_table is not None
+                    and tbl_name != required_bronze_table
+                ):
                     raise SqlSafetyViolation(
-                        f"step_1 must read from permitted Bronze table {req_bronze_schema}.{expected_table_name}, found: {tbl_schema}.{tbl_name}"
+                        f"step_1 must read from permitted Bronze table {req_bronze_schema}.{required_bronze_table}, found: {tbl_schema}.{tbl_name}"
                     )
             else:
                 # step_k (k >= 2) must reference unqualified step_{k-1} CTE
@@ -713,6 +720,7 @@ def execute_candidate_sql(
     run_id: str | None = None,
     expected_table_name: str | None = None,
     expected_bronze_schema: str | None = None,
+    expected_bronze_table_name: str | None = None,
     mode: str = "generic",
     expected_bronze_identity: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
@@ -726,6 +734,7 @@ def execute_candidate_sql(
         expected_schema=expected_schema,
         expected_table_name=expected_table_name,
         expected_bronze_schema=expected_bronze_schema,
+        expected_bronze_table_name=expected_bronze_table_name,
         run_id=run_id,
         mode=mode,
     )
@@ -763,7 +772,14 @@ def execute_candidate_sql(
 
                 # Lock Bronze source table & validate whole-relation catalog types under lock
                 req_bronze_schema = expected_bronze_schema or "bronze"
-                req_bronze_table = expected_table_name or target_table.replace(f"_candidate_{run_id}" if run_id else "_candidate_", "")
+                req_bronze_table = (
+                    expected_bronze_table_name
+                    or expected_table_name
+                    or target_table.replace(
+                        f"_candidate_{run_id}" if run_id else "_candidate_",
+                        "",
+                    )
+                )
                 p_cur.execute(
                     psql.SQL("LOCK TABLE {}.{} IN ACCESS SHARE MODE").format(
                         psql.Identifier(req_bronze_schema), psql.Identifier(req_bronze_table)

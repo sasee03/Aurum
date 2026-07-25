@@ -77,17 +77,7 @@ def test_check_name_contract(monkeypatch):
     assert taken.json()["status"] == "taken"
 
 
-from src.generator_trust import GeneratorTrustPolicy
-
 def test_generate_is_unavailable_and_persists_no_run(monkeypatch):
-    monkeypatch.setattr(
-        router,
-        "GOLD_GENERATOR_TRUST",
-        GeneratorTrustPolicy(
-            pipeline="gold",
-            trusted_hardened_provenances=frozenset(),
-        ),
-    )
     monkeypatch.setattr(
         router,
         "get_generated_sql_pool",
