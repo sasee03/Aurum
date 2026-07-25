@@ -34,6 +34,8 @@ from src.gold_security import (
     canonical_json,
     load_gold_security_state,
     load_persisted_gold_security_state,
+    new_gold_security_record,
+    insert_gold_security_state,
     revision_for,
 )
 from src.gold_execution import (
@@ -221,12 +223,130 @@ def list_silver_tables():
     return {"tables": [{"name": row[0]} for row in rows]}
 
 
+@router.get("/gold-tables")
+def list_gold_tables():
+    """List only real tables in the server-configured Gold schema."""
+    schemas = load_layer_schemas()
+    try:
+        with get_generated_sql_pool().connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_schema = %s
+                      AND table_type = 'BASE TABLE'
+                    ORDER BY table_name
+                    """,
+                    (schemas.gold,),
+                )
+                rows = cur.fetchall()
+    except Exception as exc:
+        if _is_connectivity_error(exc):
+            raise HTTPException(
+                status_code=503,
+                detail="Gold table discovery is currently unavailable.",
+            ) from None
+        raise HTTPException(
+            status_code=500,
+            detail="Gold table discovery failed.",
+        ) from None
+
+    return {"tables": [{"name": row[0]} for row in rows]}
+
+
 @router.post("/generate")
 def generate_gold_sql(payload: GenerateGoldPayload):
-    """Fail closed until a trusted, hardened Gold generator is registered."""
+    """Controlled non-LLM Gold proposal path using trusted controlled provenance."""
     if not GOLD_GENERATOR_TRUST.generation_available:
         raise HTTPException(status_code=503, detail=GOLD_GENERATION_UNAVAILABLE)
-    raise HTTPException(status_code=503, detail=GOLD_GENERATION_UNAVAILABLE)
+
+    target_name = payload.target_table_name.strip()
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", target_name):
+        raise HTTPException(status_code=400, detail="Invalid target table name identifier.")
+
+    if not payload.silver_table_names:
+        raise HTTPException(status_code=400, detail="At least one silver table is required.")
+
+    schemas = load_layer_schemas()
+    for s_table in payload.silver_table_names:
+        if not check_table_exists(schemas.silver, s_table):
+            raise HTTPException(status_code=404, detail=f"Silver table '{s_table}' not found.")
+
+    provenance = next(iter(GOLD_GENERATOR_TRUST.trusted_hardened_provenances))
+    generator_version = "v1.0.0"
+    run_id = f"run_{uuid.uuid4().hex[:12]}"
+    candidate_schema = schemas.gold_candidates
+    candidate_name = f"{target_name}_candidate_{run_id}"
+    primary_silver = payload.silver_table_names[0]
+
+    sql_text = (
+        f'CREATE TABLE "{candidate_schema}"."{candidate_name}" AS '
+        f'WITH step_1 AS (SELECT * FROM "{schemas.silver}"."{primary_silver}") '
+        f'SELECT * FROM step_1'
+    )
+
+    selected_sources = [
+        {"schema": schemas.silver, "table": s_table}
+        for s_table in payload.silver_table_names
+    ]
+
+    try:
+        security_record = new_gold_security_record(
+            run_id=run_id,
+            sql_text=sql_text,
+            business_requirement=payload.business_requirement or "Controlled Gold Projection",
+            generator_provenance=provenance,
+            generator_version=generator_version,
+            selected_sources=selected_sources,
+            target_schema=schemas.gold,
+            target_name=target_name,
+            candidate_schema=candidate_schema,
+        )
+    except Exception as e:
+        logger.exception("Failed to build Gold security record")
+        raise HTTPException(status_code=422, detail=f"Invalid Gold security payload: {e}")
+
+    created_at = approval_timestamp()
+    planned_changes = {
+        "summary": f"Controlled Gold projection from silver.{primary_silver}",
+        "sources": payload.silver_table_names,
+        "target": target_name,
+    }
+
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review (
+                run_id, table_name, sql_text, planned_changes_json,
+                created_at, status, candidate_schema, generator_provenance,
+                project_id, connection_id
+            )
+            VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, 'default_project', 'default_connection')
+            """,
+            (
+                run_id,
+                target_name,
+                sql_text,
+                canonical_json(planned_changes),
+                created_at,
+                candidate_schema,
+                provenance,
+            ),
+        )
+        insert_gold_security_state(conn, security_record)
+        conn.commit()
+
+    return {
+        "run_id": run_id,
+        "table_name": target_name,
+        "sql_text": sql_text,
+        "planned_changes": planned_changes,
+        "status": "PENDING",
+        "review_revision": security_record["review_revision"],
+        "generator_provenance": provenance,
+    }
 
 @router.get("/review/{run_id}")
 def review_gold_sql(run_id: str):
