@@ -581,6 +581,14 @@ def test_production_empty_trust_set_blocks_approval_before_catalog(monkeypatch):
     monkeypatch.setattr(router, "load_layer_schemas", lambda: SCHEMAS)
     monkeypatch.setattr(
         router,
+        "GOLD_GENERATOR_TRUST",
+        GeneratorTrustPolicy(
+            pipeline="gold",
+            trusted_hardened_provenances=frozenset(),
+        ),
+    )
+    monkeypatch.setattr(
+        router,
         "resolve_gold_approval_catalog",
         lambda **kwargs: pytest.fail("empty production trust must contain approval"),
     )

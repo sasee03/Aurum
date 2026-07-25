@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import uuid
+from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, HTTPException, Query
@@ -32,8 +33,11 @@ from src.gold_security import (
     approval_timestamp,
     build_approval_snapshot,
     canonical_json,
+    expected_candidate_name,
+    insert_gold_security_state,
     load_gold_security_state,
     load_persisted_gold_security_state,
+    new_gold_security_record,
     revision_for,
 )
 from src.gold_execution import (
@@ -60,6 +64,11 @@ from src.gold_promotion import (
     reconcile_gold_promotion,
 )
 from src.generator_trust import GeneratorTrustPolicy
+from src.gold_generator import (
+    call_ollama_gold_generator,
+    OLLAMA_GOLD_PROVENANCE,
+    OLLAMA_GOLD_VERSION,
+)
 
 router = APIRouter(prefix="/api/v1/gold", tags=["gold"])
 logger = logging.getLogger(__name__)
@@ -223,10 +232,94 @@ def list_silver_tables():
 
 @router.post("/generate")
 def generate_gold_sql(payload: GenerateGoldPayload):
-    """Fail closed until a trusted, hardened Gold generator is registered."""
+    """Generate Gold SQL using Ollama, validate against AST safety gate, and record security state."""
     if not GOLD_GENERATOR_TRUST.generation_available:
         raise HTTPException(status_code=503, detail=GOLD_GENERATION_UNAVAILABLE)
-    raise HTTPException(status_code=503, detail=GOLD_GENERATION_UNAVAILABLE)
+
+    if not payload.target_table_name or not payload.target_table_name.strip():
+        raise HTTPException(status_code=400, detail="target_table_name must be a non-empty string.")
+
+    if not payload.silver_table_names:
+        raise HTTPException(status_code=400, detail="silver_table_names must not be empty.")
+
+    if not payload.business_requirement or not payload.business_requirement.strip():
+        raise HTTPException(status_code=400, detail="business_requirement must be a non-empty string.")
+
+    try:
+        schemas = load_layer_schemas()
+        silver_schema = schemas.silver
+        gold_schema = schemas.gold
+        candidate_schema = schemas.gold_candidates
+    except Exception as exc:
+        logger.error("Failed to load layer schemas in Gold generate: %s", exc)
+        raise HTTPException(status_code=500, detail="Invalid Aurum layer configuration.") from exc
+
+    run_id = f"run_{uuid.uuid4().hex[:12]}"
+    candidate_name = expected_candidate_name(payload.target_table_name, run_id)
+
+    try:
+        sql_text = call_ollama_gold_generator(
+            target_table_name=payload.target_table_name,
+            candidate_table_name=candidate_name,
+            silver_table_names=payload.silver_table_names,
+            business_requirement=payload.business_requirement,
+            run_id=run_id,
+        )
+    except TimeoutError as exc:
+        logger.error("Gold generator HTTP request timed out for run %s: %s", run_id, exc)
+        raise HTTPException(status_code=503, detail="Gold SQL generator request timed out.") from exc
+    except Exception as exc:
+        logger.error("Gold SQL generation failed for run %s: %s", run_id, exc)
+        raise HTTPException(status_code=503, detail=f"Gold SQL generation failed: {exc}") from exc
+
+    selected_sources = [{"schema": silver_schema, "table": name} for name in payload.silver_table_names]
+
+    try:
+        sec_record = new_gold_security_record(
+            run_id=run_id,
+            sql_text=sql_text,
+            business_requirement=payload.business_requirement,
+            generator_provenance=OLLAMA_GOLD_PROVENANCE,
+            generator_version=OLLAMA_GOLD_VERSION,
+            selected_sources=selected_sources,
+            target_schema=gold_schema,
+            target_name=payload.target_table_name,
+            candidate_schema=candidate_schema,
+        )
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO generated_sql_review (
+                    run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema, generator_provenance
+                )
+                VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)
+                """,
+                (
+                    run_id,
+                    payload.target_table_name,
+                    sql_text,
+                    json.dumps({"business_requirement": payload.business_requirement}),
+                    now_iso,
+                    candidate_schema,
+                    OLLAMA_GOLD_PROVENANCE,
+                ),
+            )
+            insert_gold_security_state(conn, sec_record)
+            conn.commit()
+    except Exception as exc:
+        logger.exception("Failed to persist generated Gold run %s: %s", run_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to save generated Gold SQL review state.") from exc
+
+    return {
+        "run_id": run_id,
+        "table_name": payload.target_table_name,
+        "sql_text": sql_text,
+        "status": "PENDING",
+        "generator_provenance": OLLAMA_GOLD_PROVENANCE,
+        "review_revision": sec_record["review_revision"],
+    }
 
 @router.get("/review/{run_id}")
 def review_gold_sql(run_id: str):
