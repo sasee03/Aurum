@@ -16,6 +16,7 @@ from src.db_config import (
     get_ingestion_pool, 
     get_generated_sql_pool, 
     postgres_promotion_conninfo,
+    postgres_target_info,
     load_layer_schemas,
     load_postgres_config,
 )
@@ -355,38 +356,99 @@ def get_rules(table_name: str):
 
 @router.post("/generate")
 def generate_sql(payload: GeneratePayload):
-    """P2.2 & P2.3: Generate SQL via LLM for the requested table (503 contained)."""
-    raise HTTPException(
-        status_code=503,
-        detail="Production Silver generation is unavailable."
-    )
-
+    """P2.2 & P2.3: Generate SQL for requested table (503 contained if no deterministic rules)."""
     # 1. Fetch rules
     rules_resp = get_rules(payload.table_name)
     rules = rules_resp.get("rules", [])
-    if not rules:
-        raise HTTPException(status_code=400, detail="No rules defined for this table.")
+    if not rules or not (isinstance(rules, list) and all(isinstance(r, dict) for r in rules)):
+        raise HTTPException(
+            status_code=503,
+            detail="Production Silver generation is unavailable."
+        )
 
-    # 2. Fetch schema
     try:
-        get_table_schema(payload.table_name)
-    except TableNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Table '{payload.table_name}' not found.")
-    except DatabaseConnectionError:
-        raise HTTPException(status_code=503, detail="Database service is currently unavailable.")
-    except ConfigurationError:
-        raise HTTPException(status_code=500, detail="Invalid Aurum layer configuration.")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error("Unexpected error fetching schema for %s: %s", payload.table_name, e)
-        raise HTTPException(status_code=500, detail="Internal server error.")
-
-    # 3. Production generator status: Explicitly unavailable until generic LLM integration
-    raise HTTPException(
-        status_code=503,
-        detail="SQL generator is currently unavailable (LLM integration pending)."
-    )
+        schemas = load_layer_schemas()
+        with get_generated_sql_pool().connection() as pg_conn:
+            source_identity = resolve_relation_identity(pg_conn, schemas.bronze, payload.table_name)
+            if not source_identity:
+                raise HTTPException(status_code=404, detail=f"Bronze table '{payload.table_name}' not found.")
+            column_types = _load_exact_bronze_column_types(source_identity)
+            
+        validated_rules = validate_deterministic_rules(
+            rules,
+            available_columns=column_types,
+            column_types=column_types,
+        )
+        rule_rev = compute_rule_revision(validated_rules)
+        import uuid
+        run_id = f"run_{uuid.uuid4().hex[:12]}"
+        candidate_name = f"{payload.table_name}_candidate_{run_id}"
+        
+        sql_text = build_deterministic_silver_sql(
+            candidate_schema=schemas.silver_candidates,
+            candidate_name=candidate_name,
+            bronze_schema=schemas.bronze,
+            bronze_relation=payload.table_name,
+            rules=validated_rules,
+        )
+        
+        lineage_id = compute_silver_lineage_id(
+            project_id="default_project",
+            connection_id="default_connection",
+            database_name=postgres_target_info()["database"],
+            bronze_schema=schemas.bronze,
+            bronze_relation=payload.table_name,
+            silver_schema=schemas.silver,
+            silver_target_relation=payload.table_name,
+        )
+        
+        created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        planned_changes = {"rules": validated_rules}
+        
+        with get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO generated_sql_review (
+                    run_id, table_name, sql_text, planned_changes_json,
+                    created_at, status, candidate_schema, generator_provenance,
+                    rule_revision, project_id, connection_id, silver_lineage_id,
+                    source_identity_json
+                )
+                VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    payload.table_name,
+                    sql_text,
+                    json.dumps(planned_changes, sort_keys=True, separators=(",", ":")),
+                    created_at,
+                    schemas.silver_candidates,
+                    SERVER_DETERMINISTIC_PROVENANCE,
+                    rule_rev,
+                    "default_project",
+                    "default_connection",
+                    lineage_id,
+                    json.dumps(source_identity, sort_keys=True, separators=(",", ":")),
+                ),
+            )
+            conn.commit()
+            
+        return {
+            "run_id": run_id,
+            "table_name": payload.table_name,
+            "sql_text": sql_text,
+            "planned_changes": planned_changes,
+            "status": "PENDING",
+            "rule_revision": rule_rev,
+            "generator_provenance": SERVER_DETERMINISTIC_PROVENANCE,
+        }
+    except SilverRuleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to generate deterministic Silver SQL for %s", payload.table_name)
+        raise HTTPException(status_code=500, detail="Failed to generate Silver SQL.")
 
 @router.get("/review/{run_id}")
 def review_sql(run_id: str):
