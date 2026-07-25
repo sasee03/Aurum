@@ -1,5 +1,15 @@
 # Aurum — Roadmap to Market-Ready
 
+> **Status and supersession notice (2026-07-25):** This roadmap preserves useful
+> historical product and demo context. Aurum's current engineering direction is
+> the automated, schema-agnostic PostgreSQL Medallion ETL flow defined in the
+> [AI-Assisted Engineering Standards](engineering/AI_ENGINEERING_STANDARDS.md):
+> Connect → Dataset/Table Discovery → Bronze → Silver → Gold. Where historical
+> Olist-, demo-, or fixed-schema guidance conflicts with that current direction,
+> the canonical standards and the current approved batch govern. Historical
+> content remains evidence of earlier decisions; it is not silently deleted or
+> promoted into a production invariant.
+
 **Purpose of this document:** a single source of truth any AI agent (Cursor, Codex, Antigravity, or a fresh model) can read cold and understand what Aurum is, the rules that must never be broken, where the platform stands today, and the exact phased plan to make it production-ready. If you are an AI being handed this: read Sections 1–3 before proposing or writing any code.
 
 ---
