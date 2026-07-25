@@ -2,13 +2,53 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+import hmac
+import os
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from src.candidate_cleanup import cleanup_orphaned_candidate_tables
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
+DESTRUCTIVE_ADMIN_ENABLE_ENV = "AURUM_ENABLE_DESTRUCTIVE_ADMIN"
+DESTRUCTIVE_ADMIN_TOKEN_ENV = "AURUM_DESTRUCTIVE_ADMIN_TOKEN"
+DESTRUCTIVE_ADMIN_TOKEN_HEADER = "X-Aurum-Operator-Token"
 
-@router.post("/candidate-cleanup")
+
+def require_destructive_admin_operator(
+    operator_token: Optional[str] = Header(
+        None,
+        alias=DESTRUCTIVE_ADMIN_TOKEN_HEADER,
+        description="Server-configured operator credential.",
+    ),
+) -> None:
+    """Fail closed before destructive cleanup code can acquire authority."""
+    enabled = (
+        os.getenv(DESTRUCTIVE_ADMIN_ENABLE_ENV, "").strip().lower()
+        == "true"
+    )
+    expected_token = os.getenv(DESTRUCTIVE_ADMIN_TOKEN_ENV, "")
+    if not enabled or not expected_token.strip():
+        raise HTTPException(
+            status_code=404,
+            detail="Destructive administrative operations are unavailable.",
+        )
+    supplied = operator_token or ""
+    if not hmac.compare_digest(
+        supplied.encode("utf-8"),
+        expected_token.encode("utf-8"),
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Valid operator authorization is required.",
+        )
+
+
+@router.post(
+    "/candidate-cleanup",
+    dependencies=[Depends(require_destructive_admin_operator)],
+)
 def trigger_candidate_cleanup(
     confirm: bool = Query(
         False,

@@ -124,6 +124,54 @@ CREATE TABLE IF NOT EXISTS gold_security_state (
     promotion_committed_at TEXT,
     FOREIGN KEY (run_id) REFERENCES generated_sql_review(run_id)
 );
+
+CREATE TABLE IF NOT EXISTS bronze_ingest_authority (
+    ingest_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    connection_id TEXT NOT NULL,
+    database_name TEXT NOT NULL,
+    source_schema TEXT NOT NULL,
+    source_relation TEXT NOT NULL,
+    source_identity_json TEXT NOT NULL,
+    bronze_schema TEXT NOT NULL,
+    bronze_relation TEXT NOT NULL,
+    bronze_identity_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('READY', 'SUPERSEDED')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id),
+    FOREIGN KEY (connection_id) REFERENCES data_connections(id)
+);
+
+CREATE TABLE IF NOT EXISTS bronze_ingest_operations (
+    ingest_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    connection_id TEXT NOT NULL,
+    database_name TEXT NOT NULL,
+    database_oid INTEGER NOT NULL,
+    source_schema TEXT NOT NULL,
+    source_namespace_oid INTEGER NOT NULL,
+    source_relation TEXT NOT NULL,
+    source_identity_json TEXT,
+    bronze_schema TEXT NOT NULL,
+    bronze_namespace_oid INTEGER NOT NULL,
+    bronze_relation TEXT NOT NULL,
+    provisional_bronze_identity_json TEXT,
+    status TEXT NOT NULL
+        CHECK (status IN (
+            'CLAIMED',
+            'CREATING',
+            'COMMIT_IN_PROGRESS',
+            'READY',
+            'FAILED_RETRYABLE',
+            'RECONCILIATION_REQUIRED'
+        )),
+    failure_code TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id),
+    FOREIGN KEY (connection_id) REFERENCES data_connections(id)
+);
 """
 
 
@@ -146,12 +194,33 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
 def compute_rule_revision(rules: Any) -> str | None:
     """Compute deterministic canonical full 64-char SHA-256 rule revision hash.
 
-    Returns None if rules is not a valid list[str].
+    Legacy text rules and deterministic rule objects share one canonical hash.
     """
-    if not isinstance(rules, list) or not all(isinstance(x, str) for x in rules):
+    if not isinstance(rules, list):
         return None
-    normalized = [r.strip() for r in rules if isinstance(r, str) and r.strip()]
-    canonical_json = json.dumps(normalized, separators=(',', ':'))
+    if all(isinstance(item, str) for item in rules):
+        normalized: list[Any] = [item.strip() for item in rules if item.strip()]
+    elif all(isinstance(item, dict) for item in rules):
+        try:
+            canonical = json.dumps(
+                rules,
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            normalized = json.loads(canonical)
+        except (TypeError, ValueError):
+            return None
+    else:
+        return None
+    canonical_json = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return hashlib.sha256(canonical_json.encode('utf-8')).hexdigest().lower()
 
 
@@ -232,6 +301,30 @@ def validate_promoted_identity_json(raw_json: Any) -> dict[str, Any] | None:
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA_SQL)
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_bronze_authority_connection
+        ON bronze_ingest_authority(project_id, connection_id, status)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_bronze_ingest_operation_target
+        ON bronze_ingest_operations(
+            project_id, connection_id, bronze_schema, bronze_relation, status
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_bronze_ingest_active_target
+        ON bronze_ingest_operations(bronze_schema, bronze_relation)
+        WHERE status IN (
+            'CLAIMED', 'CREATING', 'COMMIT_IN_PROGRESS',
+            'RECONCILIATION_REQUIRED'
+        )
+        """
+    )
     # Migrate older DBs created before source_schema/source_table existed.
     _ensure_column(conn, "validation_runs", "source_schema", "source_schema TEXT")
     _ensure_column(conn, "validation_runs", "source_table", "source_table TEXT")
@@ -348,8 +441,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
 def get_connection() -> sqlite3.Connection:
     path = app_state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     init_schema(conn)
     return conn

@@ -22,6 +22,13 @@ from src.db_config import (
 from src.sql_safety import validate_generated_sql, execute_candidate_sql
 from src.promotion import promote_candidate_table, resolve_relation_identity
 from src.generator_trust import GeneratorTrustPolicy
+from src.silver_rules import (
+    PostgresColumnType,
+    SilverRuleError,
+    build_deterministic_silver_sql,
+    rule_attribution_label,
+    validate_deterministic_rules,
+)
 import sqlglot
 
 try:
@@ -50,7 +57,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/transform", tags=["transform"])
 
 # Approved trusted generator provenances for execution eligibility
-TRUSTED_GENERATOR_PROVENANCES: Set[str] = {"ollama_v1_generic"}
+SERVER_DETERMINISTIC_PROVENANCE = "server_deterministic_rules_v1"
+TRUSTED_GENERATOR_PROVENANCES: Set[str] = {
+    "ollama_v1_generic",
+    SERVER_DETERMINISTIC_PROVENANCE,
+}
 SILVER_GENERATOR_TRUST = GeneratorTrustPolicy(
     pipeline="silver",
     trusted_hardened_provenances=frozenset(TRUSTED_GENERATOR_PROVENANCES),
@@ -58,7 +69,7 @@ SILVER_GENERATOR_TRUST = GeneratorTrustPolicy(
 
 class RulesPayload(BaseModel):
     table_name: str
-    rules: List[str]
+    rules: List[Any]
 
 class GeneratePayload(BaseModel):
     table_name: str
@@ -73,11 +84,93 @@ def validate_sql_identifier(identifier: str) -> str:
         raise ValueError(f"Invalid SQL identifier: {identifier}")
     return identifier
 
-def validate_rules_shape(rules: Any) -> List[str]:
-    """Ensure rules is a valid list[str] (reject dicts, scalars, numbers, nulls, or mixed arrays)."""
-    if not isinstance(rules, list) or not all(isinstance(x, str) for x in rules):
-        raise ValueError("Rules must be a flat list of strings.")
-    return rules
+def validate_rules_shape(rules: Any) -> list[Any]:
+    """Validate one homogeneous legacy-text or deterministic rule list."""
+    if not isinstance(rules, list):
+        raise ValueError("Rules must be a list.")
+    if not rules:
+        return []
+    if all(isinstance(item, str) for item in rules):
+        return rules
+    if all(isinstance(item, dict) for item in rules):
+        return validate_deterministic_rules(rules)
+    raise ValueError(
+        "Rules must be either legacy text strings or deterministic rule objects."
+    )
+
+
+def _load_exact_bronze_column_types(
+    source_identity: dict[str, Any],
+) -> dict[str, PostgresColumnType]:
+    """Load exact pg_type metadata and bind it to the persisted Bronze identity."""
+    with get_generated_sql_pool().connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT database.oid,
+                       namespace.oid,
+                       relation.oid,
+                       namespace.nspname,
+                       relation.relname,
+                       relation.relkind,
+                       attribute.attname,
+                       type.oid,
+                       type_namespace.nspname,
+                       type.typname,
+                       type.typtype
+                FROM pg_catalog.pg_attribute AS attribute
+                JOIN pg_catalog.pg_class AS relation
+                  ON relation.oid = attribute.attrelid
+                JOIN pg_catalog.pg_namespace AS namespace
+                  ON namespace.oid = relation.relnamespace
+                JOIN pg_catalog.pg_database AS database
+                  ON database.datname = pg_catalog.current_database()
+                JOIN pg_catalog.pg_type AS type
+                  ON type.oid = attribute.atttypid
+                JOIN pg_catalog.pg_namespace AS type_namespace
+                  ON type_namespace.oid = type.typnamespace
+                WHERE namespace.nspname = %s
+                  AND relation.relname = %s
+                  AND relation.relkind IN ('r', 'p')
+                  AND attribute.attnum > 0
+                  AND NOT attribute.attisdropped
+                ORDER BY attribute.attnum
+                """,
+                (
+                    source_identity["schema"],
+                    source_identity["relation_name"],
+                ),
+            )
+            rows = cursor.fetchall()
+    if not rows:
+        raise SilverRuleError(
+            "Exact Bronze relation has no trusted PostgreSQL column metadata"
+        )
+    column_types: dict[str, PostgresColumnType] = {}
+    identity_fields = (
+        "database_oid",
+        "namespace_oid",
+        "relation_oid",
+        "schema",
+        "relation_name",
+        "relation_kind",
+    )
+    for row in rows:
+        live_identity = dict(zip(identity_fields, row[:6]))
+        if any(
+            live_identity[field] != source_identity[field]
+            for field in identity_fields
+        ):
+            raise SilverRuleError(
+                "Exact Bronze relation identity changed before type validation"
+            )
+        column_types[str(row[6])] = PostgresColumnType(
+            type_oid=int(row[7]),
+            type_schema=str(row[8]),
+            type_name=str(row[9]),
+            type_kind=str(row[10]),
+        )
+    return column_types
 
 def parse_attribution_log(raw_json: Optional[str]) -> Tuple[Optional[List[str]], bool]:
     """Structurally parse stored attribution_log_json.
@@ -164,28 +257,38 @@ def get_table_schema(table_name: str) -> str:
 
 @router.post("/rules")
 def save_rules(payload: RulesPayload):
-    """P2.1: Save free-text rules for a Bronze table with canonical rule revision."""
+    """Save one legacy-text or deterministic Silver rule plan."""
     try:
         validate_sql_identifier(payload.table_name)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     try:
-        validate_rules_shape(payload.rules)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail="Rules must be a list of strings.")
+        validated_rules = validate_rules_shape(payload.rules)
+    except (ValueError, SilverRuleError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if not payload.rules or len(payload.rules) == 0:
+    if not validated_rules:
         raise HTTPException(status_code=400, detail="Rules must not be empty.")
 
-    if any(not r or not r.strip() for r in payload.rules):
-        raise HTTPException(status_code=400, detail="Rules cannot contain empty or whitespace-only entries.")
+    if all(isinstance(item, str) for item in validated_rules):
+        if any(not item.strip() for item in validated_rules):
+            raise HTTPException(
+                status_code=400,
+                detail="Rules cannot contain empty or whitespace-only entries.",
+            )
+        normalized_rules: list[Any] = [
+            item.strip() for item in validated_rules
+        ]
+        if len(normalized_rules) != len(set(normalized_rules)):
+            raise HTTPException(
+                status_code=400,
+                detail="Duplicate rules are not allowed.",
+            )
+    else:
+        normalized_rules = validated_rules
 
-    trimmed_rules = [r.strip() for r in payload.rules]
-    if len(trimmed_rules) != len(set(trimmed_rules)):
-        raise HTTPException(status_code=400, detail="Duplicate rules are not allowed.")
-
-    rule_rev = compute_rule_revision(trimmed_rules)
+    rule_rev = compute_rule_revision(normalized_rules)
     if not rule_rev:
         raise HTTPException(status_code=400, detail="Failed to compute rule revision.")
     now = datetime.datetime.utcnow().isoformat()
@@ -200,7 +303,16 @@ def save_rules(payload: RulesPayload):
                     rule_revision=excluded.rule_revision,
                     updated_at=excluded.updated_at
                 """,
-                (payload.table_name, json.dumps(trimmed_rules), rule_rev, now)
+                (
+                    payload.table_name,
+                    json.dumps(
+                        normalized_rules,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    rule_rev,
+                    now,
+                )
             )
             conn.commit()
     except HTTPException:
@@ -282,7 +394,9 @@ def review_sql(run_id: str):
     with get_connection() as conn:
         row = conn.execute(
             """
-            SELECT table_name, sql_text, planned_changes_json, created_at, status, generator_provenance, rule_revision, promoted_target_identity_json
+            SELECT table_name, sql_text, planned_changes_json, created_at,
+                   status, generator_provenance, rule_revision,
+                   promoted_target_identity_json, source_identity_json
             FROM generated_sql_review
             WHERE run_id = ?
             """,
@@ -327,15 +441,28 @@ def review_sql(run_id: str):
     validated_sql = sql_text
     try:
         schemas = load_layer_schemas()
-        bronze_schema = validate_sql_identifier(schemas.bronze)
+        source_identity = validate_promoted_identity_json(
+            row["source_identity_json"]
+        )
+        bronze_schema = validate_sql_identifier(
+            source_identity["schema"] if source_identity else schemas.bronze
+        )
+        bronze_table = validate_sql_identifier(
+            source_identity["relation_name"] if source_identity else table_name
+        )
         candidate_schema = validate_sql_identifier(schemas.silver_candidates)
         validated_sql = validate_generated_sql(
             sql_text,
             expected_schema=candidate_schema,
             expected_table_name=table_name,
             expected_bronze_schema=bronze_schema,
+            expected_bronze_table_name=bronze_table,
             run_id=run_id,
-            expected_step_count=len(planned_changes.get("rules", [])),
+            expected_step_count=(
+                len(planned_changes.get("rules", [])) + 1
+                if provenance == SERVER_DETERMINISTIC_PROVENANCE
+                else len(planned_changes.get("rules", []))
+            ),
             mode="p2_silver",
         )
         sql_is_valid = True
@@ -481,17 +608,66 @@ def execute_sql(run_id: str):
     except Exception as e:
         logger.error("Corrupt planned_changes_json for execution run %s: %s", run_id, e)
         raise HTTPException(status_code=500, detail="Internal server error.")
+    if compute_rule_revision(rules) != run_rule_rev:
+        raise HTTPException(
+            status_code=400,
+            detail="Persisted Silver rule plan is stale or malformed.",
+        )
 
     sql_text = row["sql_text"]
 
     try:
         schemas = load_layer_schemas()
-        bronze_schema = validate_sql_identifier(schemas.bronze)
+        bronze_schema = validate_sql_identifier(source_authority["schema"])
+        bronze_table = validate_sql_identifier(source_authority["relation_name"])
         candidates_schema = validate_sql_identifier(schemas.silver_candidates)
         silver_schema = validate_sql_identifier(schemas.silver)
     except Exception as e:
         logger.error("Failed to load layer schemas: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error.")
+
+    if provenance == SERVER_DETERMINISTIC_PROVENANCE:
+        try:
+            column_types = _load_exact_bronze_column_types(source_authority)
+            rules = validate_deterministic_rules(
+                rules,
+                available_columns=column_types,
+                column_types=column_types,
+            )
+            expected_sql = build_deterministic_silver_sql(
+                candidate_schema=candidates_schema,
+                candidate_name=f"{table_name}_candidate_{run_id}",
+                bronze_schema=bronze_schema,
+                bronze_relation=bronze_table,
+                rules=rules,
+            )
+            if sql_text != expected_sql:
+                raise SilverRuleError(
+                    "Deterministic Silver SQL does not match its persisted rule plan"
+                )
+        except SilverRuleError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        except Exception as exc:
+            logger.error(
+                "Failed to validate deterministic Silver rule types for run %s: %s",
+                run_id,
+                exc,
+            )
+            if is_db_connection_error(exc):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Database service is currently unavailable.",
+                ) from None
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to validate Silver rule types.",
+            ) from None
+
+    step_count = (
+        len(rules) + 1
+        if provenance == SERVER_DETERMINISTIC_PROVENANCE
+        else len(rules)
+    )
 
     # Structural AST Preflight Validation
     try:
@@ -500,8 +676,9 @@ def execute_sql(run_id: str):
             expected_schema=candidates_schema,
             expected_table_name=table_name,
             expected_bronze_schema=bronze_schema,
+            expected_bronze_table_name=bronze_table,
             run_id=run_id,
-            expected_step_count=len(rules),
+            expected_step_count=step_count,
             mode="p2_silver",
         )
     except Exception as e:
@@ -515,11 +692,11 @@ def execute_sql(run_id: str):
         with_clause = select_expr.args.get("with")
         cte_names = [cte.alias for cte in with_clause.expressions]
 
-        expected_cte_names = [f"step_{i+1}" for i in range(len(rules))]
+        expected_cte_names = [f"step_{i+1}" for i in range(step_count)]
         if cte_names != expected_cte_names:
             raise ValueError(f"CTE sequence {cte_names} does not match expected {expected_cte_names}")
 
-        selects = [f"(SELECT COUNT(*) FROM {bronze_schema}.{table_name}) as step_0_count"]
+        selects = [f'(SELECT COUNT(*) FROM "{bronze_schema}"."{bronze_table}") as step_0_count']
         for name in cte_names:
             safe_name = validate_sql_identifier(name)
             selects.append(f"(SELECT COUNT(*) FROM {safe_name}) as {safe_name}_count")
@@ -583,12 +760,26 @@ def execute_sql(run_id: str):
                 initial_count = counts[0]
                 attribution_results.append(f"Initial Bronze Rows: {initial_count}")
 
-                for i in range(len(cte_names)):
-                    prev_count = counts[i]
-                    curr_count = counts[i+1]
+                if provenance == SERVER_DETERMINISTIC_PROVENANCE:
+                    attribution_rules = [
+                        (rule, index + 1)
+                        for index, rule in enumerate(rules)
+                    ]
+                else:
+                    attribution_rules = [
+                        (rule, index)
+                        for index, rule in enumerate(rules)
+                    ]
+                for rule, count_index in attribution_rules:
+                    prev_count = counts[count_index]
+                    curr_count = counts[count_index + 1]
                     diff = prev_count - curr_count
 
-                    rule_label = rules[i] if i < len(rules) else f"Step {i+1}"
+                    rule_label = (
+                        rule_attribution_label(rule)
+                        if isinstance(rule, dict)
+                        else rule
+                    )
                     if diff > 0:
                         attribution_results.append(f"{rule_label}: {diff} rows removed (Remaining: {curr_count})")
                     else:
@@ -637,6 +828,7 @@ def execute_sql(run_id: str):
                 run_id=run_id,
                 expected_table_name=table_name,
                 expected_bronze_schema=bronze_schema,
+                expected_bronze_table_name=bronze_table,
                 mode="p2_silver",
                 expected_bronze_identity=source_authority,
             )

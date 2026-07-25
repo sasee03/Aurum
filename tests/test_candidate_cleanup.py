@@ -1010,19 +1010,53 @@ def test_table_name_mismatch_untracked_safety():
     discard_candidate_table(shadow_candidate_table, schemas.silver_candidates, postgres_promotion_conninfo())
 
 
-def test_admin_cleanup_endpoint_guard():
-    """Verify POST /api/v1/admin/candidate-cleanup requires confirm=true."""
+def test_admin_cleanup_endpoint_requires_operator_and_confirmation(monkeypatch):
+    """Authorization runs before confirmation and before cleanup acquisition."""
     from fastapi.testclient import TestClient
     from api.main import app
+    import api.admin_router as admin_router
 
     client = TestClient(app)
+    calls = []
+    monkeypatch.setattr(
+        admin_router,
+        "cleanup_orphaned_candidate_tables",
+        lambda **kwargs: calls.append(kwargs) or {"status": "success"},
+    )
 
-    # Call without confirm=true -> HTTP 400
-    resp_no_confirm = client.post("/api/v1/admin/candidate-cleanup")
+    disabled = client.post("/api/v1/admin/candidate-cleanup?confirm=true")
+    assert disabled.status_code == 404
+    assert calls == []
+
+    monkeypatch.setenv("AURUM_ENABLE_DESTRUCTIVE_ADMIN", "true")
+    missing_token = client.post(
+        "/api/v1/admin/candidate-cleanup?confirm=true",
+        headers={"X-Aurum-Operator-Token": "operator-secret"},
+    )
+    assert missing_token.status_code == 404
+    assert calls == []
+
+    monkeypatch.setenv("AURUM_DESTRUCTIVE_ADMIN_TOKEN", "operator-secret")
+
+    unauthorized = client.post(
+        "/api/v1/admin/candidate-cleanup?confirm=true",
+        headers={"X-Aurum-Operator-Token": "wrong-secret"},
+    )
+    assert unauthorized.status_code == 403
+    assert calls == []
+
+    resp_no_confirm = client.post(
+        "/api/v1/admin/candidate-cleanup",
+        headers={"X-Aurum-Operator-Token": "operator-secret"},
+    )
     assert resp_no_confirm.status_code == 400
     assert "explicit confirmation" in resp_no_confirm.json()["detail"]
+    assert calls == []
 
-    # Call with confirm=true -> HTTP 200
-    resp_confirm = client.post("/api/v1/admin/candidate-cleanup?confirm=true")
+    resp_confirm = client.post(
+        "/api/v1/admin/candidate-cleanup?confirm=true&age_threshold_seconds=17",
+        headers={"X-Aurum-Operator-Token": "operator-secret"},
+    )
     assert resp_confirm.status_code == 200
     assert resp_confirm.json()["status"] == "success"
+    assert calls == [{"age_threshold_seconds": 17}]
