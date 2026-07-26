@@ -658,7 +658,7 @@ def execute_sql(run_id: str):
     current_table_rule_rev = rules_info.get("rule_revision")
     if not is_valid_rule_revision(current_table_rule_rev) or run_rule_rev != current_table_rule_rev:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail="Rules have changed since this review was generated."
         )
 

@@ -480,9 +480,9 @@ def test_server_side_rule_revision_and_execute_gating(temp_sqlite_db, monkeypatc
     assert rev_resp_stale.status_code == 200
     assert rev_resp_stale.json()["executable"] is False
 
-    # Execute stale run -> Rejected 400, 0 DB mutations
+    # Execute stale run -> Rejected 409 Conflict, 0 DB mutations
     exec_stale = client.post(f"{base_url}/execute/{run_id}")
-    assert exec_stale.status_code == 400
+    assert exec_stale.status_code == 409
     assert "Rules have changed since this review was generated" in exec_stale.json()["detail"]
     assert exec_counts["execute_candidate"] == 0
     assert exec_counts["promote"] == 0
