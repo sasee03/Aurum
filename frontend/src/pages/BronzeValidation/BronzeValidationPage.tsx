@@ -25,6 +25,13 @@ import {
 } from '@/lib/aurumApi';
 import { calmApiMessage } from '@/utils/apiErrors';
 import { withRunIdQuery } from '@/hooks/useReport';
+import {
+  canIngestBronzeSelection,
+  initialBronzeSelection,
+  toggleAllBronzeTables,
+  toggleBronzeTable,
+} from '@/utils/bronzeSelection';
+import { readRelationSelection } from '@/utils/relationSelection';
 
 function formatNumber(n: number | null | undefined): string {
   if (n == null) return '—';
@@ -41,13 +48,16 @@ export function BronzeValidationPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const runId = searchParams.get('runId') ?? undefined;
+  const carriedRelation = readRelationSelection(searchParams);
 
   // Source tables state
   const [loadingTables, setLoadingTables] = useState(true);
   const [tablesError, setTablesError] = useState<string | null>(null);
   const [schema, setSchema] = useState<string>('public');
   const [sourceTables, setSourceTables] = useState<SourceTableEntry[]>([]);
-  const [selectedTableNames, setSelectedTableNames] = useState<string[]>([]);
+  const [selectedTableNames, setSelectedTableNames] = useState<string[]>(
+    initialBronzeSelection,
+  );
 
   // Ingestion & Verification state
   const [ingesting, setIngesting] = useState(false);
@@ -59,6 +69,11 @@ export function BronzeValidationPage() {
   const [activePreviewTable, setActivePreviewTable] = useState<string | null>(null);
 
   const isBusy = ingesting || verifying;
+  const canIngest = canIngestBronzeSelection(
+    selectedTableNames,
+    isBusy,
+    loadingTables,
+  );
 
   function resetStaleResults() {
     setIngestResults(null);
@@ -75,11 +90,7 @@ export function BronzeValidationPage() {
       const res = await fetchSourceTables();
       setSchema(res.schema || 'public');
       setSourceTables(res.tables || []);
-      if (res.tables && res.tables.length > 0) {
-        setSelectedTableNames(res.tables.map((t) => t.table));
-      } else {
-        setSelectedTableNames([]);
-      }
+      setSelectedTableNames(initialBronzeSelection());
     } catch (err: any) {
       setTablesError(calmApiMessage(err, 'Failed to discover source tables from backend API.'));
       setSourceTables([]);
@@ -96,25 +107,24 @@ export function BronzeValidationPage() {
   function toggleTableSelection(tableName: string) {
     if (isBusy || loadingTables) return;
     resetStaleResults();
-    setSelectedTableNames((prev) =>
-      prev.includes(tableName)
-        ? prev.filter((t) => t !== tableName)
-        : [...prev, tableName],
+    setSelectedTableNames((previous) =>
+      toggleBronzeTable(previous, tableName),
     );
   }
 
   function toggleSelectAll() {
     if (isBusy || loadingTables) return;
     resetStaleResults();
-    if (selectedTableNames.length === sourceTables.length) {
-      setSelectedTableNames([]);
-    } else {
-      setSelectedTableNames(sourceTables.map((t) => t.table));
-    }
+    setSelectedTableNames(
+      toggleAllBronzeTables(
+        selectedTableNames,
+        sourceTables.map((table) => table.table),
+      ),
+    );
   }
 
   async function handleIngestAndVerify() {
-    if (selectedTableNames.length === 0 || isBusy || loadingTables) return;
+    if (!canIngest) return;
 
     setIngesting(true);
     resetStaleResults();
@@ -169,7 +179,11 @@ export function BronzeValidationPage() {
       <div className="px-6 py-6 border-b border-[#252637]">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Bronze Layer</h2>
-          <DataSourceBadge mode={hasLiveResults ? 'live' : 'planned'} />
+          {hasLiveResults ? (
+            <DataSourceBadge mode="live" />
+          ) : (
+            <Badge variant="secondary">Ready</Badge>
+          )}
           {hasLiveResults && (
             <Badge variant="pass">
               {verifyResults?.filter((r) => isEligibleForSilver(r)).length} Ingested &amp; Matched
@@ -216,6 +230,16 @@ export function BronzeValidationPage() {
                   </button>
                 </div>
               </div>
+
+              {carriedRelation && (
+                <p className="mb-4 rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-xs text-[#94a3b8]">
+                  From discovery:{' '}
+                  <span className="font-mono text-[#f1f5f9]">
+                    {carriedRelation.schema}.{carriedRelation.table}
+                  </span>
+                  . Select the intended source table below to ingest it.
+                </p>
+              )}
 
               {loadingTables ? (
                 <LoadingSkeleton count={3} className="h-16" />
@@ -292,7 +316,7 @@ export function BronzeValidationPage() {
                 </span>
                 <Button
                   variant="primary"
-                  disabled={selectedTableNames.length === 0 || isBusy || loadingTables}
+                  disabled={!canIngest}
                   isLoading={ingesting || verifying}
                   onClick={handleIngestAndVerify}
                 >

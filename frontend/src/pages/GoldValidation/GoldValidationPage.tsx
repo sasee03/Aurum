@@ -259,7 +259,7 @@ export function GoldValidationPage() {
   const sources = plannedSources(review);
   const actualTarget = promotion?.target;
   const workflowStatus = promotion
-    ? 'Promoted'
+    ? 'Gold Table Live'
     : execution
       ? 'Executed'
       : approval
@@ -279,7 +279,11 @@ export function GoldValidationPage() {
       <div className="px-6 py-6 border-b border-[#252637]">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Gold Layer</h2>
-          <DataSourceBadge mode={liveVerified ? 'live' : 'planned'} />
+          {liveVerified ? (
+            <DataSourceBadge mode="live" />
+          ) : (
+            <Badge variant="secondary">Ready</Badge>
+          )}
           <Badge variant={promotion ? 'pass' : 'secondary'}>{workflowStatus}</Badge>
         </div>
         <p className="mt-1 text-sm text-[#6b7280]">

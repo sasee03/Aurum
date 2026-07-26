@@ -504,7 +504,11 @@ export function SilverValidationPage() {
       <div className="px-6 py-6 border-b border-[#252637]">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Silver Layer</h2>
-          <DataSourceBadge mode={silverComplete ? 'live' : 'planned'} />
+          {silverComplete ? (
+            <DataSourceBadge mode="live" />
+          ) : (
+            <Badge variant="secondary">Ready</Badge>
+          )}
           {executeResult ? (
             <Badge variant="pass">Promoted to Silver</Badge>
           ) : reviewData && reviewData.executable ? (

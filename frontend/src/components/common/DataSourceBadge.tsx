@@ -42,7 +42,7 @@ export function DataSourceBadge({ mode, className = '' }: Props) {
     return (
       <span
         className={`inline-flex items-center gap-1 rounded-full border border-[#6366f1]/30 bg-[#6366f1]/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#818cf8] ${className}`}
-        title="Not wired to live processing yet"
+        title="No live result yet"
       >
         {MODE_LABELS.planned}
       </span>

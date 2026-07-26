@@ -10,6 +10,11 @@ import { withRunIdQuery } from '@/hooks/useReport';
 import { cn } from '@/utils/cn';
 import { calmApiMessage } from '@/utils/apiErrors';
 import {
+  readRelationSelection,
+  relationSelectionKey,
+  withRelationSelectionQuery,
+} from '@/utils/relationSelection';
+import {
   getMetadataTables,
   getLiveTablePreview,
   listPostgresSchemas,
@@ -193,11 +198,14 @@ function TableRowCard({
 export function DatasetExplorerPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const runId = searchParams.get('runId') ?? undefined;
   const connectionId = searchParams.get('connectionId') ?? undefined;
   const databaseName = searchParams.get('database') ?? undefined;
   const connectionSession = searchParams.get('session') ?? undefined;
+  const requestedSchema = searchParams.get('schema');
+  const requestedTable = searchParams.get('table');
+  const requestedRelation = readRelationSelection(searchParams);
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
@@ -221,7 +229,7 @@ export function DatasetExplorerPage() {
         );
         const postgresTables = tableResponses.flatMap((response) => response.tables);
         const formattedTables = postgresTables.map((table: PostgresTableEntry): DbTable => ({
-          id: `${table.schema}.${table.table}`,
+          id: relationSelectionKey(table.schema, table.table),
           schema: table.schema,
           name: table.table,
           owner: table.layer === 'unknown' ? 'postgresql' : table.layer,
@@ -247,7 +255,7 @@ export function DatasetExplorerPage() {
       
       for (const t of tables) {
         const dbT: DbTable = {
-          id: `${t.schema}.${t.table}`,
+          id: relationSelectionKey(t.schema, t.table),
           schema: t.schema,
           name: t.table,
           owner: t.layer ?? 'postgresql',
@@ -291,6 +299,22 @@ export function DatasetExplorerPage() {
     void loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    if (!requestedSchema || !requestedTable || allTables.length === 0) return;
+    const requestedId = relationSelectionKey(
+      requestedSchema,
+      requestedTable,
+    );
+    if (!allTables.some((table) => table.id === requestedId)) return;
+    setSelectedIds((current) =>
+      current.size === 0 ? new Set([requestedId]) : current,
+    );
+  }, [
+    allTables,
+    requestedSchema,
+    requestedTable,
+  ]);
+
   const filteredTables = useMemo(() => {
     const q = search.toLowerCase().trim();
     if (!q) return allTables;
@@ -302,21 +326,40 @@ export function DatasetExplorerPage() {
     );
   }, [search, allTables]);
 
+  function persistSingleSelection(nextSelection: Set<string>) {
+    const nextParams = new URLSearchParams(searchParams);
+    if (nextSelection.size === 1) {
+      const selectedId = Array.from(nextSelection)[0];
+      const selectedTable = allTables.find((table) => table.id === selectedId);
+      if (selectedTable) {
+        nextParams.set('schema', selectedTable.schema);
+        nextParams.set('table', selectedTable.name);
+      }
+    } else {
+      nextParams.delete('schema');
+      nextParams.delete('table');
+    }
+    setSearchParams(nextParams, { replace: true });
+  }
+
   function toggleTable(tableId: string) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(tableId)) next.delete(tableId);
-      else next.add(tableId);
-      return next;
-    });
+    const next = new Set(selectedIds);
+    if (next.has(tableId)) next.delete(tableId);
+    else next.add(tableId);
+    setSelectedIds(next);
+    persistSingleSelection(next);
   }
 
   function selectAll() {
-    setSelectedIds(new Set(filteredTables.map((t) => t.id)));
+    const next = new Set(filteredTables.map((t) => t.id));
+    setSelectedIds(next);
+    persistSingleSelection(next);
   }
 
   function deselectAll() {
-    setSelectedIds(new Set());
+    const next = new Set<string>();
+    setSelectedIds(next);
+    persistSingleSelection(next);
   }
 
   async function handlePreview(table: DbTable) {
@@ -370,6 +413,16 @@ export function DatasetExplorerPage() {
   }
 
   const selectedTables = allTables.filter((t) => selectedIds.has(t.id));
+  const selectedRelation = selectedTables[0];
+  const requestedRelationMissing = Boolean(
+    requestedRelation &&
+      !loading &&
+      !allTables.some(
+        (table) =>
+          table.schema === requestedRelation.schema &&
+          table.name === requestedRelation.table,
+      ),
+  );
   const hasAnyTables = allTables.length > 0;
   const hasResults = filteredTables.length > 0;
 
@@ -393,7 +446,16 @@ export function DatasetExplorerPage() {
         <div className="flex flex-1 flex-col overflow-hidden">
           <div className="border-b border-[#252637] px-6 py-4">
             <h2 className="text-lg font-bold text-[#f1f5f9]">Dataset Explorer</h2>
-            <p className="text-xs text-[#6b7280]">Select tables for AURUM to validate this run.</p>
+            <p className="text-xs text-[#6b7280]">Select a relation for AURUM to inspect in this run.</p>
+            {requestedRelationMissing && (
+              <p className="mt-2 text-xs text-[#f59e0b]">
+                Previously selected relation{' '}
+                <span className="font-mono">
+                  {requestedRelation?.schema}.{requestedRelation?.table}
+                </span>{' '}
+                is no longer available. Choose another relation below.
+              </p>
+            )}
           </div>
 
           <div className="flex items-center gap-3 px-6 py-3 border-b border-[#252637]">
@@ -524,7 +586,7 @@ export function DatasetExplorerPage() {
                       key={t.id}
                       className="text-xs text-[#6366f1] font-medium"
                     >
-                      {t.name}
+                      {t.schema}.{t.name}
                     </span>
                   ))}
                   {selectedTables.length > 4 && (
@@ -538,10 +600,21 @@ export function DatasetExplorerPage() {
                 variant="primary"
                 size="sm"
                 rightIcon={<ArrowRight size={14} />}
-                onClick={() => navigate(withRunIdQuery(`/projects/${id}/metadata`, runId))}
+                onClick={() => {
+                  if (!selectedRelation) return;
+                  navigate(
+                    withRelationSelectionQuery(
+                      withRunIdQuery(`/projects/${id}/metadata`, runId),
+                      {
+                        schema: selectedRelation.schema,
+                        table: selectedRelation.name,
+                      },
+                    ),
+                  );
+                }}
                 className="flex-shrink-0"
               >
-                Continue
+                Continue with {selectedRelation?.schema}.{selectedRelation?.name}
               </Button>
             </div>
           )}

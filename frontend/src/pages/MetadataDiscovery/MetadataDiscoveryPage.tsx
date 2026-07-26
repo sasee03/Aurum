@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
@@ -11,6 +11,11 @@ import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import { withRunIdQuery } from '@/hooks/useReport';
 import { getMetadataTables, getMetadataTable } from '@/lib/aurumApi';
 import { cn } from '@/utils/cn';
+import {
+  readRelationSelection,
+  relationSelectionKey,
+  withRelationSelectionQuery,
+} from '@/utils/relationSelection';
 
 interface ColumnProfile {
   name: string;
@@ -130,8 +135,11 @@ function toTableProfile(raw: Record<string, unknown>): TableProfile {
 export function MetadataDiscoveryPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const runId = searchParams.get('runId') ?? undefined;
+  const requestedSchema = searchParams.get('schema');
+  const requestedTable = searchParams.get('table');
+  const requestedRelation = readRelationSelection(searchParams);
 
   const [tableNames, setTableNames] = useState<{ name: string; schema: string }[]>([]);
   const [profiles, setProfiles] = useState<Map<string, TableProfile>>(new Map());
@@ -154,9 +162,6 @@ export function MetadataDiscoveryPage() {
           }),
         );
         setTableNames(tables);
-        if (tables.length > 0) {
-          setActiveTabId(`${tables[0].schema}.${tables[0].name}`);
-        }
       } catch {
         setError('Could not load tables from GET /metadata/tables. Check the backend is running.');
       } finally {
@@ -166,10 +171,47 @@ export function MetadataDiscoveryPage() {
     fetchTables();
   }, []);
 
+  useEffect(() => {
+    if (tableNames.length === 0) {
+      setActiveTabId(null);
+      return;
+    }
+
+    if (requestedSchema && requestedTable) {
+      const requestedMatch = tableNames.find(
+        (table) =>
+          table.schema === requestedSchema &&
+          table.name === requestedTable,
+      );
+      setActiveTabId(
+        requestedMatch
+          ? relationSelectionKey(requestedMatch.schema, requestedMatch.name)
+          : null,
+      );
+      return;
+    }
+
+    setActiveTabId((current) =>
+      current &&
+      tableNames.some(
+        (table) => relationSelectionKey(table.schema, table.name) === current,
+      )
+        ? current
+        : relationSelectionKey(tableNames[0].schema, tableNames[0].name),
+    );
+  }, [
+    tableNames,
+    requestedSchema,
+    requestedTable,
+  ]);
+
   // Load profile for active table whenever it changes
   useEffect(() => {
     if (!activeTabId) return;
-    const entry = tableNames.find((t) => `${t.schema}.${t.name}` === activeTabId);
+    const entry = tableNames.find(
+      (table) =>
+        relationSelectionKey(table.schema, table.name) === activeTabId,
+    );
     if (!entry) return;
     if (profiles.has(activeTabId)) return; // already loaded
 
@@ -189,6 +231,36 @@ export function MetadataDiscoveryPage() {
   }, [activeTabId, tableNames, profiles]);
 
   const activeProfile = activeTabId ? profiles.get(activeTabId) : undefined;
+  const activeRelation = tableNames.find(
+    (table) =>
+      relationSelectionKey(table.schema, table.name) === activeTabId,
+  );
+  const requestedRelationMissing = Boolean(
+    requestedRelation &&
+      tableNames.length > 0 &&
+      !tableNames.some(
+        (table) =>
+          table.schema === requestedRelation.schema &&
+          table.name === requestedRelation.table,
+      ),
+  );
+
+  function selectRelation(relation: { name: string; schema: string }) {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('schema', relation.schema);
+    nextParams.set('table', relation.name);
+    setSearchParams(nextParams, { replace: true });
+  }
+
+  function pathWithActiveRelation(path: string): string {
+    const pathWithRun = withRunIdQuery(path, runId);
+    return activeRelation
+      ? withRelationSelectionQuery(pathWithRun, {
+          schema: activeRelation.schema,
+          table: activeRelation.name,
+        })
+      : pathWithRun;
+  }
 
   if (loading) {
     return (
@@ -243,12 +315,12 @@ export function MetadataDiscoveryPage() {
           {/* Table tabs */}
           <div className="flex gap-2 mt-6 flex-wrap">
             {tableNames.map((t) => {
-              const tabId = `${t.schema}.${t.name}`;
+              const tabId = relationSelectionKey(t.schema, t.name);
               const isActive = activeTabId === tabId;
               return (
                 <button
                   key={tabId}
-                  onClick={() => setActiveTabId(tabId)}
+                  onClick={() => selectRelation(t)}
                   className={cn(
                     'px-4 py-1.5 rounded-full text-xs font-semibold transition-all focus:outline-none focus:ring-2 focus:ring-[#6366f1]',
                     isActive
@@ -256,7 +328,7 @@ export function MetadataDiscoveryPage() {
                       : 'border border-[#252637] text-[#94a3b8] hover:border-[#6366f1]/40 hover:text-[#f1f5f9]',
                   )}
                 >
-                  {t.name}
+                  {t.schema}.{t.name}
                 </button>
               );
             })}
@@ -265,7 +337,16 @@ export function MetadataDiscoveryPage() {
 
         {/* Scrollable Content */}
         <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-6">
-          {loadingProfile ? (
+          {requestedRelationMissing ? (
+            <div className="rounded-xl border border-[#f59e0b]/30 bg-[#451a03]/30 p-5 text-sm text-[#fcd34d]">
+              Selected relation{' '}
+              <span className="font-mono">
+                {requestedRelation?.schema}.{requestedRelation?.table}
+              </span>{' '}
+              is no longer available. Choose another relation above or return to
+              Dataset Explorer.
+            </div>
+          ) : loadingProfile ? (
             <LoadingSkeleton count={4} className="h-16" />
           ) : activeProfile ? (
             <>
@@ -333,15 +414,18 @@ export function MetadataDiscoveryPage() {
         <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-4 flex items-center justify-between">
           <Button
             variant="ghost"
-            onClick={() => navigate(withRunIdQuery(`/projects/${id}/select`, runId))}
+            onClick={() =>
+              navigate(pathWithActiveRelation(`/projects/${id}/select`))
+            }
           >
             Back to Select
           </Button>
           <Button
             variant="primary"
+            disabled={!activeRelation}
             rightIcon={<ArrowRight size={16} />}
             onClick={() =>
-              navigate(withRunIdQuery(`/projects/${id}/bronze`, runId))
+              navigate(pathWithActiveRelation(`/projects/${id}/bronze`))
             }
           >
             Proceed to Bronze Layer
