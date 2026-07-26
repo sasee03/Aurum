@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import psycopg
 from psycopg import Connection, sql
+from psycopg.rows import dict_row
 
 from .db_config import load_layer_schemas, postgres_conninfo
 from .table_specs import build_table_specs
@@ -456,6 +457,47 @@ def discover_live_table_detail(
             sample_limit=sample_limit,
         )
         return _build_response([table], source="live")
+
+
+def discover_live_table_preview(
+    table_name: str,
+    schema: Optional[str] = None,
+    limit: int = 10,
+) -> dict:
+    """Return a bounded set of real rows from one exact live relation."""
+    with psycopg.connect(postgres_conninfo(), autocommit=True) as conn:
+        matches = list_tables(
+            conn, schema_filter=schema, table_name_filter=table_name
+        )
+        if not matches:
+            raise LookupError(f"Table '{table_name}' not found.")
+        if schema is None and len(matches) > 1:
+            schemas = sorted({m["schema"] for m in matches})
+            raise AmbiguousTableError(
+                f"Table '{table_name}' exists in multiple schemas: {schemas}. "
+                "Provide the schema query parameter."
+            )
+        match = matches[0]
+        schema_name = match["schema"]
+        relation_name = match["table"]
+        columns = describe_table(conn, schema_name, relation_name)
+        row_count = get_row_count(conn, schema_name, relation_name)
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                sql.SQL("SELECT * FROM {} LIMIT %s").format(
+                    _qualified_table(schema_name, relation_name)
+                ),
+                [limit],
+            )
+            rows = [dict(row) for row in cur.fetchall()]
+        return {
+            "schema": schema_name,
+            "table": relation_name,
+            "row_count": row_count,
+            "column_count": len(columns),
+            "columns": columns,
+            "rows": rows,
+        }
 
 
 def discover_demo_session_metadata(sample_limit: int = 5) -> dict:

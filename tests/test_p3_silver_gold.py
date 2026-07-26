@@ -77,12 +77,17 @@ def test_check_name_contract(monkeypatch):
     assert taken.json()["status"] == "taken"
 
 
-def test_generate_is_unavailable_and_persists_no_run(monkeypatch):
+def test_generate_uses_controlled_trusted_path_and_loads_review(monkeypatch):
     monkeypatch.setattr(
         router,
-        "get_generated_sql_pool",
-        lambda: pytest.fail("Gold containment must not reach PostgreSQL"),
+        "load_layer_schemas",
+        lambda: SimpleNamespace(
+            silver="tenant_curated",
+            gold="tenant_gold",
+            gold_candidates="tenant_gold_candidates",
+        ),
     )
+    monkeypatch.setattr(router, "check_table_exists", lambda schema, table: True)
     before = _gold_run_count()
 
     response = client.post(
@@ -94,9 +99,25 @@ def test_generate_is_unavailable_and_persists_no_run(monkeypatch):
         },
     )
 
-    assert response.status_code == 503
-    assert response.json() == {"detail": router.GOLD_GENERATION_UNAVAILABLE}
-    assert _gold_run_count() == before
+    assert response.status_code == 200
+    body = response.json()
+    assert body["generator_provenance"] == router.MANUAL_CONTROLLED_GOLD_PROVENANCE
+    assert body["status"] == "PENDING"
+    assert body["planned_changes"]["business_requirement"] == (
+        "Produce the requested aggregate."
+    )
+    assert _gold_run_count() == before + 1
+
+    review = client.get(f"/api/v1/gold/review/{body['run_id']}")
+    assert review.status_code == 200
+    review_body = review.json()
+    assert review_body["run_id"] == body["run_id"]
+    assert review_body["review_revision"] == body["review_revision"]
+    assert review_body["generator_provenance"] == (
+        router.MANUAL_CONTROLLED_GOLD_PROVENANCE
+    )
+    assert review_body["status"] == "PENDING"
+    assert review_body["executable"] is True
 
 
 @pytest.mark.parametrize("provenance", [None, "untrusted_legacy"])

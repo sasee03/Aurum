@@ -5,6 +5,7 @@
 
 import type { AurumReport } from '@/types/report';
 import type { DatabaseTarget } from '@/types/appMode';
+import type { DeterministicSilverRule } from '@/utils/silverRules';
 import { ApiError, API_UNAVAILABLE } from '@/utils/apiErrors';
 
 export function normalizeApiUrl(rawBase: string, path: string): string {
@@ -359,6 +360,19 @@ export interface PreviewData {
   data: any[];
 }
 
+export interface LiveTablePreview {
+  schema: string;
+  table: string;
+  row_count: number;
+  column_count: number;
+  columns: {
+    name: string;
+    data_type: string;
+    nullable: boolean;
+  }[];
+  rows: Record<string, unknown>[];
+}
+
 export async function previewPostgresTable(
   connection_id: string,
   schema: string,
@@ -371,6 +385,20 @@ export async function previewPostgresTable(
     params.set('schema', schema);
   }
   return request(`/connectors/postgres/tables/${encodeURIComponent(table)}/preview?${params.toString()}`);
+}
+
+export async function getLiveTablePreview(
+  tableName: string,
+  schema: string,
+  limit = 10,
+): Promise<LiveTablePreview> {
+  const params = new URLSearchParams({
+    schema,
+    limit: String(limit),
+  });
+  return request<LiveTablePreview>(
+    `/metadata/tables/${encodeURIComponent(tableName)}/preview?${params.toString()}`,
+  );
 }
 
 export async function uploadDatasetCsv(file: File, projectId?: string): Promise<AurumReport> {
@@ -615,7 +643,7 @@ export async function verifyBronze(tables: string[]): Promise<VerifyBronzeRespon
 
 export interface TransformSaveRulesRequest {
   table_name: string;
-  rules: string[];
+  rules: DeterministicSilverRule[];
 }
 
 export interface TransformSaveRulesResponse {
@@ -626,7 +654,7 @@ export interface TransformSaveRulesResponse {
 
 export interface TransformGetRulesResponse {
   table_name: string;
-  rules: string[];
+  rules: unknown[];
   rule_revision?: string;
 }
 
@@ -641,10 +669,10 @@ export interface TransformGenerateResponse {
 }
 
 export interface TransformPlannedChanges {
-  summary: string;
-  rules: string[];
-  cte_steps_detected: number;
-  attribution_safe: boolean;
+  summary?: string;
+  rules: unknown[];
+  cte_steps_detected?: number;
+  attribution_safe?: boolean;
 }
 
 export interface TransformReviewResponse {
@@ -664,13 +692,21 @@ export interface TransformExecuteResponse {
   status: string;
   run_id: string;
   table_name: string;
+  target: {
+    schema: string;
+    relation_name: string;
+    [key: string]: unknown;
+  };
   attribution_log: string[] | null;
   attribution_available: boolean;
   message: string;
 }
 
 /** P2.1: Save free-text rules for a Bronze table */
-export async function transformSaveRules(tableName: string, rules: string[]): Promise<TransformSaveRulesResponse> {
+export async function transformSaveRules(
+  tableName: string,
+  rules: DeterministicSilverRule[],
+): Promise<TransformSaveRulesResponse> {
   return request<TransformSaveRulesResponse>('/api/v1/transform/rules', {
     method: 'POST',
     body: JSON.stringify({ table_name: tableName, rules }),
@@ -700,4 +736,159 @@ export async function transformExecute(runId: string): Promise<TransformExecuteR
   return request<TransformExecuteResponse>(`/api/v1/transform/execute/${encodeURIComponent(runId)}`, {
     method: 'POST',
   });
+}
+
+// ────────────────────────────────────────────
+// Gold Layer API Client Functions (Controlled non-LLM)
+// ────────────────────────────────────────────
+
+export interface GoldTableItem {
+  name: string;
+}
+
+export interface GoldTablesResponse {
+  tables: GoldTableItem[];
+}
+
+export interface CheckGoldNameResponse {
+  name: string;
+  is_valid_identifier: boolean;
+  is_available: boolean;
+  status: 'invalid' | 'taken' | 'available';
+  resolution_options: Array<{
+    action: 'overwrite' | 'rename';
+    description: string;
+  }>;
+  message: string;
+}
+
+export interface GenerateGoldPayload {
+  target_table_name: string;
+  silver_table_names: string[];
+  business_requirement: string;
+}
+
+export interface GenerateGoldResponse {
+  run_id: string;
+  table_name: string;
+  sql_text: string;
+  planned_changes: Record<string, any>;
+  status: string;
+  review_revision: string;
+  generator_provenance: string;
+}
+
+export interface ReviewGoldResponse {
+  run_id: string;
+  table_name: string;
+  planned_changes: Record<string, any>;
+  sql_text: string;
+  review_revision: string;
+  approved_revision: string | null;
+  executed: boolean;
+  executable: boolean;
+  status: string;
+  generator_provenance: string;
+  message: string;
+}
+
+export interface ApproveGoldPayload {
+  review_revision: string;
+  overwrite: boolean;
+}
+
+export interface ApproveGoldResponse {
+  status: string;
+  run_id: string;
+  review_revision: string;
+  approved_revision: string;
+  approved_at: string;
+  overwrite_authorized: boolean;
+}
+
+export interface ExecuteGoldPayload {
+  overwrite: boolean;
+}
+
+export interface ExecuteGoldResponse {
+  status: string;
+  run_id: string;
+  execution_claim_id: string;
+  candidate: Record<string, any>;
+}
+
+export interface PromoteGoldResponse {
+  status: string;
+  run_id: string;
+  promotion_claim_id: string;
+  promotion_committed_at: string;
+  target: Record<string, any>;
+  backup?: Record<string, any>;
+}
+
+export interface MetadataTableDetailResponse {
+  tables: Array<{
+    schema: string;
+    table: string;
+    layer: string;
+    row_count: number;
+    column_count: number;
+    columns: Array<{
+      name: string;
+      data_type: string;
+      nullable: boolean;
+      sample_values?: any[];
+    }>;
+  }>;
+}
+
+/** Fetch tables in the Silver schema for Gold source selection */
+export async function listSilverTables(): Promise<GoldTablesResponse> {
+  return request<GoldTablesResponse>('/api/v1/gold/silver-tables');
+}
+
+/** Check if proposed Gold table name is valid */
+export async function checkGoldName(name: string): Promise<CheckGoldNameResponse> {
+  return request<CheckGoldNameResponse>(`/api/v1/gold/check-name?name=${encodeURIComponent(name)}`);
+}
+
+/** Generate controlled Gold SQL proposal */
+export async function generateGoldSql(payload: GenerateGoldPayload): Promise<GenerateGoldResponse> {
+  return request<GenerateGoldResponse>('/api/v1/gold/generate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Review Gold SQL proposal */
+export async function reviewGoldSql(runId: string): Promise<ReviewGoldResponse> {
+  return request<ReviewGoldResponse>(`/api/v1/gold/review/${encodeURIComponent(runId)}`);
+}
+
+/** Approve Gold SQL proposal */
+export async function approveGoldSql(runId: string, payload: ApproveGoldPayload): Promise<ApproveGoldResponse> {
+  return request<ApproveGoldResponse>(`/api/v1/gold/approve/${encodeURIComponent(runId)}`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Execute Gold candidate creation */
+export async function executeGoldSql(runId: string, payload: ExecuteGoldPayload): Promise<ExecuteGoldResponse> {
+  return request<ExecuteGoldResponse>(`/api/v1/gold/execute/${encodeURIComponent(runId)}`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Promote Gold candidate table to Gold layer */
+export async function promoteGoldSql(runId: string): Promise<PromoteGoldResponse> {
+  return request<PromoteGoldResponse>(`/api/v1/gold/promote/${encodeURIComponent(runId)}`, {
+    method: 'POST',
+  });
+}
+
+/** Fetch tables in the Gold schema */
+export async function listGoldTables(): Promise<GoldTablesResponse> {
+  return request<GoldTablesResponse>('/api/v1/gold/gold-tables');
 }

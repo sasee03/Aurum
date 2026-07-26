@@ -25,6 +25,7 @@ from src.metadata_discovery import (
     AmbiguousTableError,
     discover_demo_session_metadata,
     discover_live_metadata,
+    discover_live_table_preview,
     discover_live_table_detail,
     discover_live_tables_lightweight,
 )
@@ -430,6 +431,41 @@ def metadata_table_detail(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Metadata discovery failed",
+        ) from None
+
+
+@app.get("/metadata/tables/{table_name}/preview")
+def metadata_table_preview(
+    table_name: str,
+    schema: Optional[str] = None,
+    limit: int = Query(10, ge=1, le=50),
+) -> dict:
+    """Read-only bounded row preview for one exact live table."""
+    try:
+        return discover_live_table_preview(
+            table_name=table_name,
+            schema=schema,
+            limit=limit,
+        )
+    except AmbiguousTableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except LookupError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Table '{table_name}' not found.",
+        ) from None
+    except psycopg.Error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Table preview failed",
         ) from None
 
 

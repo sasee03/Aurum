@@ -66,9 +66,12 @@ from src.generator_trust import GeneratorTrustPolicy
 router = APIRouter(prefix="/api/v1/gold", tags=["gold"])
 logger = logging.getLogger(__name__)
 
+MANUAL_CONTROLLED_GOLD_PROVENANCE = "manual_controlled_gold_v1"
 GOLD_GENERATOR_TRUST = GeneratorTrustPolicy(
     pipeline="gold",
-    trusted_hardened_provenances=frozenset(),
+    trusted_hardened_provenances=frozenset(
+        {MANUAL_CONTROLLED_GOLD_PROVENANCE}
+    ),
 )
 
 GOLD_GENERATION_UNAVAILABLE = "Gold SQL generation is currently unavailable."
@@ -312,6 +315,7 @@ def generate_gold_sql(payload: GenerateGoldPayload):
         "summary": f"Controlled Gold projection from silver.{primary_silver}",
         "sources": payload.silver_table_names,
         "target": target_name,
+        "business_requirement": payload.business_requirement,
     }
 
     with get_connection() as conn:
@@ -396,9 +400,12 @@ def review_gold_sql(run_id: str):
         "sql_text": validated_sql,
         "review_revision": state.review_revision,
         "approved_revision": state.approved_revision,
-        "executed": False,
+        "executed": row["status"] not in {"PENDING", "EXECUTING"},
+        "executable": row["status"] == "PENDING",
+        "status": row["status"],
+        "generator_provenance": row["generator_provenance"],
         "message": (
-            "Gold plan is approved but production execution remains unavailable."
+            "Gold plan has explicit approval."
             if state.approved_revision
             else "Gold plan is ready for explicit approval."
         ),

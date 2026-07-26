@@ -137,7 +137,7 @@ function CsvPanel({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-4">
-      <Input label="Dataset Name" placeholder="e.g. orders_2024" />
+      <Input label="Dataset Name" placeholder="e.g. events_2024" />
 
       {/* File upload */}
       <div className="space-y-1.5">
@@ -158,7 +158,7 @@ function CsvPanel({ projectId }: { projectId: string }) {
               </>
             )}
           </span>
-          <span className="text-[11px] text-[#4b5563]">CSV files only — must match the expected orders format</span>
+          <span className="text-[11px] text-[#4b5563]">CSV files only — unsupported layouts are rejected explicitly</span>
           <input
             ref={fileInputRef}
             id="csv-upload"
@@ -268,9 +268,9 @@ function PostgresPanel({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
 
   const [host, setHost] = useState('localhost');
-  const [port, setPort] = useState('');
-  const [database, setDatabase] = useState('');
-  const [username, setUsername] = useState('');
+  const [port, setPort] = useState('5433');
+  const [database, setDatabase] = useState('aurum');
+  const [username, setUsername] = useState('aurum');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
@@ -418,9 +418,9 @@ function PostgresPanel({ projectId }: { projectId: string }) {
             <Button
               variant="primary"
               rightIcon={<ArrowRight size={16} />}
-              onClick={() => navigate(`/projects/${projectId}/bronze`)}
+              onClick={() => navigate(`/projects/${projectId}/select`)}
             >
-              Continue to Bronze
+              Discover Tables
             </Button>
           </div>
         </div>

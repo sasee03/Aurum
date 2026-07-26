@@ -497,3 +497,36 @@ def test_discover_from_connection_lightweight_skips_profile_and_keys():
     mock_full.assert_not_called()
     assert result["tables"][0]["row_count"] == 1
     assert "candidate_keys" not in result["tables"][0]
+
+
+def test_metadata_table_preview_returns_bounded_live_rows(client, monkeypatch):
+    payload = {
+        "schema": "tenant_gold",
+        "table": "curated_output",
+        "row_count": 2,
+        "column_count": 2,
+        "columns": [
+            {"name": "record_id", "data_type": "integer", "nullable": False},
+            {"name": "score", "data_type": "numeric", "nullable": True},
+        ],
+        "rows": [
+            {"record_id": 1, "score": 10.5},
+            {"record_id": 2, "score": None},
+        ],
+    }
+    calls = []
+
+    def preview_spy(*, table_name, schema, limit):
+        calls.append((table_name, schema, limit))
+        return payload
+
+    monkeypatch.setattr(api_main, "discover_live_table_preview", preview_spy)
+
+    response = client.get(
+        "/metadata/tables/curated_output/preview"
+        "?schema=tenant_gold&limit=2"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == payload
+    assert calls == [("curated_output", "tenant_gold", 2)]

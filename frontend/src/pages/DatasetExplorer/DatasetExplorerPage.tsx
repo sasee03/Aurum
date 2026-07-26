@@ -11,13 +11,12 @@ import { cn } from '@/utils/cn';
 import { calmApiMessage } from '@/utils/apiErrors';
 import {
   getMetadataTables,
-  getMetadataTable,
+  getLiveTablePreview,
   listPostgresSchemas,
   listPostgresTables,
   previewPostgresTable,
   type PostgresTableEntry,
 } from '@/lib/aurumApi';
-import tablesJson from '@/mocks/tables.json';
 
 interface DbTable {
   id: string;
@@ -206,14 +205,12 @@ export function DatasetExplorerPage() {
   const [allTables, setAllTables] = useState<DbTable[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [usingFallback, setUsingFallback] = useState(false);
   const [preview, setPreview] = useState<TablePreview | null>(null);
   const [previewingTableId, setPreviewingTableId] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
-    setUsingFallback(false);
     setAllSchemas([]);
     setAllTables([]);
     try {
@@ -253,7 +250,7 @@ export function DatasetExplorerPage() {
           id: `${t.schema}.${t.table}`,
           schema: t.schema,
           name: t.table,
-          owner: 'demo_user',
+          owner: t.layer ?? 'postgresql',
           rows: t.row_count?.toString() || '0',
           columns: t.column_count || 0,
           size: '-',
@@ -275,20 +272,16 @@ export function DatasetExplorerPage() {
       setAllSchemas(schemas);
       setAllTables(formattedTables);
     } catch (err) {
-      if (connectionId) {
-        setError(
-          calmApiMessage(
-            err,
-            'Could not load tables from this PostgreSQL connection. Re-test the connection and try again.',
-          ),
-        );
-        return;
-      }
-      setUsingFallback(true);
-      const fallbackSchemas = tablesJson.schemas as SchemaNode[];
-      const fallbackTables = fallbackSchemas.flatMap(s => s.tables);
-      setAllSchemas(fallbackSchemas);
-      setAllTables(fallbackTables);
+      setAllSchemas([]);
+      setAllTables([]);
+      setError(
+        calmApiMessage(
+          err,
+          connectionId
+            ? 'Could not load tables from this PostgreSQL connection. Re-test the connection and try again.'
+            : 'Could not load live PostgreSQL metadata. Check the backend and database, then retry.',
+        ),
+      );
     } finally {
       setLoading(false);
     }
@@ -353,26 +346,15 @@ export function DatasetExplorerPage() {
           ),
         );
       } else {
-        const res = await getMetadataTable(table.name, table.schema);
-        const tableData = res.tables?.[0];
-        if (tableData) {
-          const rawColumns = Array.isArray(tableData.columns) ? tableData.columns : [];
-          const columns = rawColumns.map((column: any, index: number) => ({
-            name: column.name ?? column.column_name ?? `column_${index + 1}`,
-            data_type: column.data_type ?? column.type ?? 'unknown',
-            nullable: column.nullable ?? column.is_nullable,
-          }));
-          const rowCount = Number(tableData.row_count ?? tableData.rows);
-          const columnCount = Number(tableData.column_count ?? columns.length);
-          nextPreview = {
-            schema: tableData.schema ?? table.schema,
-            table: tableData.table ?? tableData.name ?? table.name,
-            rowCount: Number.isFinite(rowCount) ? rowCount : null,
-            columnCount: Number.isFinite(columnCount) ? columnCount : columns.length,
-            columns,
-            rows: [],
-          };
-        }
+        const tablePreview = await getLiveTablePreview(table.name, table.schema);
+        nextPreview = {
+          schema: tablePreview.schema,
+          table: tablePreview.table,
+          rowCount: tablePreview.row_count,
+          columnCount: tablePreview.column_count,
+          columns: tablePreview.columns,
+          rows: tablePreview.rows,
+        };
       }
       if (nextPreview) {
         setPreview(nextPreview);
@@ -401,11 +383,9 @@ export function DatasetExplorerPage() {
           aria-label="Database schema tree"
         >
           <p className="mb-2 px-2 text-[10px] font-bold uppercase tracking-widest text-[#4b5563]">
-            {usingFallback
-              ? 'DEMO SCHEMAS'
-              : connectionId && databaseName
-                ? `${databaseName} / schemas`
-                : 'LIVE SCHEMAS'}
+            {connectionId && databaseName
+              ? `${databaseName} / schemas`
+              : 'LIVE SCHEMAS'}
           </p>
           <SchemaTree schemas={allSchemas} selectedIds={selectedIds} onToggle={toggleTable} />
         </aside>
@@ -415,18 +395,6 @@ export function DatasetExplorerPage() {
             <h2 className="text-lg font-bold text-[#f1f5f9]">Dataset Explorer</h2>
             <p className="text-xs text-[#6b7280]">Select tables for AURUM to validate this run.</p>
           </div>
-
-          {usingFallback && (
-            <div className="bg-[#451a03] border-b border-[#78350f] px-6 py-3 flex items-center justify-between">
-              <div className="flex items-center gap-3 text-[#fde68a]">
-                <AlertTriangle size={16} className="text-[#f59e0b]" />
-                <p className="text-xs font-semibold">Demo fallback: backend PostgreSQL metadata is unavailable, showing bundled demo dataset metadata.</p>
-              </div>
-              <Button variant="secondary" size="sm" onClick={loadData} className="border-[#78350f] text-[#fcd34d] hover:bg-[#78350f]/50">
-                Retry Live Connection
-              </Button>
-            </div>
-          )}
 
           <div className="flex items-center gap-3 px-6 py-3 border-b border-[#252637]">
             <SearchBar

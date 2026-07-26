@@ -271,13 +271,17 @@ describe('aurumApi error parsing', () => {
       json: async () => ({ status: 'success', message: 'Rules saved successfully' }),
     });
 
-    const saveRes = await transformSaveRules('orders/table 1', ['Rule 1', 'Rule 2']);
+    const rules = [
+      { type: 'not_null' as const, column: 'record_id' },
+      { type: 'distinct' as const },
+    ];
+    const saveRes = await transformSaveRules('records/table 1', rules);
     expect(saveRes.status).toBe('success');
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/transform/rules',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ table_name: 'orders/table 1', rules: ['Rule 1', 'Rule 2'] }),
+        body: JSON.stringify({ table_name: 'records/table 1', rules }),
       }),
     );
 
@@ -289,7 +293,7 @@ describe('aurumApi error parsing', () => {
     });
 
     try {
-      await transformSaveRules('orders', ['Rule 1', 'Rule 1']);
+      await transformSaveRules('records', [rules[0], rules[0]]);
       expect.fail('Should throw');
     } catch (e: any) {
       expect(e).toBeInstanceOf(ApiError);

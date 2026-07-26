@@ -601,6 +601,7 @@ def execute_sql(run_id: str):
             "status": "success",
             "run_id": run_id,
             "table_name": table_name,
+            "target": promoted_ident,
             "attribution_log": attr_log,
             "attribution_available": attr_avail,
             "message": f"Transformation for '{table_name}' was already executed and promoted."
@@ -1001,6 +1002,7 @@ def execute_sql(run_id: str):
         "status": "success",
         "run_id": run_id,
         "table_name": table_name,
+        "target": final_target_ident,
         "attribution_log": attribution_results,
         "attribution_available": True,
         "message": f"Successfully executed and promoted {table_name} to Silver."

@@ -576,19 +576,23 @@ def test_non_pending_run_cannot_be_approved(
     assert response.json() == {"detail": router.GOLD_STATE_CONFLICT}
 
 
-def test_production_empty_trust_set_blocks_approval_before_catalog(monkeypatch):
-    record = _seed_run("run_production_untrusted")
+def test_production_trust_policy_blocks_untrusted_approval_before_catalog(monkeypatch):
+    record = _seed_run(
+        "run_production_untrusted",
+        provenance="untrusted_legacy",
+    )
     monkeypatch.setattr(router, "load_layer_schemas", lambda: SCHEMAS)
     monkeypatch.setattr(
         router,
         "resolve_gold_approval_catalog",
-        lambda **kwargs: pytest.fail("empty production trust must contain approval"),
+        lambda **kwargs: pytest.fail("untrusted run must not reach catalog"),
     )
     response = client.post(
         "/api/v1/gold/approve/run_production_untrusted",
         json={"review_revision": record["review_revision"], "overwrite": False},
     )
-    assert router.GOLD_GENERATOR_TRUST.generation_available is False
+    assert router.GOLD_GENERATOR_TRUST.generation_available is True
+    assert router.GOLD_GENERATOR_TRUST.trusts_run("untrusted_legacy") is False
     assert response.status_code == 503
     assert response.json() == {"detail": router.GOLD_UNAVAILABLE}
 

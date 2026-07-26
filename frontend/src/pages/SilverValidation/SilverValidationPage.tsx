@@ -24,10 +24,16 @@ import {
   transformGenerate,
   transformReview,
   transformExecute,
+  getLiveTablePreview,
   type TransformReviewResponse,
   type TransformExecuteResponse,
+  type LiveTablePreview,
 } from '@/lib/aurumApi';
 import { calmApiMessage } from '@/utils/apiErrors';
+import {
+  formatSilverRule,
+  parseSilverRuleInput,
+} from '@/utils/silverRules';
 
 export function SilverValidationPage() {
   const navigate = useNavigate();
@@ -70,6 +76,8 @@ export function SilverValidationPage() {
   const [executing, setExecuting] = useState<boolean>(false);
   const [executeResult, setExecuteResult] = useState<TransformExecuteResponse | null>(null);
   const [executeError, setExecuteError] = useState<string | null>(null);
+  const [silverPreview, setSilverPreview] = useState<LiveTablePreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   function resetRunState() {
     setRunId(null);
@@ -79,6 +87,8 @@ export function SilverValidationPage() {
     setGenerateError(null);
     setGeneratorUnavailable(false);
     setReviewedRuleRevision(null);
+    setSilverPreview(null);
+    setPreviewError(null);
   }
 
   function validateRulesInput(inputRules: string[]): string[] | null {
@@ -142,7 +152,7 @@ export function SilverValidationPage() {
       try {
         const res = await transformGetRules(reqTable);
         if (!mountedRef.current || activeTableRef.current !== reqTable || loadTokenRef.current !== loadToken) return;
-        const fetched = res.rules || [];
+        const fetched = (res.rules || []).map(formatSilverRule);
         setRules(fetched);
         setSavedRules(fetched);
         setSavedRuleRevision(res.rule_revision ?? null);
@@ -216,7 +226,7 @@ export function SilverValidationPage() {
     try {
       const res = await transformGetRules(selectedTableParam);
       if (!mountedRef.current || activeTableRef.current !== reqTable || loadTokenRef.current !== loadToken) return;
-      const fetched = res.rules || [];
+      const fetched = (res.rules || []).map(formatSilverRule);
       setRules(fetched);
       setSavedRules(fetched);
       setSavedRuleRevision(res.rule_revision ?? null);
@@ -252,7 +262,8 @@ export function SilverValidationPage() {
     setRulesError(null);
 
     try {
-      const saveRes = await transformSaveRules(selectedTableParam, validated);
+      const formattedRules = validated.map(parseSilverRuleInput);
+      const saveRes = await transformSaveRules(selectedTableParam, formattedRules);
       if (
         !mountedRef.current ||
         activeTableRef.current !== reqTable ||
@@ -308,9 +319,9 @@ export function SilverValidationPage() {
       const saveRes = await handleSaveRules();
       if (
         !saveRes.saved ||
-        !saveRes.ruleRevision ||
-        saveRes.table !== reqTable ||
-        saveRes.submittedRuleVersion !== reqVersion
+        !mountedRef.current ||
+        activeTableRef.current !== reqTable ||
+        ruleVersionRef.current !== reqVersion
       ) {
         return;
       }
@@ -422,6 +433,22 @@ export function SilverValidationPage() {
         return;
       }
       setExecuteResult(execRes);
+      setPreviewError(null);
+
+      try {
+        const preview = await getLiveTablePreview(
+          reqTable,
+          execRes.target.schema,
+        );
+        setSilverPreview(preview);
+      } catch (err: unknown) {
+        setPreviewError(
+          calmApiMessage(
+            err,
+            'Silver promotion succeeded, but the live preview could not be loaded.',
+          ),
+        );
+      }
     } catch (err: any) {
       if (
         !mountedRef.current ||
@@ -445,12 +472,10 @@ export function SilverValidationPage() {
 
   const isBusy = loadingRules || savingRules || generating || loadingReview || executing;
 
-  // Silver Live badge requires backend authority: trusted executable review or successful executed result
-  const hasLiveState = Boolean(
+  const silverComplete = Boolean(
     !executing &&
     !executeError &&
-    ((executeResult && executeResult.status === 'success') ||
-     (!executeResult && reviewData && reviewData.executable))
+    executeResult?.status === 'success'
   );
 
   const canExecute = Boolean(
@@ -479,7 +504,7 @@ export function SilverValidationPage() {
       <div className="px-6 py-6 border-b border-[#252637]">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-xl font-bold text-[#f1f5f9]">Silver Layer</h2>
-          <DataSourceBadge mode={hasLiveState ? 'live' : 'planned'} />
+          <DataSourceBadge mode={silverComplete ? 'live' : 'planned'} />
           {executeResult ? (
             <Badge variant="pass">Promoted to Silver</Badge>
           ) : reviewData && reviewData.executable ? (
@@ -590,8 +615,8 @@ export function SilverValidationPage() {
                         </span>
                         <input
                           type="text"
-                          value={ruleText}
-                          placeholder="Enter cleaning rule (e.g. Remove rows where customer_id is null)"
+                          value={formatSilverRule(ruleText)}
+                          placeholder="Enter cleaning rule (e.g. record_id is not null)"
                           disabled={isBusy}
                           onChange={(e) => handleUpdateRule(idx, e.target.value)}
                           className="flex-1 bg-transparent text-xs text-[#f1f5f9] focus:outline-none focus:border-b border-[#6366f1] py-1 disabled:opacity-50"
@@ -683,7 +708,7 @@ export function SilverValidationPage() {
                       <Code size={17} className="text-[#6366f1]" />
                       <h3 className="text-sm font-semibold text-[#f1f5f9]">Generated Transformation SQL</h3>
                     </div>
-                    {reviewData.executed ? (
+                    {executeResult || reviewData.executed ? (
                       <Badge variant="pass">Executed</Badge>
                     ) : reviewData.executable ? (
                       <Badge variant="warning">Review Pending</Badge>
@@ -693,7 +718,8 @@ export function SilverValidationPage() {
                   </div>
 
                   <p className="text-xs text-[#94a3b8] leading-relaxed">
-                    {reviewData.planned_changes.summary}
+                    {reviewData.planned_changes.summary ??
+                      'Deterministic Silver transformation proposal.'}
                   </p>
 
                   <div className="rounded-lg border border-[#252637] bg-[#090a10] p-4 overflow-x-auto font-mono text-xs text-[#a5b4fc] scrollbar-thin">
@@ -708,7 +734,7 @@ export function SilverValidationPage() {
                         {reviewData.planned_changes.rules.map((step, idx) => (
                           <li key={idx} className="flex items-center gap-2">
                             <span className="h-1.5 w-1.5 rounded-full bg-[#6366f1]" />
-                            <span>{step}</span>
+                            <span>{formatSilverRule(step)}</span>
                           </li>
                         ))}
                       </ul>
@@ -720,7 +746,7 @@ export function SilverValidationPage() {
                     <span className="text-xs text-[#cbd5e1]">
                       {rulesDirty
                         ? 'Rule edits pending — re-generate SQL before approval.'
-                        : reviewData.executed
+                        : executeResult || reviewData.executed
                           ? 'Transformation has already been executed and promoted.'
                           : !reviewData.executable
                             ? 'Run is non-executable (untrusted provenance or generator unavailable).'
@@ -733,7 +759,11 @@ export function SilverValidationPage() {
                       rightIcon={<ArrowRight size={16} />}
                       onClick={handleExecute}
                     >
-                      {executing ? 'Executing & Promoting…' : 'Approve & Execute (Silver Promotion)'}
+                      {executing
+                        ? 'Executing & Promoting…'
+                        : executeResult
+                          ? 'Executed & Promoted'
+                          : 'Approve & Execute (Silver Promotion)'}
                     </Button>
                   </div>
                 </div>
@@ -797,14 +827,59 @@ export function SilverValidationPage() {
                 )}
               </div>
 
-              {/* Silver Row Preview — Honest State */}
+              {/* Silver Row Preview — Live State */}
               <div className="rounded-xl border border-[#252637] p-5 bg-[#0d0e14] space-y-3">
-                <h3 className="text-sm font-semibold text-[#f1f5f9]">Silver Data Preview</h3>
-                <div className="rounded-lg border border-[#252637] bg-[#13141e] p-6 text-center text-xs text-[#6b7280] leading-relaxed">
-                  {executeResult
-                    ? 'Silver transformation completed. Row preview is not available from the current Silver API yet.'
-                    : 'Execute transformation to promote table to Silver.'}
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-[#f1f5f9]">Silver Data Preview</h3>
+                  {silverPreview && (
+                    <Badge variant="pass">{silverPreview.row_count} Rows Promoted to Silver</Badge>
+                  )}
                 </div>
+                {silverPreview ? (
+                  <div className="space-y-3">
+                    <div className="text-xs text-[#94a3b8] flex gap-4">
+                      <span>Columns: {silverPreview.column_count}</span>
+                      <span>Table: {silverPreview.schema}.{selectedTableParam}</span>
+                    </div>
+                    <div className="overflow-x-auto rounded border border-[#252637] bg-[#0b0c12]">
+                      <table className="w-full text-left text-xs text-[#e5e7eb]">
+                        <thead className="bg-[#13141e] text-[#94a3b8] border-b border-[#252637]">
+                          <tr>
+                            {silverPreview.columns.map((col) => (
+                              <th key={col.name} className="px-3 py-2 font-semibold font-mono">{col.name}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#252637]">
+                          {silverPreview.rows.map((row, rowIndex) => (
+                            <tr key={rowIndex}>
+                              {silverPreview.columns.map((col) => (
+                                <td key={col.name} className="px-3 py-2 font-mono text-[#cbd5e1]">
+                                  {row[col.name] === null || row[col.name] === undefined
+                                    ? '—'
+                                    : String(row[col.name])}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {silverPreview.rows.length === 0 && (
+                      <p className="text-xs text-[#6b7280]">The promoted relation contains no rows.</p>
+                    )}
+                  </div>
+                ) : previewError ? (
+                  <div className="rounded-lg border border-[#ef4444]/30 bg-[#450a0a]/30 p-4 text-xs text-[#fca5a5]">
+                    {previewError}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-[#252637] bg-[#13141e] p-6 text-center text-xs text-[#6b7280] leading-relaxed">
+                    {executeResult
+                      ? `Silver transformation completed for ${executeResult.target.schema}.${selectedTableParam}; loading live preview.`
+                      : 'Execute transformation to promote table to Silver.'}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -822,9 +897,11 @@ export function SilverValidationPage() {
         <Button
           variant="primary"
           rightIcon={<ArrowRight size={16} />}
-          onClick={() => navigate(`/projects/${encodeURIComponent(id || '')}/gold`)}
+          disabled={!silverComplete}
+          title={silverComplete ? undefined : 'Complete Silver promotion before continuing.'}
+          onClick={() => navigate(`/projects/${encodeURIComponent(id || '')}/gold?table=${encodeURIComponent(selectedTableParam || '')}`)}
         >
-          Continue to Gold (Planned)
+          Continue to Gold
         </Button>
       </div>
     </div>
