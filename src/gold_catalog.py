@@ -40,6 +40,28 @@ class GoldExecutionCatalogSnapshot:
     candidate_identity: dict[str, Any] | None
 
 
+@dataclass(frozen=True)
+class GoldCatalogColumn:
+    """Exact PostgreSQL catalog metadata for one authorized Gold source column."""
+
+    name: str
+    type_oid: int
+    type_schema: str
+    type_name: str
+    type_kind: str
+    supported_aggregations: frozenset[str]
+
+
+@dataclass(frozen=True)
+class StructuredGoldSourceCatalogSnapshot:
+    """Exact relation identity and columns used to bind a structured proposal."""
+
+    database_oid: int
+    database_name: str
+    source_identity: dict[str, Any]
+    columns: tuple[GoldCatalogColumn, ...]
+
+
 def _database_identity(cursor: Any) -> tuple[int, str]:
     cursor.execute(
         """
@@ -114,6 +136,95 @@ def _relation_identity(
         "relation_name": str(row[1]),
         "relation_kind": relation_kind,
     }
+
+
+def _relation_columns(
+    cursor: Any,
+    *,
+    relation_oid: int,
+) -> tuple[GoldCatalogColumn, ...]:
+    cursor.execute(
+        """
+        SELECT
+            attribute.attname,
+            column_type.oid,
+            type_namespace.nspname,
+            column_type.typname,
+            column_type.typtype,
+            ARRAY(
+                SELECT aggregate.proname
+                FROM pg_catalog.pg_proc AS aggregate
+                JOIN pg_catalog.pg_namespace AS aggregate_namespace
+                  ON aggregate_namespace.oid = aggregate.pronamespace
+                WHERE aggregate.prokind = 'a'
+                  AND aggregate_namespace.nspname = 'pg_catalog'
+                  AND aggregate.proname IN ('sum', 'avg', 'min', 'max')
+                  AND aggregate.pronargs = 1
+                  AND aggregate.proargtypes[0] = attribute.atttypid
+                ORDER BY aggregate.proname
+            ) AS supported_aggregations
+        FROM pg_catalog.pg_attribute AS attribute
+        JOIN pg_catalog.pg_type AS column_type
+          ON column_type.oid = attribute.atttypid
+        JOIN pg_catalog.pg_namespace AS type_namespace
+          ON type_namespace.oid = column_type.typnamespace
+        WHERE attribute.attrelid = %s
+          AND attribute.attnum > 0
+          AND NOT attribute.attisdropped
+        ORDER BY attribute.attnum
+        """,
+        (relation_oid,),
+    )
+    return tuple(
+        GoldCatalogColumn(
+            name=str(row[0]),
+            type_oid=int(row[1]),
+            type_schema=str(row[2]),
+            type_name=str(row[3]),
+            type_kind=str(row[4]),
+            supported_aggregations=frozenset(str(value) for value in row[5]),
+        )
+        for row in cursor.fetchall()
+    )
+
+
+def resolve_structured_gold_source(
+    *,
+    schema: str,
+    relation_name: str,
+) -> StructuredGoldSourceCatalogSnapshot:
+    """Resolve one exact Structured Gold source and its columns atomically."""
+    with get_generated_sql_pool().connection() as connection:
+        with connection.transaction():
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+                )
+                database_oid, database_name = _database_identity(cursor)
+                namespace_oid = _namespace_oid(cursor, schema, area="source")
+                source_identity = _relation_identity(
+                    cursor,
+                    database_oid=database_oid,
+                    namespace_oid=namespace_oid,
+                    schema=schema,
+                    relation_name=relation_name,
+                    area="source",
+                )
+                if source_identity is None:
+                    raise GoldCatalogResolutionError(
+                        "source",
+                        "selected source relation is unresolved",
+                    )
+                columns = _relation_columns(
+                    cursor,
+                    relation_oid=source_identity["relation_oid"],
+                )
+    return StructuredGoldSourceCatalogSnapshot(
+        database_oid=database_oid,
+        database_name=database_name,
+        source_identity=source_identity,
+        columns=columns,
+    )
 
 
 def resolve_gold_approval_catalog(

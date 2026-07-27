@@ -6,11 +6,12 @@ import json
 import logging
 import re
 import uuid
-from typing import List
+from typing import List, Literal, Union
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 import psycopg
+from typing_extensions import Annotated
 
 try:
     from psycopg_pool import PoolClosed, PoolTimeout
@@ -25,6 +26,7 @@ from src.db_config import (
 from src.gold_catalog import (
     GoldCatalogResolutionError,
     resolve_gold_approval_catalog,
+    resolve_structured_gold_source,
 )
 from src.gold_security import (
     GoldStateMalformed,
@@ -62,15 +64,25 @@ from src.gold_promotion import (
     reconcile_gold_promotion,
 )
 from src.generator_trust import GeneratorTrustPolicy
+from src.sql_safety import SqlSafetyViolation, validate_generated_sql
+from src.structured_gold import (
+    StructuredGoldDefinitionError,
+    compile_structured_gold_sql,
+    validate_structured_gold_definition,
+)
 
 router = APIRouter(prefix="/api/v1/gold", tags=["gold"])
 logger = logging.getLogger(__name__)
 
 MANUAL_CONTROLLED_GOLD_PROVENANCE = "manual_controlled_gold_v1"
+STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE = "structured_deterministic_gold_v1"
 GOLD_GENERATOR_TRUST = GeneratorTrustPolicy(
     pipeline="gold",
     trusted_hardened_provenances=frozenset(
-        {MANUAL_CONTROLLED_GOLD_PROVENANCE}
+        {
+            MANUAL_CONTROLLED_GOLD_PROVENANCE,
+            STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE,
+        }
     ),
 )
 
@@ -95,6 +107,73 @@ class GenerateGoldPayload(BaseModel):
     target_table_name: str
     silver_table_names: List[str]
     business_requirement: str
+
+
+class StructuredGoldSourcePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_name: StrictStr = Field(
+        alias="schema",
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        max_length=63,
+    )
+    table: StrictStr = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$", max_length=63)
+
+
+class StructuredGoldDimensionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    column: StrictStr = Field(min_length=1, max_length=63)
+
+
+class StructuredGoldColumnExpressionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["column"]
+    column: StrictStr = Field(min_length=1, max_length=63)
+
+
+class StructuredGoldBinaryExpressionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["binary"]
+    operator: Literal["add", "subtract", "multiply"]
+    left_column: StrictStr = Field(min_length=1, max_length=63)
+    right_column: StrictStr = Field(min_length=1, max_length=63)
+
+
+StructuredGoldExpressionPayload = Annotated[
+    Union[
+        StructuredGoldColumnExpressionPayload,
+        StructuredGoldBinaryExpressionPayload,
+    ],
+    Field(discriminator="type"),
+]
+
+
+class StructuredGoldMetricPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    aggregation: Literal["sum", "count", "avg", "min", "max"]
+    expression: StructuredGoldExpressionPayload
+    alias: StrictStr = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        max_length=63,
+    )
+
+
+class GenerateStructuredGoldPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: StructuredGoldSourcePayload
+    dimension: StructuredGoldDimensionPayload
+    metric: StructuredGoldMetricPayload
+    target_table_name: StrictStr = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        max_length=63,
+    )
+    business_purpose: StrictStr = Field(min_length=1, max_length=4000)
+
 
 class ExecuteGoldPayload(BaseModel):
     overwrite: bool = False
@@ -258,66 +337,44 @@ def list_gold_tables():
     return {"tables": [{"name": row[0]} for row in rows]}
 
 
-@router.post("/generate")
-def generate_gold_sql(payload: GenerateGoldPayload):
-    """Controlled non-LLM Gold proposal path using trusted controlled provenance."""
-    if not GOLD_GENERATOR_TRUST.generation_available:
-        raise HTTPException(status_code=503, detail=GOLD_GENERATION_UNAVAILABLE)
-
-    target_name = payload.target_table_name.strip()
-    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", target_name):
-        raise HTTPException(status_code=400, detail="Invalid target table name identifier.")
-
-    if not payload.silver_table_names:
-        raise HTTPException(status_code=400, detail="At least one silver table is required.")
-
-    schemas = load_layer_schemas()
-    for s_table in payload.silver_table_names:
-        if not check_table_exists(schemas.silver, s_table):
-            raise HTTPException(status_code=404, detail=f"Silver table '{s_table}' not found.")
-
-    provenance = next(iter(GOLD_GENERATOR_TRUST.trusted_hardened_provenances))
-    generator_version = "v1.0.0"
-    run_id = f"run_{uuid.uuid4().hex[:12]}"
-    candidate_schema = schemas.gold_candidates
-    candidate_name = f"{target_name}_candidate_{run_id}"
-    primary_silver = payload.silver_table_names[0]
-
-    sql_text = (
-        f'CREATE TABLE "{candidate_schema}"."{candidate_name}" AS '
-        f'WITH step_1 AS (SELECT * FROM "{schemas.silver}"."{primary_silver}") '
-        f'SELECT * FROM step_1'
-    )
-
-    selected_sources = [
-        {"schema": schemas.silver, "table": s_table}
-        for s_table in payload.silver_table_names
-    ]
-
+def _persist_gold_proposal(
+    *,
+    run_id: str,
+    target_name: str,
+    sql_text: str,
+    planned_changes: dict,
+    business_requirement: str,
+    provenance: str,
+    generator_version: str,
+    selected_sources: list[dict[str, str]],
+    target_schema: str,
+    candidate_schema: str,
+    generation_database_identity: dict | None = None,
+    generation_source_identities: list[dict] | None = None,
+) -> dict:
+    """Persist the existing review envelope and Gold security companion state."""
     try:
         security_record = new_gold_security_record(
             run_id=run_id,
             sql_text=sql_text,
-            business_requirement=payload.business_requirement or "Controlled Gold Projection",
+            business_requirement=business_requirement,
             generator_provenance=provenance,
             generator_version=generator_version,
             selected_sources=selected_sources,
-            target_schema=schemas.gold,
+            target_schema=target_schema,
             target_name=target_name,
             candidate_schema=candidate_schema,
+            generation_database_identity=generation_database_identity,
+            generation_source_identities=generation_source_identities,
         )
-    except Exception as e:
+    except Exception as exc:
         logger.exception("Failed to build Gold security record")
-        raise HTTPException(status_code=422, detail=f"Invalid Gold security payload: {e}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid Gold security payload: {exc}",
+        ) from None
 
     created_at = approval_timestamp()
-    planned_changes = {
-        "summary": f"Controlled Gold projection from silver.{primary_silver}",
-        "sources": payload.silver_table_names,
-        "target": target_name,
-        "business_requirement": payload.business_requirement,
-    }
-
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
@@ -351,6 +408,192 @@ def generate_gold_sql(payload: GenerateGoldPayload):
         "review_revision": security_record["review_revision"],
         "generator_provenance": provenance,
     }
+
+
+@router.post("/generate")
+def generate_gold_sql(payload: GenerateGoldPayload):
+    """Controlled non-LLM Gold proposal path using trusted controlled provenance."""
+    if not GOLD_GENERATOR_TRUST.trusts_run(MANUAL_CONTROLLED_GOLD_PROVENANCE):
+        raise HTTPException(status_code=503, detail=GOLD_GENERATION_UNAVAILABLE)
+
+    target_name = payload.target_table_name.strip()
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", target_name):
+        raise HTTPException(status_code=400, detail="Invalid target table name identifier.")
+
+    if not payload.silver_table_names:
+        raise HTTPException(status_code=400, detail="At least one silver table is required.")
+
+    schemas = load_layer_schemas()
+    for s_table in payload.silver_table_names:
+        if not check_table_exists(schemas.silver, s_table):
+            raise HTTPException(status_code=404, detail=f"Silver table '{s_table}' not found.")
+
+    provenance = MANUAL_CONTROLLED_GOLD_PROVENANCE
+    generator_version = "v1.0.0"
+    run_id = f"run_{uuid.uuid4().hex[:12]}"
+    candidate_schema = schemas.gold_candidates
+    candidate_name = f"{target_name}_candidate_{run_id}"
+    primary_silver = payload.silver_table_names[0]
+
+    sql_text = (
+        f'CREATE TABLE "{candidate_schema}"."{candidate_name}" AS '
+        f'WITH step_1 AS (SELECT * FROM "{schemas.silver}"."{primary_silver}") '
+        f'SELECT * FROM step_1'
+    )
+
+    selected_sources = [
+        {"schema": schemas.silver, "table": s_table}
+        for s_table in payload.silver_table_names
+    ]
+    planned_changes = {
+        "summary": f"Controlled Gold projection from silver.{primary_silver}",
+        "sources": payload.silver_table_names,
+        "target": target_name,
+        "business_requirement": payload.business_requirement,
+    }
+
+    return _persist_gold_proposal(
+        run_id=run_id,
+        target_name=target_name,
+        sql_text=sql_text,
+        planned_changes=planned_changes,
+        business_requirement=(
+            payload.business_requirement or "Controlled Gold Projection"
+        ),
+        provenance=provenance,
+        generator_version=generator_version,
+        selected_sources=selected_sources,
+        target_schema=schemas.gold,
+        candidate_schema=candidate_schema,
+    )
+
+
+@router.post("/generate-structured")
+def generate_structured_gold_sql(payload: GenerateStructuredGoldPayload):
+    """Compile one exact structured aggregation into the existing Gold review flow."""
+    if not GOLD_GENERATOR_TRUST.trusts_run(
+        STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE
+    ):
+        raise HTTPException(status_code=503, detail=GOLD_GENERATION_UNAVAILABLE)
+
+    schemas = load_layer_schemas()
+    if payload.source.schema_name != schemas.silver:
+        raise HTTPException(
+            status_code=422,
+            detail="Structured Gold source must use the configured Silver schema.",
+        )
+
+    try:
+        source_catalog = resolve_structured_gold_source(
+            schema=schemas.silver,
+            relation_name=payload.source.table,
+        )
+    except Exception as exc:
+        if _is_connectivity_error(exc):
+            logger.warning(
+                "Structured Gold source catalog unavailable: %s",
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Structured Gold source validation is currently unavailable.",
+            ) from None
+        if isinstance(exc, GoldCatalogResolutionError):
+            raise HTTPException(
+                status_code=404,
+                detail="Structured Gold Silver source is unavailable.",
+            ) from None
+        logger.exception("Structured Gold source catalog resolution failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Structured Gold source validation failed.",
+        ) from None
+
+    columns = {column.name: column for column in source_catalog.columns}
+    expression = payload.metric.expression.model_dump()
+    try:
+        definition = validate_structured_gold_definition(
+            dimension=payload.dimension.column,
+            aggregation=payload.metric.aggregation,
+            expression=expression,
+            alias=payload.metric.alias,
+            columns=columns,
+        )
+    except StructuredGoldDefinitionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    target_name = payload.target_table_name
+    run_id = f"run_{uuid.uuid4().hex[:12]}"
+    candidate_schema = schemas.gold_candidates
+    candidate_name = f"{target_name}_candidate_{run_id}"
+    source_identity = source_catalog.source_identity
+    selected_sources = [
+        {
+            "schema": source_identity["schema"],
+            "table": source_identity["relation_name"],
+        }
+    ]
+    try:
+        sql_text = compile_structured_gold_sql(
+            candidate_schema=candidate_schema,
+            candidate_name=candidate_name,
+            source_schema=source_identity["schema"],
+            source_relation=source_identity["relation_name"],
+            definition=definition,
+        )
+        sql_text = validate_generated_sql(
+            sql_text,
+            expected_schema=candidate_schema,
+            expected_table_name=target_name,
+            run_id=run_id,
+            mode="gold_ctas",
+            selected_sources=(
+                (
+                    source_identity["schema"],
+                    source_identity["relation_name"],
+                ),
+            ),
+            expected_candidate_name=candidate_name,
+        )
+    except (StructuredGoldDefinitionError, SqlSafetyViolation):
+        logger.exception("Structured Gold deterministic SQL was rejected")
+        raise HTTPException(
+            status_code=422,
+            detail="Structured Gold definition could not produce safe SQL.",
+        ) from None
+
+    planned_changes = {
+        "summary": (
+            "Structured Gold aggregation from "
+            f"{source_identity['schema']}.{source_identity['relation_name']}"
+        ),
+        "source": selected_sources[0],
+        "dimension": definition["dimension"],
+        "metric": {
+            "aggregation": definition["aggregation"],
+            "expression": definition["expression"],
+            "alias": definition["alias"],
+        },
+        "target": target_name,
+        "business_purpose": payload.business_purpose,
+    }
+    return _persist_gold_proposal(
+        run_id=run_id,
+        target_name=target_name,
+        sql_text=sql_text,
+        planned_changes=planned_changes,
+        business_requirement=payload.business_purpose,
+        provenance=STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE,
+        generator_version="v1.0.0",
+        selected_sources=selected_sources,
+        target_schema=schemas.gold,
+        candidate_schema=candidate_schema,
+        generation_database_identity={
+            "oid": source_catalog.database_oid,
+            "name": source_catalog.database_name,
+        },
+        generation_source_identities=[source_identity],
+    )
 
 @router.get("/review/{run_id}")
 def review_gold_sql(run_id: str):
@@ -568,6 +811,23 @@ def approve_gold_sql(run_id: str, payload: ApproveGoldPayload):
                     status_code=503,
                     detail=GOLD_DATABASE_UNAVAILABLE,
                 ) from None
+
+            if (
+                state.generation_source_identities is not None
+                and (
+                    state.generation_database_identity is None
+                    or catalog.database_oid
+                    != state.generation_database_identity["oid"]
+                    or catalog.database_name
+                    != state.generation_database_identity["name"]
+                    or tuple(catalog.source_identities)
+                    != state.generation_source_identities
+                )
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=GOLD_SOURCE_IDENTITY_CHANGED,
+                )
 
             target_state = catalog.target_identity.get("state")
             if (

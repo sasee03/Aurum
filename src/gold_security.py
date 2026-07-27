@@ -15,6 +15,7 @@ GOLD_MODEL_VERSION = "gold-security-state-v1"
 GOLD_POLICY_VERSION = "gold-ctas-policy-v2"
 GOLD_SELECTED_SOURCES_VERSION = "gold-selected-sources-v1"
 GOLD_REVIEW_SNAPSHOT_VERSION = "gold-review-snapshot-v1"
+GOLD_BOUND_REVIEW_SNAPSHOT_VERSION = "gold-review-snapshot-v2"
 GOLD_APPROVAL_SNAPSHOT_VERSION = "gold-approval-snapshot-v1"
 GOLD_PIPELINE = "gold"
 
@@ -50,6 +51,8 @@ class GoldSecurityState:
     generator_version: str
     review_snapshot: dict[str, Any]
     review_revision: str
+    generation_database_identity: dict[str, Any] | None
+    generation_source_identities: tuple[dict[str, Any], ...] | None
     approval_snapshot: dict[str, Any] | None
     approved_revision: str | None
     approved_at: str | None
@@ -229,6 +232,8 @@ def build_review_snapshot(
     target_name: str,
     candidate_schema: str,
     candidate_name: str,
+    generation_database_identity: Mapping[str, Any] | None = None,
+    generation_source_identities: Iterable[Mapping[str, Any]] | None = None,
     model_version: str = GOLD_MODEL_VERSION,
     policy_version: str = GOLD_POLICY_VERSION,
 ) -> dict[str, Any]:
@@ -263,8 +268,18 @@ def build_review_snapshot(
         raise GoldStateMalformed("candidate cannot equal the final target")
     if candidate["table"] != expected_candidate_name(target["table"], run_id):
         raise GoldStateMalformed("candidate identity is not server-controlled")
-    return {
-        "snapshot_version": GOLD_REVIEW_SNAPSHOT_VERSION,
+    if (generation_database_identity is None) != (
+        generation_source_identities is None
+    ):
+        raise GoldStateMalformed(
+            "generation database and source identities must be persisted together"
+        )
+    snapshot = {
+        "snapshot_version": (
+            GOLD_BOUND_REVIEW_SNAPSHOT_VERSION
+            if generation_source_identities is not None
+            else GOLD_REVIEW_SNAPSHOT_VERSION
+        ),
         "model_version": model_version,
         "policy_version": policy_version,
         "pipeline": GOLD_PIPELINE,
@@ -279,27 +294,61 @@ def build_review_snapshot(
         "target": target,
         "candidate": candidate,
     }
+    if generation_source_identities is not None:
+        generation_database = _require_exact_keys(
+            dict(generation_database_identity),
+            {"oid", "name"},
+            field="generation database identity",
+        )
+        generation_database = {
+            "oid": _require_oid(
+                generation_database["oid"],
+                field="generation database identity.oid",
+            ),
+            "name": _require_nonempty_string(
+                generation_database["name"],
+                field="generation database identity.name",
+            ),
+        }
+        parsed_identities = _parse_source_identities(
+            list(generation_source_identities),
+            selected_sources=source_document["sources"],
+            database_oid=generation_database["oid"],
+        )
+        snapshot["generation_database"] = generation_database
+        snapshot["generation_source_identities"] = list(parsed_identities)
+    return snapshot
 
 
 def _parse_review_snapshot(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise GoldStateMalformed("review_snapshot has invalid keys")
+    snapshot_version = value.get("snapshot_version")
+    expected_keys = {
+        "snapshot_version",
+        "model_version",
+        "policy_version",
+        "pipeline",
+        "run_id",
+        "sql_text",
+        "business_requirement",
+        "generator",
+        "selected_sources",
+        "target",
+        "candidate",
+    }
+    if snapshot_version == GOLD_BOUND_REVIEW_SNAPSHOT_VERSION:
+        expected_keys.add("generation_database")
+        expected_keys.add("generation_source_identities")
     snapshot = _require_exact_keys(
         value,
-        {
-            "snapshot_version",
-            "model_version",
-            "policy_version",
-            "pipeline",
-            "run_id",
-            "sql_text",
-            "business_requirement",
-            "generator",
-            "selected_sources",
-            "target",
-            "candidate",
-        },
+        expected_keys,
         field="review_snapshot",
     )
-    if snapshot["snapshot_version"] != GOLD_REVIEW_SNAPSHOT_VERSION:
+    if snapshot["snapshot_version"] not in {
+        GOLD_REVIEW_SNAPSHOT_VERSION,
+        GOLD_BOUND_REVIEW_SNAPSHOT_VERSION,
+    }:
         raise GoldStateMalformed("unsupported review snapshot version")
     if snapshot["model_version"] != GOLD_MODEL_VERSION:
         raise GoldStateMalformed("unsupported review model version")
@@ -321,7 +370,7 @@ def _parse_review_snapshot(value: Any) -> dict[str, Any]:
         field="review_snapshot.candidate",
     )
     normalized = {
-        "snapshot_version": GOLD_REVIEW_SNAPSHOT_VERSION,
+        "snapshot_version": snapshot["snapshot_version"],
         "model_version": GOLD_MODEL_VERSION,
         "policy_version": GOLD_POLICY_VERSION,
         "pipeline": GOLD_PIPELINE,
@@ -351,6 +400,31 @@ def _parse_review_snapshot(value: Any) -> dict[str, Any]:
         "target": target,
         "candidate": candidate,
     }
+    if snapshot["snapshot_version"] == GOLD_BOUND_REVIEW_SNAPSHOT_VERSION:
+        generation_database = _require_exact_keys(
+            snapshot["generation_database"],
+            {"oid", "name"},
+            field="review_snapshot.generation_database",
+        )
+        generation_database = {
+            "oid": _require_oid(
+                generation_database["oid"],
+                field="review_snapshot.generation_database.oid",
+            ),
+            "name": _require_nonempty_string(
+                generation_database["name"],
+                field="review_snapshot.generation_database.name",
+            ),
+        }
+        generation_source_identities = _parse_source_identities(
+            snapshot["generation_source_identities"],
+            selected_sources=source_document["sources"],
+            database_oid=generation_database["oid"],
+        )
+        normalized["generation_database"] = generation_database
+        normalized["generation_source_identities"] = list(
+            generation_source_identities
+        )
     if snapshot != normalized:
         raise GoldStateMalformed("review snapshot is not in strict canonical form")
     return normalized
@@ -367,6 +441,8 @@ def new_gold_security_record(
     target_schema: str,
     target_name: str,
     candidate_schema: str,
+    generation_database_identity: Mapping[str, Any] | None = None,
+    generation_source_identities: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     candidate_name = expected_candidate_name(target_name, run_id)
     source_document = selected_sources_document(selected_sources)
@@ -381,6 +457,8 @@ def new_gold_security_record(
         target_name=target_name,
         candidate_schema=candidate_schema,
         candidate_name=candidate_name,
+        generation_database_identity=generation_database_identity,
+        generation_source_identities=generation_source_identities,
     )
     return {
         "run_id": run_id,
@@ -793,6 +871,16 @@ def load_gold_security_state(
     )
     if any(item["schema"] != configured_silver_schema for item in selected_sources):
         raise GoldStateStale("configured Silver schema changed after review")
+    generation_database_identity = (
+        dict(review_snapshot["generation_database"])
+        if "generation_database" in review_snapshot
+        else None
+    )
+    generation_source_identities = (
+        tuple(review_snapshot["generation_source_identities"])
+        if "generation_source_identities" in review_snapshot
+        else None
+    )
     rebuilt_review = build_review_snapshot(
         run_id=run_id,
         sql_text=_row_value(envelope_row, "sql_text"),
@@ -804,6 +892,8 @@ def load_gold_security_state(
         target_name=target["table"],
         candidate_schema=candidate["schema"],
         candidate_name=candidate["table"],
+        generation_database_identity=generation_database_identity,
+        generation_source_identities=generation_source_identities,
         model_version=model_version,
         policy_version=policy_version,
     )
@@ -841,6 +931,8 @@ def load_gold_security_state(
         generator_version=generator_version,
         review_snapshot=review_snapshot,
         review_revision=review_revision,
+        generation_database_identity=generation_database_identity,
+        generation_source_identities=generation_source_identities,
         approval_snapshot=None,
         approved_revision=None,
         approved_at=None,
