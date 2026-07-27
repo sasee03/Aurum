@@ -18,6 +18,7 @@ GOLD_REVIEW_SNAPSHOT_VERSION = "gold-review-snapshot-v1"
 GOLD_BOUND_REVIEW_SNAPSHOT_VERSION = "gold-review-snapshot-v2"
 GOLD_APPROVAL_SNAPSHOT_VERSION = "gold-approval-snapshot-v1"
 GOLD_PIPELINE = "gold"
+STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE = "structured_deterministic_gold_v1"
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _REVISION_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -428,6 +429,21 @@ def _parse_review_snapshot(value: Any) -> dict[str, Any]:
     if snapshot != normalized:
         raise GoldStateMalformed("review snapshot is not in strict canonical form")
     return normalized
+
+
+def _validate_review_snapshot_provenance(
+    *,
+    provenance: str,
+    review_snapshot: Mapping[str, Any],
+) -> None:
+    """Bind Structured Gold state to the identity-bearing review snapshot."""
+    if (
+        provenance == STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE
+        and review_snapshot["snapshot_version"] != GOLD_BOUND_REVIEW_SNAPSHOT_VERSION
+    ):
+        raise GoldStateMalformed(
+            "Structured Gold requires the identity-bound review snapshot v2"
+        )
 
 
 def new_gold_security_record(
@@ -842,6 +858,10 @@ def load_gold_security_state(
             _row_value(security_row, "review_snapshot_json"),
             field="review_snapshot_json",
         )
+    )
+    _validate_review_snapshot_provenance(
+        provenance=provenance,
+        review_snapshot=review_snapshot,
     )
     review_revision = _require_revision(
         _row_value(security_row, "review_revision"),

@@ -20,7 +20,7 @@ from src.gold_catalog import (
     StructuredGoldSourceCatalogSnapshot,
 )
 from src.gold_execution import GoldExecutionRejected
-from src.gold_security import load_gold_security_state
+from src.gold_security import canonical_json, load_gold_security_state, revision_for
 from src.sql_safety import validate_generated_sql
 from src.structured_gold import (
     StructuredGoldDefinitionError,
@@ -603,6 +603,118 @@ def _load_generated_state(run_id: str):
     )
 
 
+def _persisted_review_snapshot(run_id: str) -> dict:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT review_snapshot_json FROM gold_security_state WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    assert row is not None
+    return json.loads(row["review_snapshot_json"])
+
+
+def _rewrite_review_snapshot(run_id: str, snapshot: dict) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE gold_security_state
+            SET review_snapshot_json = ?, review_revision = ?
+            WHERE run_id = ?
+            """,
+            (canonical_json(snapshot), revision_for(snapshot), run_id),
+        )
+        conn.commit()
+
+
+def _assert_structured_run_is_malformed(run: dict) -> None:
+    review_response = client.get(f"/api/v1/gold/review/{run['run_id']}")
+    assert review_response.status_code == 422
+    assert review_response.json() == {"detail": router.GOLD_RUN_MALFORMED}
+
+    approval_response = _approve(run)
+    assert approval_response.status_code == 422
+    assert approval_response.json() == {"detail": router.GOLD_RUN_MALFORMED}
+
+
+def test_structured_complete_v2_snapshot_loads_successfully(structured_catalog):
+    run = _generate_for_authority_test(structured_catalog)
+
+    snapshot = _persisted_review_snapshot(run["run_id"])
+    assert snapshot["snapshot_version"] == "gold-review-snapshot-v2"
+    assert snapshot["generation_database"] == {
+        "oid": 101,
+        "name": "isolated_test_database",
+    }
+    assert snapshot["generation_source_identities"] == [
+        _source_catalog().source_identity
+    ]
+
+    state = _load_generated_state(run["run_id"])
+    assert state.generation_database_identity == snapshot["generation_database"]
+    assert state.generation_source_identities == tuple(
+        snapshot["generation_source_identities"]
+    )
+
+
+def test_structured_v1_downgrade_with_recomputed_revision_is_rejected(
+    structured_catalog,
+):
+    run = _generate_for_authority_test(structured_catalog)
+    snapshot = _persisted_review_snapshot(run["run_id"])
+
+    assert snapshot["snapshot_version"] == "gold-review-snapshot-v2"
+    snapshot["snapshot_version"] = "gold-review-snapshot-v1"
+    snapshot.pop("generation_database")
+    snapshot.pop("generation_source_identities")
+    _rewrite_review_snapshot(run["run_id"], snapshot)
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT review_revision FROM gold_security_state WHERE run_id = ?",
+            (run["run_id"],),
+        ).fetchone()
+    assert row is not None
+    assert row["review_revision"] == revision_for(snapshot)
+
+    _assert_structured_run_is_malformed(run)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing_snapshot_version",
+        "incomplete_database_identity",
+        "incomplete_source_identity",
+        "null_database_identity",
+        "null_source_identity",
+        "malformed_v2",
+    ],
+)
+def test_structured_rejects_incomplete_or_malformed_v2_snapshot(
+    case,
+    structured_catalog,
+):
+    run = _generate_for_authority_test(structured_catalog)
+    snapshot = _persisted_review_snapshot(run["run_id"])
+
+    if case == "missing_snapshot_version":
+        snapshot.pop("snapshot_version")
+    elif case == "incomplete_database_identity":
+        snapshot["generation_database"] = {"oid": 101}
+    elif case == "incomplete_source_identity":
+        snapshot["generation_source_identities"][0].pop("relation_oid")
+    elif case == "null_database_identity":
+        snapshot["generation_database"]["oid"] = None
+    elif case == "null_source_identity":
+        snapshot["generation_source_identities"][0]["relation_oid"] = None
+    else:
+        snapshot["generation_source_identities"] = {"invalid": "structure"}
+
+    _rewrite_review_snapshot(run["run_id"], snapshot)
+
+    _assert_structured_run_is_malformed(run)
+
+
 def test_structured_same_oid_approval_and_normal_execution_succeed(
     monkeypatch,
     structured_catalog,
@@ -893,6 +1005,10 @@ def test_manual_controlled_route_keeps_its_original_provenance(monkeypatch):
     manual_review = json.loads(security["review_snapshot_json"])
     assert manual_review["snapshot_version"] == "gold-review-snapshot-v1"
     assert "generation_source_identities" not in manual_review
+    review_response = client.get(
+        f"/api/v1/gold/review/{response.json()['run_id']}"
+    )
+    assert review_response.status_code == 200
     assert router.GOLD_GENERATOR_TRUST.trusts_run(
         router.STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE
     )
