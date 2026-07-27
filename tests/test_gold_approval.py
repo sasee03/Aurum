@@ -36,7 +36,9 @@ from src.gold_security import (
     build_review_snapshot,
     canonical_json,
     insert_gold_security_state,
+    insert_gold_run_origin,
     load_gold_security_state,
+    new_gold_run_origin,
     new_gold_security_record,
     expected_candidate_name,
     revision_for,
@@ -44,7 +46,7 @@ from src.gold_security import (
 
 
 client = TestClient(app)
-TRUSTED_PROVENANCE = "gold_test_hardened"
+TRUSTED_PROVENANCE = "manual_controlled_gold_v1"
 GENERATOR_VERSION = "test-generator-1"
 SCHEMAS = SimpleNamespace(
     silver="configured_silver",
@@ -107,6 +109,27 @@ def _seed_run(
             candidate_schema=SCHEMAS.gold_candidates,
         )
         insert_gold_security_state(conn, record)
+        if provenance == TRUSTED_PROVENANCE:
+            origin = new_gold_run_origin(
+                run_id=run_id,
+                origin_provenance=provenance,
+                generator_family="structured_manual",
+                generator_model=None,
+                generation_database_identity={
+                    "oid": 101,
+                    "name": "isolated_test_database",
+                },
+                generation_source_identities=[
+                    _source_identity(source, relation_oid=201 + index)
+                    for index, source in enumerate(sources)
+                ],
+                selected_sources=[
+                    {"schema": SCHEMAS.silver, "table": source}
+                    for source in sources
+                ],
+                created_at="2026-07-23T00:00:00+00:00",
+            )
+            insert_gold_run_origin(conn, origin)
         conn.commit()
     return record
 
@@ -206,9 +229,14 @@ def _load_state(run_id: str):
             "SELECT * FROM gold_security_state WHERE run_id = ?",
             (run_id,),
         ).fetchone()
+        origin = conn.execute(
+            "SELECT * FROM gold_run_origin WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
         return load_gold_security_state(
             security,
             envelope,
+            origin,
             configured_silver_schema=SCHEMAS.silver,
             configured_gold_schema=SCHEMAS.gold,
             configured_candidate_schema=SCHEMAS.gold_candidates,
@@ -1314,23 +1342,19 @@ def test_synchronized_competing_catalog_snapshots_persist_one_authorization(
         futures = [executor.submit(approve) for _ in range(2)]
         responses = [future.result() for future in futures]
 
-    assert [response.status_code for response in responses] == [200, 200]
-    assert sorted(response.json()["status"] for response in responses) == [
-        "approved",
-        "unchanged",
-    ]
-    assert len(
-        {response.json()["approved_revision"] for response in responses}
-    ) == 1
-    assert len({response.json()["approved_at"] for response in responses}) == 1
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    approved = next(response for response in responses if response.status_code == 200)
+    rejected = next(response for response in responses if response.status_code == 409)
+    assert approved.json()["status"] == "approved"
+    assert rejected.json() == {"detail": router.GOLD_SOURCE_IDENTITY_CHANGED}
     state = _load_state(run_id)
     assert state.approved_revision is not None
     assert state.approved_at is not None
     assert state.overwrite_authorized is False
     assert state.target_identity == _target_absent()
     persisted_relation_oid = state.source_identities[0]["relation_oid"]
-    assert persisted_relation_oid in {201, 999}
-    assert catalog_relation_oids == [persisted_relation_oid]
+    assert persisted_relation_oid == 201
+    assert set(catalog_relation_oids) == {201, 999}
     assert {
         snapshot.source_identities[0]["relation_oid"]
         for snapshot in snapshot_by_thread.values()

@@ -22,17 +22,20 @@ from src.gold_promotion import (
 )
 from src.gold_security import (
     build_approval_snapshot,
+    approval_authority_mac,
     canonical_json,
+    insert_gold_run_origin,
     insert_gold_security_state,
     load_persisted_gold_security_state,
     new_gold_security_record,
+    new_gold_run_origin,
     promotion_backup_name,
     revision_for,
 )
 
 
 client = TestClient(app)
-TRUSTED_PROVENANCE = "gold_promotion_test_hardened"
+TRUSTED_PROVENANCE = "manual_controlled_gold_v1"
 SCHEMAS = SimpleNamespace(
     silver="configured_silver",
     gold="configured_gold",
@@ -140,12 +143,38 @@ def _seed_promoting(
             ),
         )
         insert_gold_security_state(conn, record)
+        origin = new_gold_run_origin(
+            run_id=run_id,
+            origin_provenance=TRUSTED_PROVENANCE,
+            generator_family="structured_manual",
+            generator_model=None,
+            generation_database_identity={
+                "oid": 101,
+                "name": "isolated_promotion_database",
+            },
+            generation_source_identities=[source_identity],
+            selected_sources=[{"schema": SCHEMAS.silver, "table": "source_a"}],
+            created_at="2026-07-24T00:00:00+00:00",
+        )
+        insert_gold_run_origin(conn, origin)
+        approved_revision = revision_for(approval_snapshot)
+        approved_at = "2026-07-24T00:01:00+00:00"
+        approval_mac = approval_authority_mac(
+            run_id=run_id,
+            origin=origin["authority_package"],
+            review_revision=record["review_revision"],
+            approved_revision=approved_revision,
+            approved_at=approved_at,
+            approval_snapshot=approval_snapshot,
+        )
         conn.execute(
             """
             UPDATE gold_security_state
             SET approval_snapshot_json = ?,
                 approved_revision = ?,
                 approved_at = ?,
+                approval_mac_key_id = 'gold-authority-hmac-v1',
+                approval_mac = ?,
                 overwrite_authorized = ?,
                 source_identities_json = ?,
                 target_identity_json = ?,
@@ -156,8 +185,9 @@ def _seed_promoting(
             """,
             (
                 canonical_json(approval_snapshot),
-                revision_for(approval_snapshot),
-                "2026-07-24T00:01:00+00:00",
+                approved_revision,
+                approved_at,
+                approval_mac,
                 int(existing_target),
                 canonical_json([source_identity]),
                 canonical_json(target_identity),
@@ -202,9 +232,14 @@ def _persisted(run_id: str):
             "SELECT * FROM gold_security_state WHERE run_id = ?",
             (run_id,),
         ).fetchone()
+        origin = conn.execute(
+            "SELECT * FROM gold_run_origin WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
         return envelope, load_persisted_gold_security_state(
             security,
             envelope,
+            origin,
         )
 
 

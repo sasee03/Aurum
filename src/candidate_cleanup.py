@@ -316,8 +316,15 @@ def cleanup_orphaned_candidate_tables(age_threshold_seconds: int = 3600) -> Dict
         security_rows = conn_db.execute(
             "SELECT * FROM gold_security_state"
         ).fetchall()
+        origin_rows = conn_db.execute(
+            "SELECT * FROM gold_run_origin"
+        ).fetchall()
+        gold_origins = {row["run_id"]: dict(row) for row in origin_rows}
         gold_security_records = {
-            row["run_id"]: row
+            row["run_id"]: {
+                **dict(row),
+                "__gold_run_origin": gold_origins.get(row["run_id"]),
+            }
             for row in security_rows
         }
             

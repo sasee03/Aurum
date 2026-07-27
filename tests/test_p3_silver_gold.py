@@ -11,6 +11,7 @@ import api.silver_gold_router as router
 from api.bronze_silver_router import TRUSTED_GENERATOR_PROVENANCES
 from api.main import app
 from src.app_state.db import get_connection
+from src.gold_catalog import GoldCatalogSnapshot
 
 
 client = TestClient(app)
@@ -88,6 +89,36 @@ def test_generate_uses_controlled_trusted_path_and_loads_review(monkeypatch):
         ),
     )
     monkeypatch.setattr(router, "check_table_exists", lambda schema, table: True)
+    monkeypatch.setattr(
+        router,
+        "resolve_gold_approval_catalog",
+        lambda **kwargs: GoldCatalogSnapshot(
+            database_oid=101,
+            database_name="tenant_test_database",
+            source_identities=(
+                {
+                    "database_oid": 101,
+                    "namespace_oid": 102,
+                    "relation_oid": 103,
+                    "schema": "tenant_curated",
+                    "relation_name": "curated_input",
+                    "relation_kind": "r",
+                },
+            ),
+            target_identity={
+                "state": "absent",
+                "database_oid": 101,
+                "namespace_oid": 104,
+                "schema": "tenant_gold",
+                "relation_name": "aggregate_output",
+            },
+            candidate_namespace_identity={
+                "database_oid": 101,
+                "namespace_oid": 105,
+                "schema": "tenant_gold_candidates",
+            },
+        ),
+    )
     before = _gold_run_count()
 
     response = client.post(

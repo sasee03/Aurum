@@ -21,6 +21,7 @@ def isolated_app_state_db(tmp_path, monkeypatch):
     """Keep SQLite app state out of the repo during tests."""
     db_path = tmp_path / "app_state.sqlite"
     monkeypatch.setenv("AURUM_APP_STATE_DB", str(db_path))
+    monkeypatch.setenv("AURUM_AUTHORITY_HMAC_KEY", "test-gold-authority-key")
     yield db_path
 
 

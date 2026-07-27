@@ -16,10 +16,13 @@ from src.promotion import discard_candidate_table, resolve_relation_identity
 from src.app_state.db import get_connection, init_schema
 from src.candidate_cleanup import cleanup_orphaned_candidate_tables
 from src.gold_security import (
+    approval_authority_mac,
     approval_timestamp,
     build_approval_snapshot,
     canonical_json,
+    insert_gold_run_origin,
     insert_gold_security_state,
+    new_gold_run_origin,
     new_gold_security_record,
     revision_for,
 )
@@ -60,7 +63,7 @@ def _seed_gold_cleanup_state(
         run_id=run_id,
         sql_text=sql_text,
         business_requirement="Cleanup ownership test.",
-        generator_provenance="gold_cleanup_test",
+        generator_provenance="manual_controlled_gold_v1",
         generator_version="cleanup-v1",
         selected_sources=(
             {"schema": schemas.silver, "table": "source_a"},
@@ -119,16 +122,42 @@ def _seed_gold_cleanup_state(
                 old_time,
                 status,
                 schemas.gold_candidates,
-                "gold_cleanup_test",
+                "manual_controlled_gold_v1",
             ),
         )
         insert_gold_security_state(conn, record)
+        origin = new_gold_run_origin(
+            run_id=run_id,
+            origin_provenance="manual_controlled_gold_v1",
+            generator_family="structured_manual",
+            generator_model=None,
+            generation_database_identity={
+                "oid": 101,
+                "name": "cleanup_test_database",
+            },
+            generation_source_identities=[source_identity],
+            selected_sources=[{"schema": schemas.silver, "table": "source_a"}],
+            created_at=old_time,
+        )
+        insert_gold_run_origin(conn, origin)
+        approved_revision = revision_for(approval)
+        approved_at = approval_timestamp()
+        approval_mac = approval_authority_mac(
+            run_id=run_id,
+            origin=origin["authority_package"],
+            review_revision=record["review_revision"],
+            approved_revision=approved_revision,
+            approved_at=approved_at,
+            approval_snapshot=approval,
+        )
         conn.execute(
             """
             UPDATE gold_security_state
             SET approval_snapshot_json = ?,
                 approved_revision = ?,
                 approved_at = ?,
+                approval_mac_key_id = 'gold-authority-hmac-v1',
+                approval_mac = ?,
                 overwrite_authorized = 0,
                 source_identities_json = ?,
                 target_identity_json = ?,
@@ -142,8 +171,9 @@ def _seed_gold_cleanup_state(
             """,
             (
                 canonical_json(approval),
-                revision_for(approval),
-                approval_timestamp(),
+                approved_revision,
+                approved_at,
+                approval_mac,
                 canonical_json([source_identity]),
                 canonical_json(target_identity),
                 f"exec_{run_id}",

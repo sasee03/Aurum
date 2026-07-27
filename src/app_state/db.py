@@ -105,6 +105,8 @@ CREATE TABLE IF NOT EXISTS gold_security_state (
     approval_snapshot_json TEXT,
     approved_revision TEXT,
     approved_at TEXT,
+    approval_mac_key_id TEXT,
+    approval_mac TEXT,
     overwrite_authorized INTEGER
         CHECK (overwrite_authorized IS NULL OR overwrite_authorized IN (0, 1)),
     source_identities_json TEXT,
@@ -122,6 +124,20 @@ CREATE TABLE IF NOT EXISTS gold_security_state (
         CHECK (backup_cleanup_eligible IS NULL
                OR backup_cleanup_eligible IN (0, 1)),
     promotion_committed_at TEXT,
+    FOREIGN KEY (run_id) REFERENCES generated_sql_review(run_id)
+);
+
+CREATE TABLE IF NOT EXISTS gold_run_origin (
+    run_id TEXT PRIMARY KEY,
+    origin_provenance TEXT NOT NULL,
+    snapshot_contract_version TEXT NOT NULL,
+    generator_family TEXT NOT NULL,
+    generator_model TEXT,
+    generation_database_json TEXT NOT NULL,
+    generation_source_identities_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    mac_key_id TEXT NOT NULL,
+    origin_mac TEXT NOT NULL,
     FOREIGN KEY (run_id) REFERENCES generated_sql_review(run_id)
 );
 
@@ -415,6 +431,18 @@ def init_schema(conn: sqlite3.Connection) -> None:
         "gold_security_state",
         "promotion_committed_at",
         "promotion_committed_at TEXT",
+    )
+    _ensure_column(
+        conn,
+        "gold_security_state",
+        "approval_mac_key_id",
+        "approval_mac_key_id TEXT",
+    )
+    _ensure_column(
+        conn,
+        "gold_security_state",
+        "approval_mac",
+        "approval_mac TEXT",
     )
 
     # Migration: Backfill existing valid table_rules rows where rule_revision IS NULL

@@ -20,7 +20,13 @@ from src.gold_catalog import (
     StructuredGoldSourceCatalogSnapshot,
 )
 from src.gold_execution import GoldExecutionRejected
-from src.gold_security import canonical_json, load_gold_security_state, revision_for
+from src.gold_security import (
+    GoldStateMalformed,
+    build_approval_snapshot,
+    canonical_json,
+    load_gold_security_state,
+    revision_for,
+)
 from src.sql_safety import validate_generated_sql
 from src.structured_gold import (
     StructuredGoldDefinitionError,
@@ -656,6 +662,119 @@ def test_structured_complete_v2_snapshot_loads_successfully(structured_catalog):
     )
 
 
+def test_authenticated_origin_blocks_cross_provenance_rewrite_after_approval(
+    monkeypatch,
+    structured_catalog,
+):
+    run = _generate_for_authority_test(structured_catalog)
+    monkeypatch.setattr(
+        router,
+        "resolve_gold_approval_catalog",
+        lambda **kwargs: _approval_catalog(),
+    )
+    assert _approve(run).status_code == 200
+
+    with get_connection() as conn:
+        security = conn.execute(
+            "SELECT * FROM gold_security_state WHERE run_id = ?",
+            (run["run_id"],),
+        ).fetchone()
+        assert security is not None
+        review = json.loads(security["review_snapshot_json"])
+        review["snapshot_version"] = "gold-review-snapshot-v1"
+        review.pop("generation_database")
+        review.pop("generation_source_identities")
+        review["generator"]["provenance"] = (
+            router.MANUAL_CONTROLLED_GOLD_PROVENANCE
+        )
+        rewritten_revision = revision_for(review)
+        approval = build_approval_snapshot(
+            review_snapshot=review,
+            review_revision=rewritten_revision,
+            database_oid=101,
+            database_name="isolated_test_database",
+            source_identities=[_source_catalog().source_identity],
+            target_identity=_approval_catalog().target_identity,
+            candidate_namespace_identity=(
+                _approval_catalog().candidate_namespace_identity
+            ),
+            overwrite_authorized=False,
+        )
+        conn.execute(
+            """
+            UPDATE generated_sql_review
+            SET generator_provenance = ?
+            WHERE run_id = ?
+            """,
+            (router.MANUAL_CONTROLLED_GOLD_PROVENANCE, run["run_id"]),
+        )
+        conn.execute(
+            """
+            UPDATE gold_security_state
+            SET generator_provenance = ?, review_snapshot_json = ?,
+                review_revision = ?, approval_snapshot_json = ?,
+                approved_revision = ?
+            WHERE run_id = ?
+            """,
+            (
+                router.MANUAL_CONTROLLED_GOLD_PROVENANCE,
+                canonical_json(review),
+                rewritten_revision,
+                canonical_json(approval),
+                revision_for(approval),
+                run["run_id"],
+            ),
+        )
+        conn.commit()
+
+    response = client.post(
+        f"/api/v1/gold/execute/{run['run_id']}", json={"overwrite": False}
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": router.GOLD_RUN_MALFORMED}
+
+
+def test_origin_and_approval_mac_are_required_for_authority(
+    monkeypatch,
+    structured_catalog,
+):
+    run = _generate_for_authority_test(structured_catalog)
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE gold_run_origin SET origin_mac = ? WHERE run_id = ?",
+            ("0" * 64, run["run_id"]),
+        )
+        conn.commit()
+    assert client.get(f"/api/v1/gold/review/{run['run_id']}").status_code == 422
+
+    run = _generate_for_authority_test(structured_catalog)
+    monkeypatch.setattr(
+        router,
+        "resolve_gold_approval_catalog",
+        lambda **kwargs: _approval_catalog(),
+    )
+    assert _approve(run).status_code == 200
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE gold_security_state SET approval_mac = NULL WHERE run_id = ?",
+            (run["run_id"],),
+        )
+        conn.commit()
+    response = client.post(
+        f"/api/v1/gold/execute/{run['run_id']}", json={"overwrite": False}
+    )
+    assert response.status_code == 422
+
+
+def test_missing_authority_hmac_key_fails_gold_generation_closed(
+    monkeypatch,
+    structured_catalog,
+):
+    monkeypatch.delenv("AURUM_AUTHORITY_HMAC_KEY")
+    response = client.post("/api/v1/gold/generate-structured", json=_payload())
+    assert response.status_code == 503
+
+
 def test_structured_v1_downgrade_with_recomputed_revision_is_rejected(
     structured_catalog,
 ):
@@ -982,6 +1101,11 @@ def test_direct_definition_validation_rejects_division():
 def test_manual_controlled_route_keeps_its_original_provenance(monkeypatch):
     monkeypatch.setattr(router, "load_layer_schemas", lambda: SCHEMAS)
     monkeypatch.setattr(router, "check_table_exists", lambda schema, table: True)
+    monkeypatch.setattr(
+        router,
+        "resolve_gold_approval_catalog",
+        lambda **kwargs: _approval_catalog(),
+    )
 
     response = client.post(
         "/api/v1/gold/generate",

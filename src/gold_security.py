@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import logging
+import os
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -19,12 +22,23 @@ GOLD_BOUND_REVIEW_SNAPSHOT_VERSION = "gold-review-snapshot-v2"
 GOLD_APPROVAL_SNAPSHOT_VERSION = "gold-approval-snapshot-v1"
 GOLD_PIPELINE = "gold"
 STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE = "structured_deterministic_gold_v1"
+MANUAL_CONTROLLED_GOLD_PROVENANCE = "manual_controlled_gold_v1"
+GOLD_AUTHORITY_HMAC_ENV = "AURUM_AUTHORITY_HMAC_KEY"
+GOLD_AUTHORITY_MAC_KEY_ID = "gold-authority-hmac-v1"
+GOLD_ORIGIN_AUTHORITY_PACKAGE_VERSION = "gold-origin-authority-v1"
+GOLD_APPROVAL_AUTHORITY_PACKAGE_VERSION = "gold-approval-authority-v1"
+POSTGRES_OID_UPPER_BOUND = 2**32
+GOLD_PROVENANCE_SNAPSHOT_CONTRACTS = {
+    MANUAL_CONTROLLED_GOLD_PROVENANCE: GOLD_REVIEW_SNAPSHOT_VERSION,
+    STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE: GOLD_BOUND_REVIEW_SNAPSHOT_VERSION,
+}
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _REVISION_RE = re.compile(r"^[0-9a-f]{64}$")
 _GENERATOR_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
 _RELATION_KINDS = frozenset({"r", "p"})
 POSTGRES_IDENTIFIER_MAX_BYTES = 63
+logger = logging.getLogger(__name__)
 
 
 class GoldSecurityError(ValueError):
@@ -37,6 +51,10 @@ class GoldStateMalformed(GoldSecurityError):
 
 class GoldStateStale(GoldSecurityError):
     """The persisted review no longer describes the current logical plan."""
+
+
+class GoldAuthorityConfigurationError(GoldSecurityError):
+    """Gold authority cannot run without its configured backend HMAC key."""
 
 
 @dataclass(frozen=True)
@@ -72,6 +90,9 @@ class GoldSecurityState:
     backup_identity: dict[str, Any] | None
     backup_cleanup_eligible: bool | None
     promotion_committed_at: str | None
+    origin: dict[str, Any]
+    approval_mac_key_id: str | None
+    approval_mac: str | None
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -151,7 +172,11 @@ def _require_generator_token(value: Any, *, field: str) -> str:
 
 
 def _require_oid(value: Any, *, field: str) -> int:
-    if type(value) is not int or value <= 0:
+    if (
+        type(value) is not int
+        or value <= 0
+        or value >= POSTGRES_OID_UPPER_BOUND
+    ):
         raise GoldStateMalformed(f"{field} is not a valid PostgreSQL OID")
     return value
 
@@ -436,14 +461,12 @@ def _validate_review_snapshot_provenance(
     provenance: str,
     review_snapshot: Mapping[str, Any],
 ) -> None:
-    """Bind Structured Gold state to the identity-bearing review snapshot."""
-    if (
-        provenance == STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE
-        and review_snapshot["snapshot_version"] != GOLD_BOUND_REVIEW_SNAPSHOT_VERSION
-    ):
-        raise GoldStateMalformed(
-            "Structured Gold requires the identity-bound review snapshot v2"
-        )
+    """Fail closed on unsupported provenance or review snapshot contracts."""
+    expected_version = GOLD_PROVENANCE_SNAPSHOT_CONTRACTS.get(provenance)
+    if expected_version is None:
+        raise GoldStateMalformed("Gold provenance is unsupported")
+    if review_snapshot["snapshot_version"] != expected_version:
+        raise GoldStateMalformed("Gold provenance and review snapshot disagree")
 
 
 def new_gold_security_record(
@@ -582,6 +605,272 @@ def _parse_source_identities(
     ):
         raise GoldStateMalformed("source database identity is inconsistent")
     return parsed
+
+
+def _authority_key() -> bytes:
+    value = os.environ.get(GOLD_AUTHORITY_HMAC_ENV)
+    if not isinstance(value, str) or not value:
+        raise GoldAuthorityConfigurationError(
+            "Gold authority HMAC key is not configured"
+        )
+    return value.encode("utf-8")
+
+
+def _authority_mac(package: Mapping[str, Any]) -> str:
+    return hmac.new(
+        _authority_key(),
+        canonical_json(package).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _verify_authority_mac(
+    *,
+    package: Mapping[str, Any],
+    mac_key_id: Any,
+    mac: Any,
+    field: str,
+) -> None:
+    if mac_key_id != GOLD_AUTHORITY_MAC_KEY_ID:
+        raise GoldStateMalformed(f"{field} has an unsupported key id")
+    if not isinstance(mac, str) or not re.fullmatch(r"[0-9a-f]{64}", mac):
+        raise GoldStateMalformed(f"{field} is malformed")
+    if not hmac.compare_digest(_authority_mac(package), mac):
+        raise GoldStateMalformed(f"{field} does not verify")
+
+
+def _parse_authority_timestamp(value: Any, *, field: str) -> str:
+    value = _require_nonempty_string(value, field=field)
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise GoldStateMalformed(f"{field} is not an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise GoldStateMalformed(f"{field} must include a timezone")
+    return value
+
+
+def _origin_authority_package(
+    *,
+    run_id: str,
+    origin_provenance: str,
+    snapshot_contract_version: str,
+    generator_family: str,
+    generator_model: str | None,
+    generation_database: Mapping[str, Any],
+    generation_source_identities: Sequence[Mapping[str, Any]],
+    created_at: str,
+) -> dict[str, Any]:
+    return {
+        "package_version": GOLD_ORIGIN_AUTHORITY_PACKAGE_VERSION,
+        "run_id": run_id,
+        "origin_provenance": origin_provenance,
+        "snapshot_contract_version": snapshot_contract_version,
+        "generator_family": generator_family,
+        "generator_model": generator_model,
+        "generation_database": dict(generation_database),
+        "generation_source_identities": [
+            dict(item) for item in generation_source_identities
+        ],
+        "created_at": created_at,
+    }
+
+
+def new_gold_run_origin(
+    *,
+    run_id: str,
+    origin_provenance: str,
+    generator_family: str,
+    generator_model: str | None,
+    generation_database_identity: Mapping[str, Any],
+    generation_source_identities: Sequence[Mapping[str, Any]],
+    selected_sources: Sequence[Mapping[str, str]],
+    created_at: str,
+) -> dict[str, Any]:
+    run_id = _require_identifier(run_id, field="origin.run_id")
+    origin_provenance = _require_generator_token(
+        origin_provenance, field="origin.origin_provenance"
+    )
+    snapshot_contract_version = GOLD_PROVENANCE_SNAPSHOT_CONTRACTS.get(
+        origin_provenance
+    )
+    if snapshot_contract_version is None:
+        raise GoldStateMalformed("origin provenance is unsupported")
+    if generator_family not in {"structured_manual", "openai"}:
+        raise GoldStateMalformed("origin generator family is unsupported")
+    if generator_model is not None:
+        generator_model = _require_generator_token(
+            generator_model, field="origin.generator_model"
+        )
+    database = _require_exact_keys(
+        dict(generation_database_identity),
+        {"oid", "name"},
+        field="origin generation database",
+    )
+    database = {
+        "oid": _require_oid(database["oid"], field="origin database.oid"),
+        "name": _require_nonempty_string(
+            database["name"], field="origin database.name"
+        ),
+    }
+    sources = _parse_source_identities(
+        list(generation_source_identities),
+        selected_sources=selected_sources,
+        database_oid=database["oid"],
+    )
+    created_at = _parse_authority_timestamp(created_at, field="origin.created_at")
+    package = _origin_authority_package(
+        run_id=run_id,
+        origin_provenance=origin_provenance,
+        snapshot_contract_version=snapshot_contract_version,
+        generator_family=generator_family,
+        generator_model=generator_model,
+        generation_database=database,
+        generation_source_identities=sources,
+        created_at=created_at,
+    )
+    return {
+        "run_id": run_id,
+        "origin_provenance": origin_provenance,
+        "snapshot_contract_version": snapshot_contract_version,
+        "generator_family": generator_family,
+        "generator_model": generator_model,
+        "generation_database_json": canonical_json(database),
+        "generation_source_identities_json": canonical_json(list(sources)),
+        "created_at": created_at,
+        "mac_key_id": GOLD_AUTHORITY_MAC_KEY_ID,
+        "origin_mac": _authority_mac(package),
+        "authority_package": package,
+    }
+
+
+def insert_gold_run_origin(conn: sqlite3.Connection, record: Mapping[str, Any]) -> None:
+    conn.execute(
+        """
+        INSERT INTO gold_run_origin (
+            run_id, origin_provenance, snapshot_contract_version,
+            generator_family, generator_model, generation_database_json,
+            generation_source_identities_json, created_at, mac_key_id, origin_mac
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        tuple(
+            record[key]
+            for key in (
+                "run_id", "origin_provenance", "snapshot_contract_version",
+                "generator_family", "generator_model", "generation_database_json",
+                "generation_source_identities_json", "created_at", "mac_key_id",
+                "origin_mac",
+            )
+        ),
+    )
+
+
+def _parse_gold_run_origin(
+    origin_row: Mapping[str, Any] | None,
+    *,
+    run_id: str,
+    provenance: str,
+    review_snapshot: Mapping[str, Any],
+    selected_sources: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    if origin_row is None:
+        raise GoldStateMalformed("Gold run has no authenticated origin")
+    origin_run_id = _require_identifier(
+        _row_value(origin_row, "run_id"), field="origin.run_id"
+    )
+    origin_provenance = _require_generator_token(
+        _row_value(origin_row, "origin_provenance"),
+        field="origin.origin_provenance",
+    )
+    expected_contract = GOLD_PROVENANCE_SNAPSHOT_CONTRACTS.get(origin_provenance)
+    if expected_contract is None:
+        raise GoldStateMalformed("origin provenance is unsupported")
+    contract = _row_value(origin_row, "snapshot_contract_version")
+    if contract != expected_contract:
+        raise GoldStateMalformed("origin snapshot contract is invalid")
+    generator_family = _row_value(origin_row, "generator_family")
+    if generator_family not in {"structured_manual", "openai"}:
+        raise GoldStateMalformed("origin generator family is unsupported")
+    generator_model = _row_value(origin_row, "generator_model")
+    if generator_model is not None:
+        generator_model = _require_generator_token(
+            generator_model, field="origin.generator_model"
+        )
+    database_raw = strict_json_loads(
+        _row_value(origin_row, "generation_database_json"),
+        field="origin.generation_database_json",
+    )
+    database = _require_exact_keys(
+        database_raw, {"oid", "name"}, field="origin generation database"
+    )
+    database = {
+        "oid": _require_oid(database["oid"], field="origin database.oid"),
+        "name": _require_nonempty_string(
+            database["name"], field="origin database.name"
+        ),
+    }
+    sources = _parse_source_identities(
+        strict_json_loads(
+            _row_value(origin_row, "generation_source_identities_json"),
+            field="origin.generation_source_identities_json",
+        ),
+        selected_sources=selected_sources,
+        database_oid=database["oid"],
+    )
+    created_at = _parse_authority_timestamp(
+        _row_value(origin_row, "created_at"), field="origin.created_at"
+    )
+    package = _origin_authority_package(
+        run_id=origin_run_id,
+        origin_provenance=origin_provenance,
+        snapshot_contract_version=contract,
+        generator_family=generator_family,
+        generator_model=generator_model,
+        generation_database=database,
+        generation_source_identities=sources,
+        created_at=created_at,
+    )
+    _verify_authority_mac(
+        package=package,
+        mac_key_id=_row_value(origin_row, "mac_key_id"),
+        mac=_row_value(origin_row, "origin_mac"),
+        field="origin MAC",
+    )
+    if origin_run_id != run_id or origin_provenance != provenance:
+        raise GoldStateMalformed("mutable Gold state disagrees with origin")
+    if review_snapshot["snapshot_version"] != contract:
+        raise GoldStateMalformed("review snapshot disagrees with origin")
+    if contract == GOLD_BOUND_REVIEW_SNAPSHOT_VERSION and (
+        review_snapshot["generation_database"] != database
+        or tuple(review_snapshot["generation_source_identities"]) != sources
+    ):
+        raise GoldStateMalformed("Structured review identity disagrees with origin")
+    return package
+
+
+def approval_authority_package(
+    *,
+    run_id: str,
+    origin: Mapping[str, Any],
+    review_revision: str,
+    approved_revision: str,
+    approved_at: str,
+    approval_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "package_version": GOLD_APPROVAL_AUTHORITY_PACKAGE_VERSION,
+        "mac_key_id": GOLD_AUTHORITY_MAC_KEY_ID,
+        "run_id": run_id,
+        "origin": dict(origin),
+        "review_revision": review_revision,
+        "approved_revision": approved_revision,
+        "approved_at": approved_at,
+        "approval_snapshot": dict(approval_snapshot),
+    }
+
+
+def approval_authority_mac(**kwargs: Any) -> str:
+    return _authority_mac(approval_authority_package(**kwargs))
 
 
 def _parse_target_identity(
@@ -797,6 +1086,7 @@ def _row_value(row: Mapping[str, Any], key: str) -> Any:
 def load_gold_security_state(
     security_row: Mapping[str, Any] | None,
     envelope_row: Mapping[str, Any],
+    origin_row: Mapping[str, Any] | None = None,
     *,
     configured_silver_schema: str,
     configured_gold_schema: str,
@@ -805,6 +1095,8 @@ def load_gold_security_state(
     """Strictly decode state and prove it still matches its shared run envelope."""
     if security_row is None:
         raise GoldStateMalformed("Gold run has no companion security state")
+    if origin_row is None:
+        origin_row = _row_value(security_row, "__gold_run_origin")
     run_id = _require_identifier(_row_value(security_row, "run_id"), field="run_id")
     model_version = _row_value(security_row, "model_version")
     policy_version = _row_value(security_row, "policy_version")
@@ -891,6 +1183,13 @@ def load_gold_security_state(
     )
     if any(item["schema"] != configured_silver_schema for item in selected_sources):
         raise GoldStateStale("configured Silver schema changed after review")
+    origin = _parse_gold_run_origin(
+        origin_row,
+        run_id=run_id,
+        provenance=provenance,
+        review_snapshot=review_snapshot,
+        selected_sources=selected_sources,
+    )
     generation_database_identity = (
         dict(review_snapshot["generation_database"])
         if "generation_database" in review_snapshot
@@ -934,6 +1233,8 @@ def load_gold_security_state(
         "overwrite_authorized": _row_value(security_row, "overwrite_authorized"),
         "source_identities_json": _row_value(security_row, "source_identities_json"),
         "target_identity_json": _row_value(security_row, "target_identity_json"),
+        "approval_mac_key_id": _row_value(security_row, "approval_mac_key_id"),
+        "approval_mac": _row_value(security_row, "approval_mac"),
     }
     present = {key: value is not None for key, value in approval_values.items()}
     if any(present.values()) and not all(present.values()):
@@ -971,6 +1272,9 @@ def load_gold_security_state(
         backup_identity=None,
         backup_cleanup_eligible=None,
         promotion_committed_at=None,
+        origin=origin,
+        approval_mac_key_id=None,
+        approval_mac=None,
     )
     if not any(present.values()):
         if _row_value(envelope_row, "status") != "PENDING":
@@ -1069,11 +1373,27 @@ def load_gold_security_state(
     ]
     if overwrite_authorized != parsed_approval["overwrite_authorized"]:
         raise GoldStateMalformed("captured overwrite authorization is inconsistent")
+    approval_package = approval_authority_package(
+        run_id=run_id,
+        origin=origin,
+        review_revision=review_revision,
+        approved_revision=approved_revision,
+        approved_at=approved_at,
+        approval_snapshot=parsed_approval,
+    )
+    _verify_authority_mac(
+        package=approval_package,
+        mac_key_id=approval_values["approval_mac_key_id"],
+        mac=approval_values["approval_mac"],
+        field="approval MAC",
+    )
     approved_state = GoldSecurityState(
         **{
             **approved_state.__dict__,
             "approval_snapshot": parsed_approval,
             "candidate_namespace_identity": candidate_namespace_identity,
+            "approval_mac_key_id": approval_values["approval_mac_key_id"],
+            "approval_mac": approval_values["approval_mac"],
         }
     )
     execution_claim_id = _row_value(security_row, "execution_claim_id")
@@ -1395,6 +1715,7 @@ def load_gold_security_state(
 def load_persisted_gold_security_state(
     security_row: Mapping[str, Any] | None,
     envelope_row: Mapping[str, Any],
+    origin_row: Mapping[str, Any] | None = None,
 ) -> GoldSecurityState:
     """Strictly validate immutable state without consulting current layer config.
 
@@ -1414,6 +1735,7 @@ def load_persisted_gold_security_state(
     return load_gold_security_state(
         security_row,
         envelope_row,
+        origin_row,
         configured_silver_schema=selected_sources[0]["schema"],
         configured_gold_schema=_row_value(security_row, "target_schema"),
         configured_candidate_schema=_row_value(

@@ -29,16 +29,20 @@ from src.gold_catalog import (
     resolve_structured_gold_source,
 )
 from src.gold_security import (
+    GoldAuthorityConfigurationError,
     GoldStateMalformed,
     GoldStateStale,
+    approval_authority_mac,
     approval_timestamp,
     build_approval_snapshot,
     canonical_json,
     load_gold_security_state,
     load_persisted_gold_security_state,
     new_gold_security_record,
+    insert_gold_run_origin,
     insert_gold_security_state,
     revision_for,
+    new_gold_run_origin,
 )
 from src.gold_execution import (
     GOLD_CANDIDATE_CONFLICT,
@@ -102,6 +106,15 @@ GOLD_APPROVAL_REQUIRED = "GOLD_APPROVAL_REQUIRED"
 GOLD_APPROVAL_STALE = "GOLD_APPROVAL_STALE"
 GOLD_STATE_CONFLICT = "GOLD_STATE_CONFLICT"
 GOLD_RECONCILIATION_REQUIRED = "GOLD_RECONCILIATION_REQUIRED"
+
+
+def _log_gold_authority_failure(run_id: str, stage: str, event: str) -> None:
+    logger.warning(
+        "gold_authority_event event=%s run_id=%s stage=%s",
+        event,
+        run_id,
+        stage,
+    )
 
 class GenerateGoldPayload(BaseModel):
     target_table_name: str
@@ -351,6 +364,8 @@ def _persist_gold_proposal(
     candidate_schema: str,
     generation_database_identity: dict | None = None,
     generation_source_identities: list[dict] | None = None,
+    origin_database_identity: dict | None = None,
+    origin_source_identities: list[dict] | None = None,
 ) -> dict:
     """Persist the existing review envelope and Gold security companion state."""
     try:
@@ -367,6 +382,8 @@ def _persist_gold_proposal(
             generation_database_identity=generation_database_identity,
             generation_source_identities=generation_source_identities,
         )
+    except GoldAuthorityConfigurationError:
+        raise HTTPException(status_code=503, detail=GOLD_UNAVAILABLE) from None
     except Exception as exc:
         logger.exception("Failed to build Gold security record")
         raise HTTPException(
@@ -375,6 +392,25 @@ def _persist_gold_proposal(
         ) from None
 
     created_at = approval_timestamp()
+    try:
+        origin_record = new_gold_run_origin(
+            run_id=run_id,
+            origin_provenance=provenance,
+            generator_family="structured_manual",
+            generator_model=None,
+            generation_database_identity=(
+                origin_database_identity or generation_database_identity or {}
+            ),
+            generation_source_identities=(
+                origin_source_identities or generation_source_identities or []
+            ),
+            selected_sources=selected_sources,
+            created_at=created_at,
+        )
+    except GoldAuthorityConfigurationError:
+        raise HTTPException(status_code=503, detail=GOLD_UNAVAILABLE) from None
+    except GoldStateMalformed:
+        raise HTTPException(status_code=422, detail=GOLD_RUN_MALFORMED) from None
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
@@ -397,6 +433,7 @@ def _persist_gold_proposal(
             ),
         )
         insert_gold_security_state(conn, security_record)
+        insert_gold_run_origin(conn, origin_record)
         conn.commit()
 
     return {
@@ -451,6 +488,18 @@ def generate_gold_sql(payload: GenerateGoldPayload):
         "target": target_name,
         "business_requirement": payload.business_requirement,
     }
+    try:
+        generation_catalog = resolve_gold_approval_catalog(
+            selected_sources=selected_sources,
+            target={"schema": schemas.gold, "table": target_name},
+            candidate={"schema": candidate_schema, "table": candidate_name},
+        )
+    except GoldCatalogResolutionError as exc:
+        status_code = 404 if exc.area == "source" else 503
+        raise HTTPException(status_code=status_code, detail=GOLD_GENERATION_UNAVAILABLE) from None
+    except Exception:
+        logger.exception("Controlled Gold generation catalog resolution failed")
+        raise HTTPException(status_code=503, detail=GOLD_GENERATION_UNAVAILABLE) from None
 
     return _persist_gold_proposal(
         run_id=run_id,
@@ -465,6 +514,11 @@ def generate_gold_sql(payload: GenerateGoldPayload):
         selected_sources=selected_sources,
         target_schema=schemas.gold,
         candidate_schema=candidate_schema,
+        origin_database_identity={
+            "oid": generation_catalog.database_oid,
+            "name": generation_catalog.database_name,
+        },
+        origin_source_identities=list(generation_catalog.source_identities),
     )
 
 
@@ -599,19 +653,7 @@ def generate_structured_gold_sql(payload: GenerateStructuredGoldPayload):
 def review_gold_sql(run_id: str):
     """Review only runs produced by a trusted, hardened Gold generator."""
     with get_connection() as conn:
-        row = conn.execute(
-            """
-            SELECT run_id, table_name, sql_text, planned_changes_json,
-                   status, candidate_schema, generator_provenance
-            FROM generated_sql_review
-            WHERE run_id = ?
-            """,
-            (run_id,)
-        ).fetchone()
-        security_row = conn.execute(
-            "SELECT * FROM gold_security_state WHERE run_id = ?",
-            (run_id,),
-        ).fetchone()
+        row, security_row = _load_gold_rows(conn, run_id)
         
     if not row:
         raise HTTPException(status_code=404, detail="Run ID not found.")
@@ -630,7 +672,11 @@ def review_gold_sql(run_id: str):
         )
         validated_sql = validate_approved_gold_sql(state, row["sql_text"])
         planned_changes = json.loads(row["planned_changes_json"])
+    except GoldAuthorityConfigurationError:
+        _log_gold_authority_failure(run_id, "review", "authority_key_missing")
+        raise HTTPException(status_code=503, detail=GOLD_UNAVAILABLE) from None
     except (GoldStateMalformed, GoldStateStale, TypeError, ValueError):
+        _log_gold_authority_failure(run_id, "review", "persisted_authority_invalid")
         raise HTTPException(status_code=422, detail=GOLD_RUN_MALFORMED) from None
     except Exception:
         logger.exception("Gold review validation failed for run %s", run_id)
@@ -670,6 +716,15 @@ def _load_gold_rows(conn, run_id: str):
         "SELECT * FROM gold_security_state WHERE run_id = ?",
         (run_id,),
     ).fetchone()
+    origin = conn.execute(
+        "SELECT * FROM gold_run_origin WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    if security is not None:
+        security = {
+            **dict(security),
+            "__gold_run_origin": dict(origin) if origin is not None else None,
+        }
     return envelope, security
 
 
@@ -747,12 +802,16 @@ def approve_gold_sql(run_id: str, payload: ApproveGoldPayload):
                     configured_gold_schema=schemas.gold,
                     configured_candidate_schema=schemas.gold_candidates,
                 )
+            except GoldAuthorityConfigurationError:
+                _log_gold_authority_failure(run_id, "approval", "authority_key_missing")
+                raise HTTPException(status_code=503, detail=GOLD_UNAVAILABLE) from None
             except GoldStateStale:
                 raise HTTPException(
                     status_code=409,
                     detail=GOLD_APPROVAL_STALE,
                 ) from None
             except GoldStateMalformed:
+                _log_gold_authority_failure(run_id, "approval", "persisted_authority_invalid")
                 raise HTTPException(
                     status_code=422,
                     detail=GOLD_RUN_MALFORMED,
@@ -829,6 +888,23 @@ def approve_gold_sql(run_id: str, payload: ApproveGoldPayload):
                     detail=GOLD_SOURCE_IDENTITY_CHANGED,
                 )
 
+            origin_database = state.origin["generation_database"]
+            origin_sources = tuple(state.origin["generation_source_identities"])
+            if (
+                catalog.database_oid != origin_database["oid"]
+                or catalog.database_name != origin_database["name"]
+                or tuple(catalog.source_identities) != origin_sources
+            ):
+                _log_gold_authority_failure(
+                    run_id,
+                    "approval",
+                    "origin_source_identity_mismatch",
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail=GOLD_SOURCE_IDENTITY_CHANGED,
+                )
+
             target_state = catalog.target_identity.get("state")
             if (
                 target_state == "existing" and not payload.overwrite
@@ -857,12 +933,28 @@ def approve_gold_sql(run_id: str, payload: ApproveGoldPayload):
 
             approved_revision = revision_for(approval_snapshot)
             approved_at = approval_timestamp()
+            try:
+                approval_mac = approval_authority_mac(
+                    run_id=run_id,
+                    origin=state.origin,
+                    review_revision=state.review_revision,
+                    approved_revision=approved_revision,
+                    approved_at=approved_at,
+                    approval_snapshot=approval_snapshot,
+                )
+            except GoldAuthorityConfigurationError:
+                raise HTTPException(
+                    status_code=503,
+                    detail=GOLD_UNAVAILABLE,
+                ) from None
             cursor = conn.execute(
                 """
                 UPDATE gold_security_state
                 SET approval_snapshot_json = ?,
                     approved_revision = ?,
                     approved_at = ?,
+                    approval_mac_key_id = 'gold-authority-hmac-v1',
+                    approval_mac = ?,
                     overwrite_authorized = ?,
                     source_identities_json = ?,
                     target_identity_json = ?
@@ -874,6 +966,7 @@ def approve_gold_sql(run_id: str, payload: ApproveGoldPayload):
                     canonical_json(approval_snapshot),
                     approved_revision,
                     approved_at,
+                    approval_mac,
                     int(payload.overwrite),
                     canonical_json(list(catalog.source_identities)),
                     canonical_json(catalog.target_identity),
@@ -883,10 +976,7 @@ def approve_gold_sql(run_id: str, payload: ApproveGoldPayload):
             )
             if cursor.rowcount != 1:
                 raise HTTPException(status_code=409, detail=GOLD_STATE_CONFLICT)
-            refreshed_security = conn.execute(
-                "SELECT * FROM gold_security_state WHERE run_id = ?",
-                (run_id,),
-            ).fetchone()
+            _refreshed_row, refreshed_security = _load_gold_rows(conn, run_id)
             approved_state = load_gold_security_state(
                 refreshed_security,
                 row,
@@ -937,12 +1027,19 @@ def execute_gold_sql(run_id: str, payload: ExecuteGoldPayload):
                     configured_gold_schema=schemas.gold,
                     configured_candidate_schema=schemas.gold_candidates,
                 )
+            except GoldAuthorityConfigurationError:
+                _log_gold_authority_failure(run_id, "execution", "authority_key_missing")
+                raise HTTPException(
+                    status_code=503,
+                    detail=GOLD_UNAVAILABLE,
+                ) from None
             except GoldStateStale:
                 raise HTTPException(
                     status_code=409,
                     detail=GOLD_APPROVAL_STALE,
                 ) from None
             except GoldStateMalformed:
+                _log_gold_authority_failure(run_id, "execution", "persisted_authority_invalid")
                 raise HTTPException(
                     status_code=422,
                     detail=GOLD_RUN_MALFORMED,
@@ -1538,7 +1635,14 @@ def promote_gold_sql(run_id: str):
                     security_row,
                     row,
                 )
+            except GoldAuthorityConfigurationError:
+                _log_gold_authority_failure(run_id, "promotion", "authority_key_missing")
+                raise HTTPException(
+                    status_code=503,
+                    detail=GOLD_UNAVAILABLE,
+                ) from None
             except (GoldStateMalformed, GoldStateStale):
+                _log_gold_authority_failure(run_id, "promotion", "persisted_authority_invalid")
                 raise HTTPException(
                     status_code=422,
                     detail=GOLD_RUN_MALFORMED,
@@ -1600,10 +1704,9 @@ def promote_gold_sql(run_id: str):
                         status_code=409,
                         detail=GOLD_STATE_CONFLICT,
                     )
-                refreshed_security = conn.execute(
-                    "SELECT * FROM gold_security_state WHERE run_id = ?",
-                    (run_id,),
-                ).fetchone()
+                _refreshed_row, refreshed_security = _load_gold_rows(
+                    conn, run_id
+                )
                 claimed_state = load_persisted_gold_security_state(
                     refreshed_security,
                     row,
