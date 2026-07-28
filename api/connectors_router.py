@@ -30,6 +30,7 @@ from src.bronze_authority import (
     claim_bronze_ingest_operation,
     finalize_bronze_ingest_ready,
     find_ready_bronze_authority,
+    load_bronze_authority,
     mark_bronze_ingest_commit_in_progress,
     mark_bronze_ingest_creating,
     mark_bronze_ingest_outcome,
@@ -407,6 +408,112 @@ def _connector_bronze_result(
     }
 
 
+def _find_ready_connector_bronze_authority(
+    *,
+    connection_id: str,
+    database_oid: int,
+    source: dict[str, str],
+) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM bronze_ingest_authority
+            WHERE connection_id = ?
+              AND source_schema = ?
+              AND source_relation = ?
+              AND status = 'READY'
+            ORDER BY created_at DESC, ingest_id DESC
+            """,
+            (connection_id, source["schema"], source["table"]),
+        ).fetchall()
+
+    matching_database: list[dict[str, Any]] = []
+    mismatched_database: list[dict[str, Any]] = []
+    for row in rows:
+        authority = load_bronze_authority(row)
+        if authority["source_identity"]["database_oid"] == database_oid:
+            matching_database.append(authority)
+        else:
+            mismatched_database.append(authority)
+
+    if len(matching_database) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "connector_bronze_authority_ambiguous",
+                "message": (
+                    f"Multiple READY Bronze authorities match source "
+                    f"'{source['schema']}.{source['table']}' for this connector session."
+                ),
+                "source": source,
+            },
+        )
+    if matching_database:
+        return matching_database[0]
+    if mismatched_database:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "connector_bronze_database_mismatch",
+                "message": (
+                    f"READY Bronze authority for source "
+                    f"'{source['schema']}.{source['table']}' belongs to a different "
+                    "database identity than the active connector session."
+                ),
+                "source": source,
+            },
+        )
+    return None
+
+
+def _assert_relation_identity_matches(
+    current: dict[str, Any] | None,
+    expected: dict[str, Any],
+    *,
+    missing_error: str,
+    changed_error: str,
+    message: str,
+    relation: dict[str, str],
+) -> None:
+    if current is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": missing_error,
+                "message": message,
+                "relation": relation,
+            },
+        )
+    for key in (
+        "database_oid",
+        "namespace_oid",
+        "relation_oid",
+        "schema",
+        "relation_name",
+        "relation_kind",
+    ):
+        if current.get(key) != expected[key]:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": changed_error,
+                    "message": message,
+                    "relation": relation,
+                },
+            )
+
+
+def _count_relation_rows(conn: Any, *, schema_name: str, table_name: str) -> int:
+    with conn.cursor() as cur:
+        qualified = sql.SQL("{}.{}").format(
+            sql.Identifier(schema_name),
+            sql.Identifier(table_name),
+        )
+        cur.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(qualified))
+        return int(cur.fetchone()[0])
+
+
 @router.post("/connectors/postgres/test")
 def test_postgres_connector(body: PostgresTestRequest) -> dict:
     """Test a user-supplied Postgres target. Never echoes the password."""
@@ -706,6 +813,152 @@ def ingest_connector_relations_to_bronze(body: ConnectorBronzeIngestRequest) -> 
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "error": "connector_bronze_ingest_failed",
+                "message": classify_connect_error(exc),
+            },
+        ) from None
+
+    return {"connection_id": session.connection_id, "results": results}
+
+
+@router.post("/connectors/postgres/bronze/verify")
+def verify_connector_relations_in_bronze(body: ConnectorBronzeIngestRequest) -> dict:
+    """Verify exact connector-bound Bronze authority without configured-source fallback."""
+    session = get_session_connection(body.connection_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "connection_not_found",
+                "message": (
+                    "Connection session expired or unknown. "
+                    "Re-test the connection (password is not persisted)."
+                ),
+            },
+        )
+
+    relations = [_relation_payload(relation) for relation in body.relations]
+    source_keys = [(relation["schema"], relation["table"]) for relation in relations]
+    if len(set(source_keys)) != len(source_keys):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "duplicate_source_relation",
+                "message": "Each connector-bound Bronze source relation must be unique.",
+            },
+        )
+
+    results: list[dict[str, Any]] = []
+    try:
+        with open_session_connection(session) as conn:
+            database_oid, _database_name = _database_identity(conn)
+            for relation in relations:
+                try:
+                    authority = _find_ready_connector_bronze_authority(
+                        connection_id=session.connection_id,
+                        database_oid=database_oid,
+                        source=relation,
+                    )
+                except BronzeAuthorityError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "connector_bronze_authority_invalid",
+                            "message": str(exc),
+                            "source": relation,
+                        },
+                    ) from None
+                if authority is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={
+                            "error": "connector_bronze_authority_not_found",
+                            "message": (
+                                f"No READY connector-bound Bronze authority exists for "
+                                f"source '{relation['schema']}.{relation['table']}'."
+                            ),
+                            "source": relation,
+                        },
+                    )
+
+                source_relation = {
+                    "schema": authority["source_schema"],
+                    "table": authority["source_relation"],
+                }
+                bronze_relation = {
+                    "schema": authority["bronze_schema"],
+                    "table": authority["bronze_relation"],
+                }
+                try:
+                    source_identity = resolve_relation_identity(
+                        conn,
+                        authority["source_schema"],
+                        authority["source_relation"],
+                    )
+                    bronze_identity = resolve_relation_identity(
+                        conn,
+                        authority["bronze_schema"],
+                        authority["bronze_relation"],
+                    )
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail={
+                            "error": "connector_bronze_identity_unresolved",
+                            "message": classify_connect_error(exc),
+                            "source": source_relation,
+                            "bronze": bronze_relation,
+                        },
+                    ) from None
+
+                _assert_relation_identity_matches(
+                    source_identity,
+                    authority["source_identity"],
+                    missing_error="source_identity_missing",
+                    changed_error="source_identity_changed",
+                    message=(
+                        "The recorded connector source relation is missing or "
+                        "its physical identity changed."
+                    ),
+                    relation=source_relation,
+                )
+                _assert_relation_identity_matches(
+                    bronze_identity,
+                    authority["bronze_identity"],
+                    missing_error="bronze_target_missing",
+                    changed_error="bronze_identity_changed",
+                    message=(
+                        "The recorded Bronze target is missing or its physical "
+                        "identity changed."
+                    ),
+                    relation=bronze_relation,
+                )
+
+                source_row_count = _count_relation_rows(
+                    conn,
+                    schema_name=authority["source_schema"],
+                    table_name=authority["source_relation"],
+                )
+                bronze_row_count = _count_relation_rows(
+                    conn,
+                    schema_name=authority["bronze_schema"],
+                    table_name=authority["bronze_relation"],
+                )
+                results.append(
+                    _connector_bronze_result(
+                        connection_id=session.connection_id,
+                        authority=authority,
+                        source_row_count=source_row_count,
+                        bronze_row_count=bronze_row_count,
+                        match=source_row_count == bronze_row_count,
+                    )
+                )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "connector_bronze_verify_failed",
                 "message": classify_connect_error(exc),
             },
         ) from None

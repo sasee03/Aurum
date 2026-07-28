@@ -786,7 +786,16 @@ def _connector_bronze_session(password: str = "aurum") -> str:
 
 def _patch_connector_bronze_happy_path(monkeypatch, *, source_schema: str, source_table: str):
     fake_conn = _FakeConnectorConn()
-    copied: dict = {}
+    state = {
+        "bronze_exists": False,
+        "source_database_oid": 101,
+        "source_namespace_oid": 201,
+        "source_relation_oid": 301,
+        "bronze_database_oid": 101,
+        "bronze_namespace_oid": 202,
+        "bronze_relation_oid": 302,
+    }
+    copied: dict = {"_state": state}
 
     def fake_list_user_tables(_conn, schema=None):
         if schema == source_schema:
@@ -799,8 +808,17 @@ def _patch_connector_bronze_happy_path(monkeypatch, *, source_schema: str, sourc
     def fake_resolve(_conn, schema, table):
         if schema == source_schema and table == source_table:
             return _identity(
-                namespace_oid=201,
-                relation_oid=301,
+                database_oid=state["source_database_oid"],
+                namespace_oid=state["source_namespace_oid"],
+                relation_oid=state["source_relation_oid"],
+                schema=schema,
+                table=table,
+            )
+        if schema == "bronze" and table == source_table and state["bronze_exists"]:
+            return _identity(
+                database_oid=state["bronze_database_oid"],
+                namespace_oid=state["bronze_namespace_oid"],
+                relation_oid=state["bronze_relation_oid"],
                 schema=schema,
                 table=table,
             )
@@ -808,13 +826,15 @@ def _patch_connector_bronze_happy_path(monkeypatch, *, source_schema: str, sourc
 
     def fake_copy(_conn, **kwargs):
         copied.update(kwargs)
+        state["bronze_exists"] = True
         return {
             "source_row_count": 3,
             "bronze_row_count": 3,
             "match": True,
             "bronze_identity": _identity(
-                namespace_oid=202,
-                relation_oid=302,
+                database_oid=state["bronze_database_oid"],
+                namespace_oid=state["bronze_namespace_oid"],
+                relation_oid=state["bronze_relation_oid"],
                 schema=kwargs["bronze_schema"],
                 table=kwargs["bronze_table"],
             ),
@@ -830,6 +850,24 @@ def _patch_connector_bronze_happy_path(monkeypatch, *, source_schema: str, sourc
     monkeypatch.setattr("api.connectors_router.resolve_relation_identity", fake_resolve)
     monkeypatch.setattr("api.connectors_router._copy_relation_to_bronze", fake_copy)
     return copied
+
+
+def _patch_connector_bronze_verify_counts(
+    monkeypatch,
+    *,
+    source_rows: int = 3,
+    bronze_rows: int = 3,
+):
+    counted = []
+
+    def fake_count(_conn, *, schema_name: str, table_name: str):
+        counted.append((schema_name, table_name))
+        if schema_name == "bronze":
+            return bronze_rows
+        return source_rows
+
+    monkeypatch.setattr("api.connectors_router._count_relation_rows", fake_count)
+    return counted
 
 
 def test_connector_bound_bronze_ingests_exact_selected_relation(client, monkeypatch):
@@ -997,6 +1035,351 @@ def test_connector_bound_bronze_rejects_same_table_two_schema_target_collision(c
 
     assert response.status_code == 409
     assert response.json()["detail"]["error"] == "bronze_target_name_collision"
+
+
+def test_connector_bound_bronze_verify_uses_recorded_exact_source(client, monkeypatch):
+    connection_id = _connector_bronze_session(password="secret-never-return")
+    _patch_connector_bronze_happy_path(
+        monkeypatch,
+        source_schema="schema_b",
+        source_table="orders",
+    )
+    counted = _patch_connector_bronze_verify_counts(monkeypatch)
+
+    ingest = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+    assert ingest.status_code == 200
+
+    response = client.post(
+        "/connectors/postgres/bronze/verify",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    result = body["results"][0]
+    assert result["status"] == "success"
+    assert result["source"] == {"schema": "schema_b", "table": "orders"}
+    assert result["bronze"] == {"schema": "bronze", "table": "orders"}
+    assert result["source_row_count"] == 3
+    assert result["bronze_row_count"] == 3
+    assert result["row_count"] == 3
+    assert counted == [("schema_b", "orders"), ("bronze", "orders")]
+    assert "secret-never-return" not in response.text
+    assert "password" not in response.text.lower()
+
+
+def test_connector_bound_bronze_verify_never_uses_configured_source(client, monkeypatch):
+    connection_id = _connector_bronze_session()
+    _patch_connector_bronze_happy_path(
+        monkeypatch,
+        source_schema="schema_b",
+        source_table="orders",
+    )
+    counted = _patch_connector_bronze_verify_counts(monkeypatch)
+    monkeypatch.setenv("AURUM_SCHEMA_SOURCE", "schema_a")
+
+    ingest = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+    assert ingest.status_code == 200
+
+    response = client.post(
+        "/connectors/postgres/bronze/verify",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["source"] == {
+        "schema": "schema_b",
+        "table": "orders",
+    }
+    assert ("schema_a", "orders") not in counted
+    assert ("schema_b", "orders") in counted
+
+
+def test_connector_bound_bronze_verify_rejects_wrong_requested_schema(client, monkeypatch):
+    connection_id = _connector_bronze_session()
+    _patch_connector_bronze_happy_path(
+        monkeypatch,
+        source_schema="schema_b",
+        source_table="orders",
+    )
+    _patch_connector_bronze_verify_counts(monkeypatch)
+
+    ingest = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+    assert ingest.status_code == 200
+
+    response = client.post(
+        "/connectors/postgres/bronze/verify",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_a", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "connector_bronze_authority_not_found"
+
+
+def test_connector_bound_bronze_verify_rejects_unknown_connection(client):
+    response = client.post(
+        "/connectors/postgres/bronze/verify",
+        json={
+            "connection_id": "conn_missing",
+            "relations": [{"schema": "public", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "connection_not_found"
+
+
+def test_connector_bound_bronze_verify_rejects_expired_session(client):
+    connection_id = _connector_bronze_session()
+    session = get_session_connection(connection_id)
+    assert session is not None
+    session.created_at_monotonic -= SESSION_TTL_SECONDS + 1
+
+    response = client.post(
+        "/connectors/postgres/bronze/verify",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "public", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "connection_not_found"
+
+
+def test_connector_bound_bronze_verify_rejects_missing_authority(client, monkeypatch):
+    connection_id = _connector_bronze_session()
+    fake_conn = _FakeConnectorConn()
+    monkeypatch.setattr(
+        "api.connectors_router.open_session_connection",
+        lambda _session: _FakeConnectionContext(fake_conn),
+    )
+    monkeypatch.setattr("api.connectors_router._database_identity", lambda _conn: (101, "aurum"))
+
+    response = client.post(
+        "/connectors/postgres/bronze/verify",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "connector_bronze_authority_not_found"
+
+
+def test_connector_bound_bronze_verify_rejects_database_identity_mismatch(client, monkeypatch):
+    connection_id = _connector_bronze_session()
+    _patch_connector_bronze_happy_path(
+        monkeypatch,
+        source_schema="schema_b",
+        source_table="orders",
+    )
+    _patch_connector_bronze_verify_counts(monkeypatch)
+
+    ingest = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+    assert ingest.status_code == 200
+    monkeypatch.setattr("api.connectors_router._database_identity", lambda _conn: (999, "other"))
+
+    response = client.post(
+        "/connectors/postgres/bronze/verify",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "connector_bronze_database_mismatch"
+
+
+def test_connector_bound_bronze_verify_rejects_changed_source_identity(client, monkeypatch):
+    connection_id = _connector_bronze_session()
+    copied = _patch_connector_bronze_happy_path(
+        monkeypatch,
+        source_schema="schema_b",
+        source_table="orders",
+    )
+    _patch_connector_bronze_verify_counts(monkeypatch)
+
+    ingest = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+    assert ingest.status_code == 200
+    copied["_state"]["source_relation_oid"] = 999
+
+    response = client.post(
+        "/connectors/postgres/bronze/verify",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "source_identity_changed"
+
+
+def test_connector_bound_bronze_verify_rejects_missing_bronze_target(client, monkeypatch):
+    connection_id = _connector_bronze_session()
+    copied = _patch_connector_bronze_happy_path(
+        monkeypatch,
+        source_schema="schema_b",
+        source_table="orders",
+    )
+    _patch_connector_bronze_verify_counts(monkeypatch)
+
+    ingest = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+    assert ingest.status_code == 200
+    copied["_state"]["bronze_exists"] = False
+
+    response = client.post(
+        "/connectors/postgres/bronze/verify",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "bronze_target_missing"
+
+
+def test_connector_bound_bronze_verify_rejects_replaced_bronze_target(client, monkeypatch):
+    connection_id = _connector_bronze_session()
+    copied = _patch_connector_bronze_happy_path(
+        monkeypatch,
+        source_schema="schema_b",
+        source_table="orders",
+    )
+    _patch_connector_bronze_verify_counts(monkeypatch)
+
+    ingest = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+    assert ingest.status_code == 200
+    copied["_state"]["bronze_relation_oid"] = 999
+
+    response = client.post(
+        "/connectors/postgres/bronze/verify",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "bronze_identity_changed"
+
+
+def test_connector_bound_bronze_verify_reports_count_mismatch(client, monkeypatch):
+    connection_id = _connector_bronze_session()
+    _patch_connector_bronze_happy_path(
+        monkeypatch,
+        source_schema="schema_b",
+        source_table="orders",
+    )
+    _patch_connector_bronze_verify_counts(monkeypatch, source_rows=3, bronze_rows=2)
+
+    ingest = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+    assert ingest.status_code == 200
+
+    response = client.post(
+        "/connectors/postgres/bronze/verify",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()["results"][0]
+    assert result["status"] == "error"
+    assert result["match"] is False
+    assert result["source_row_count"] == 3
+    assert result["bronze_row_count"] == 2
+    assert result["row_count"] is None
+
+
+def test_connector_bound_bronze_verify_rejects_invalid_identifier(client):
+    connection_id = _connector_bronze_session()
+
+    response = client.post(
+        "/connectors/postgres/bronze/verify",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "schema_b", "table": "orders; drop table x"}],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_connector_bound_bronze_legacy_verify_contract_unchanged(client):
+    response = client.post(
+        "/api/v1/source/verify-bronze",
+        json={
+            "connection_id": "conn_ignored_by_legacy_model",
+            "relations": [{"schema": "tenant_a", "table": "orders"}],
+            "tables": [],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "No tables specified."
 
 
 def test_connector_bound_bronze_legacy_source_endpoint_contract_unchanged(client):
