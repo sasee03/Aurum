@@ -180,7 +180,8 @@ def interpret_gold_requirement(
         raise GoldAIUnavailable("Gemini SDK is unavailable") from exc
 
     try:
-        response = genai.Client(api_key=api_key).models.generate_content(
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
             model=model,
             contents=_prompt_input(
                 source_schema=source_schema,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import weakref
 from types import SimpleNamespace
 
 import pytest
@@ -238,7 +239,12 @@ def test_provider_uses_gemini_structured_output_with_only_authorized_metadata(mo
     calls = {}
 
     class FakeModels:
+        def __init__(self, owner):
+            self._owner = weakref.ref(owner)
+
         def generate_content(self, **kwargs):
+            if self._owner() is None:
+                raise RuntimeError("Gemini client was closed before the request")
             calls.update(kwargs)
             return SimpleNamespace(
                 text=json.dumps(
@@ -252,7 +258,10 @@ def test_provider_uses_gemini_structured_output_with_only_authorized_metadata(mo
     class FakeGemini:
         def __init__(self, *, api_key):
             calls["api_key"] = api_key
-            self.models = FakeModels()
+
+        @property
+        def models(self):
+            return FakeModels(self)
 
     fake_types = SimpleNamespace(GenerateContentConfig=lambda **kwargs: kwargs)
     fake_genai = SimpleNamespace(Client=FakeGemini, types=fake_types)
