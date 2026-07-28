@@ -104,9 +104,12 @@ class AssistantContextService:
             run = self._load_run(conn, run_id)
             if run is None:
                 gold_run = self._load_gold_run_header(conn, run_id)
-                if gold_run is None:
-                    return context
-                return self._build_from_gold_run(conn, context, gold_run)
+                if gold_run is not None:
+                    return self._build_from_gold_run(conn, context, gold_run)
+                silver_run = self._load_silver_run_header(conn, run_id)
+                if silver_run is not None:
+                    return self._build_from_silver_run(conn, context, silver_run)
+                return context
 
             context["run"] = {
                 "id": run["run_id"],
@@ -219,8 +222,19 @@ class AssistantContextService:
             error_message, source_schema, source_table, dataset_config
         """
         if run_id:
-            return self._fetchone(
+            exact = self._fetchone(
                 conn, f"SELECT {fields} FROM validation_runs WHERE run_id = ?", (run_id,)
+            )
+            if exact is not None:
+                return exact
+            return self._fetchone(
+                conn,
+                f"""
+                SELECT {fields} FROM validation_runs
+                WHERE source_table = ? OR dataset_config = ?
+                ORDER BY started_at DESC, run_id DESC LIMIT 1
+                """,
+                (run_id, run_id),
             )
         return self._fetchone(
             conn,
@@ -316,7 +330,7 @@ class AssistantContextService:
             r.connection_id
         """
         if run_id:
-            return self._fetchone(
+            exact = self._fetchone(
                 conn,
                 f"""
                 SELECT {fields}
@@ -325,6 +339,19 @@ class AssistantContextService:
                 WHERE r.run_id = ?
                 """,
                 (run_id,),
+            )
+            if exact is not None:
+                return exact
+            return self._fetchone(
+                conn,
+                f"""
+                SELECT {fields}
+                FROM generated_sql_review r
+                JOIN gold_security_state s ON s.run_id = r.run_id
+                WHERE r.table_name = ? OR s.target_name = ?
+                ORDER BY r.created_at DESC, r.run_id DESC LIMIT 1
+                """,
+                (run_id, run_id),
             )
         return self._fetchone(
             conn,
@@ -335,6 +362,113 @@ class AssistantContextService:
             ORDER BY r.created_at DESC, r.run_id DESC LIMIT 1
             """,
         )
+
+    def _load_silver_run_header(self, conn: sqlite3.Connection, run_id: str | None) -> sqlite3.Row | None:
+        fields = """
+            run_id, status, created_at, table_name, planned_changes_json,
+            connection_id, source_identity_json, rule_revision
+        """
+        if run_id:
+            exact = self._fetchone(
+                conn,
+                f"SELECT {fields} FROM generated_sql_review WHERE run_id = ?",
+                (run_id,),
+            )
+            if exact is not None:
+                return exact
+            return self._fetchone(
+                conn,
+                f"SELECT {fields} FROM generated_sql_review WHERE table_name = ? ORDER BY created_at DESC, run_id DESC LIMIT 1",
+                (run_id,),
+            )
+        return self._fetchone(
+            conn,
+            f"SELECT {fields} FROM generated_sql_review ORDER BY created_at DESC, run_id DESC LIMIT 1",
+        )
+
+    def _build_from_silver_run(
+        self, conn: sqlite3.Connection, context: dict[str, Any], silver_run: sqlite3.Row
+    ) -> dict[str, Any]:
+        context["run"] = {
+            "id": silver_run["run_id"],
+            "status": silver_run["status"],
+            "mode": "silver",
+            "started_at": silver_run["created_at"],
+            "finished_at": silver_run["created_at"],
+            "dataset_config": None,
+        }
+        connection_id = silver_run["connection_id"]
+        if connection_id:
+            connection = self._load_connection(conn, connection_id)
+            if connection is not None:
+                context["connection"] = {
+                    "id": connection["id"],
+                    "database_name": connection["database_name"],
+                    "status": connection["status"],
+                }
+
+        source_ident = _json_object(silver_run["source_identity_json"])
+        source_schema = source_ident.get("schema") if source_ident else "source"
+        source_table = (
+            (source_ident.get("relation_name") or source_ident.get("relation") or source_ident.get("table"))
+            if source_ident
+            else silver_run["table_name"]
+        )
+
+        authority = None
+        if connection_id and source_schema and source_table:
+            authority = self._fetchone(
+                conn,
+                """
+                SELECT ingest_id, bronze_schema, bronze_relation, status
+                FROM bronze_ingest_authority
+                WHERE connection_id = ? AND (
+                    (source_schema = ? AND source_relation = ?)
+                    OR (bronze_schema = ? AND bronze_relation = ?)
+                )
+                ORDER BY updated_at DESC, ingest_id DESC LIMIT 1
+                """,
+                (connection_id, source_schema, source_table, source_schema, source_table),
+            )
+        elif source_table:
+            authority = self._fetchone(
+                conn,
+                """
+                SELECT ingest_id, bronze_schema, bronze_relation, status
+                FROM bronze_ingest_authority
+                WHERE source_relation = ? OR bronze_relation = ?
+                ORDER BY updated_at DESC, ingest_id DESC LIMIT 1
+                """,
+                (source_table, source_table),
+            )
+
+        context["source"] = {
+            "schema": source_schema,
+            "relation": source_table,
+            "columns": None,
+        }
+        if connection_id and source_schema and source_table:
+            columns = self._source_columns_reader(connection_id, source_schema, source_table)
+            if columns is not None:
+                context["source"]["columns"] = _safe_value(columns)
+
+        context["bronze"] = {
+            "authority_status": authority["status"] if authority is not None else None,
+            "ingest_id": authority["ingest_id"] if authority is not None else None,
+            "schema": authority["bronze_schema"] if authority is not None else None,
+            "relation": authority["bronze_relation"] if authority is not None else source_table,
+            "validation_status": None,
+            "row_count": None,
+        }
+
+        context["silver"] = self._silver_context(conn, context["bronze"], None)
+        planned = _json_object(silver_run["planned_changes_json"])
+        if planned and isinstance(context["silver"], dict) and isinstance(context["silver"].get("transformation"), dict):
+            rules = planned.get("rules")
+            if rules:
+                context["silver"]["transformation"]["rules"] = _safe_value(rules)
+
+        return context
 
     def _build_from_gold_run(
         self, conn: sqlite3.Connection, context: dict[str, Any], gold_run: sqlite3.Row

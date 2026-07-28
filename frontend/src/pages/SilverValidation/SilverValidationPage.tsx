@@ -70,6 +70,8 @@ export function SilverValidationPage() {
   const [rulesDirty, setRulesDirty] = useState<boolean>(false);
   const [rulesError, setRulesError] = useState<string | null>(null);
 
+  const runIdParam = searchParams.get('runId') ?? undefined;
+
   // Generation & Review state
   const [generating, setGenerating] = useState<boolean>(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -510,7 +512,7 @@ export function SilverValidationPage() {
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
       <ProjectSubNav />
-      <PageAssistant page="silver" layer="silver" selectedTable={selectedTableParam || sourceTable || undefined} />
+      <PageAssistant page="silver" layer="silver" runId={runId || runIdParam} selectedTable={selectedTableParam || sourceTable || undefined} />
 
       {/* Header */}
       <div className="px-6 py-6 border-b border-[#252637]">
