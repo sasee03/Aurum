@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { Loader2, LockKeyhole, Send, ShieldCheck, X } from "lucide-react";
 import type { AssistantLayer, AssistantPage, AssistantResponse } from "../../lib/aurumAssistantApi";
 import { postAssistantChat } from "../../lib/aurumAssistantApi";
 import { AurumAssistantMessage } from "./AurumAssistantMessage";
@@ -88,18 +89,29 @@ export function AurumAssistantDrawer({
         <header className="aa-drawer-header">
           <div>
             <h2>Aurum Assistant</h2>
+            <div className="aa-state-pills" aria-label="Assistant state">
+              <span className="aa-state-pill aa-state-pill--grounded">
+                <ShieldCheck size={12} />
+                Grounded
+              </span>
+              <span className="aa-state-pill">
+                <LockKeyhole size={12} />
+                Read-only
+              </span>
+            </div>
             <p className="aa-subtitle">{contextLabel(page, layer, runId)}</p>
+            <p className="aa-helper">Ask about your current Aurum pipeline.</p>
           </div>
           <button type="button" className="aa-close" onClick={onClose} aria-label="Close">
-            ×
+            <X size={18} />
           </button>
         </header>
 
         <div className="aa-chat-area">
           {messages.length === 0 && (
             <p className="aa-empty">
-              Ask about validation results, history, sample queries, or custom checks. Aurum Assistant
-              explains — it does not decide the final trust verdict.
+              Aurum Assistant explains current pipeline facts returned by the backend. It cannot approve,
+              execute, promote, or modify pipeline state from chat.
             </p>
           )}
           {messages.map((m) => (
@@ -111,7 +123,12 @@ export function AurumAssistantDrawer({
               error={m.error}
             />
           ))}
-          {loading && <p className="aa-loading">Thinking…</p>}
+          {loading && (
+            <div className="aa-loading">
+              <Loader2 size={14} />
+              Reading grounded Aurum context...
+            </div>
+          )}
         </div>
 
         <SuggestedPrompts page={page} onSelect={sendQuestion} />
@@ -131,6 +148,7 @@ export function AurumAssistantDrawer({
             disabled={loading}
           />
           <button type="submit" className="aa-btn" disabled={loading || !input.trim()}>
+            <Send size={14} />
             Send
           </button>
         </form>
@@ -145,6 +163,7 @@ export function AurumAssistantButton(props: AurumAssistantButtonProps) {
   return (
     <>
       <button type="button" className="aa-fab" onClick={() => setOpen(true)}>
+        <ShieldCheck size={15} />
         Aurum Assistant
       </button>
       <AurumAssistantDrawer {...props} open={open} onClose={() => setOpen(false)} />

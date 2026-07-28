@@ -234,10 +234,14 @@ export interface AssistantResponseData {
 }
 
 export interface AssistantResponse {
-  intent: string;
+  intent?: string;
   answer: string;
-  data: AssistantResponseData;
-  confidence: 'high' | 'medium' | 'low';
+  data?: AssistantResponseData;
+  confidence?: 'high' | 'medium' | 'low';
+  grounded?: boolean;
+  status?: 'answered' | 'insufficient_information' | 'read_only_refusal' | string;
+  evidence?: Array<{ path: string; value: unknown }>;
+  context?: Record<string, unknown>;
 }
 
 export async function askAurumAssistant(payload: ChatRequest): Promise<AssistantResponse> {
@@ -832,6 +836,10 @@ export interface GenerateGoldResponse {
   status: string;
   review_revision: string;
   generator_provenance: string;
+  ai_interpretation?: Record<string, any>;
+  generator_family?: string;
+  generator_model?: string | null;
+  verdict?: string;
 }
 
 export interface ReviewGoldResponse {
@@ -846,6 +854,8 @@ export interface ReviewGoldResponse {
   status: string;
   generator_provenance: string;
   message: string;
+  generator_family?: string;
+  generator_model?: string | null;
 }
 
 export interface ApproveGoldPayload {
