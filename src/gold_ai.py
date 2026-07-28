@@ -99,7 +99,10 @@ definition using exact discovered column names."""
 
 def configured_gold_ai_model() -> str:
     """Return the configured demo model without exposing any credential."""
-    return os.environ.get("AURUM_GEMINI_MODEL", "").strip() or DEFAULT_GOLD_AI_MODEL
+    return (
+        os.environ.get("AURUM_GOLD_GEMINI_MODEL", "").strip()
+        or DEFAULT_GOLD_AI_MODEL
+    )
 
 
 def _prompt_input(

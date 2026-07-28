@@ -123,9 +123,9 @@ def _supported(*, expression: dict | None = None, alias: str = "total_amount"):
 
 
 def test_configured_model_defaults_and_honors_environment_override(monkeypatch):
-    monkeypatch.delenv("AURUM_GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("AURUM_GOLD_GEMINI_MODEL", raising=False)
     assert configured_gold_ai_model() == "gemini-2.5-flash"
-    monkeypatch.setenv("AURUM_GEMINI_MODEL", "gemini-test-override")
+    monkeypatch.setenv("AURUM_GOLD_GEMINI_MODEL", "gemini-test-override")
     assert configured_gold_ai_model() == "gemini-test-override"
 
 
