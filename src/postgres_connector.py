@@ -181,6 +181,16 @@ def get_session_connection(connection_id: str) -> Optional[SessionConnection]:
         return session
 
 
+def peek_session_connection(connection_id: str) -> Optional[SessionConnection]:
+    """Return an active session without pruning or otherwise changing the cache."""
+    now = time.monotonic()
+    with _SESSION_LOCK:
+        session = _SESSION_CONNECTIONS.get(connection_id)
+        if session is None or _session_expired(session, now):
+            return None
+        return session
+
+
 def clear_session_connections() -> None:
     """Test helper — wipe in-process session cache."""
     with _SESSION_LOCK:

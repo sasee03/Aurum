@@ -475,3 +475,19 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     init_schema(conn)
     return conn
+
+
+def get_readonly_connection(path: Path | None = None) -> sqlite3.Connection:
+    """Open existing application state without schema setup or write capability.
+
+    This deliberately does not call :func:`get_connection`: that helper creates
+    directories, applies migrations, and may backfill legacy rows.  Read-only
+    consumers such as assistant context must instead report unavailable state
+    when the database is absent or too old for the requested fact.
+    """
+    target = (path or app_state_path()).resolve()
+    uri = f"{target.as_uri()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only = ON")
+    return conn
