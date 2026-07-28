@@ -696,7 +696,7 @@ def new_gold_run_origin(
     )
     if snapshot_contract_version is None:
         raise GoldStateMalformed("origin provenance is unsupported")
-    if generator_family not in {"structured_manual", "openai"}:
+    if generator_family not in {"structured_manual", "gemini"}:
         raise GoldStateMalformed("origin generator family is unsupported")
     if generator_model is not None:
         generator_model = _require_generator_token(
@@ -789,7 +789,7 @@ def _parse_gold_run_origin(
     if contract != expected_contract:
         raise GoldStateMalformed("origin snapshot contract is invalid")
     generator_family = _row_value(origin_row, "generator_family")
-    if generator_family not in {"structured_manual", "openai"}:
+    if generator_family not in {"structured_manual", "gemini"}:
         raise GoldStateMalformed("origin generator family is unsupported")
     generator_model = _row_value(origin_row, "generator_model")
     if generator_model is not None:

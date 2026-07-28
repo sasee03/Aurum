@@ -737,7 +737,7 @@ def generate_ai_structured_gold(payload: GenerateAIGoldPayload):
         response = _generate_structured_gold_proposal(
             structured_payload,
             source_catalog=source_catalog,
-            generator_family="openai",
+            generator_family="gemini",
             generator_model=model,
         )
     except HTTPException as exc:
@@ -750,7 +750,7 @@ def generate_ai_structured_gold(payload: GenerateAIGoldPayload):
 
     response["verdict"] = "SUPPORTED"
     response["ai_interpretation"] = interpretation.model_dump()
-    response["generator_family"] = "openai"
+    response["generator_family"] = "gemini"
     response["generator_model"] = model
     return response
 

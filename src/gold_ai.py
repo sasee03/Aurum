@@ -1,4 +1,4 @@
-"""Bounded OpenAI translation for the Structured Gold V1 producer."""
+"""Bounded Gemini translation for the Structured Gold V1 producer."""
 
 from __future__ import annotations
 
@@ -6,17 +6,17 @@ import json
 import os
 from typing import List, Literal, Sequence, Union
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictStr, ValidationError
 from typing_extensions import Annotated
 
 from src.gold_catalog import GoldCatalogColumn
 
 
-DEFAULT_GOLD_AI_MODEL = "gpt-5.6-terra"
+DEFAULT_GOLD_AI_MODEL = "gemini-2.5-flash"
 
 
 class GoldAIUnavailable(RuntimeError):
-    """The configured OpenAI provider cannot be used safely."""
+    """The configured Gemini provider cannot be used safely."""
 
 
 class GoldAIProposalInvalid(RuntimeError):
@@ -99,7 +99,7 @@ definition using exact discovered column names."""
 
 def configured_gold_ai_model() -> str:
     """Return the configured demo model without exposing any credential."""
-    return os.environ.get("AURUM_OPENAI_MODEL", "").strip() or DEFAULT_GOLD_AI_MODEL
+    return os.environ.get("AURUM_GEMINI_MODEL", "").strip() or DEFAULT_GOLD_AI_MODEL
 
 
 def _prompt_input(
@@ -154,7 +154,7 @@ def _parsed_interpretation(value: object) -> GoldAIInterpretation:
         ),
     ):
         return value
-    raise GoldAIProposalInvalid("OpenAI returned no valid structured interpretation")
+    raise GoldAIProposalInvalid("Gemini returned no valid structured interpretation")
 
 
 def interpret_gold_requirement(
@@ -165,29 +165,40 @@ def interpret_gold_requirement(
     business_requirement: str,
     model: str,
 ) -> GoldAIInterpretation:
-    """Call OpenAI once; callers must deterministically validate SUPPORTED output."""
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    """Call Gemini once; callers must deterministically validate SUPPORTED output."""
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
-        raise GoldAIUnavailable("OPENAI_API_KEY is not configured")
+        raise GoldAIUnavailable("GEMINI_API_KEY is not configured")
 
     try:
-        from openai import OpenAI
+        from google import genai
+        from google.genai import types
     except ImportError as exc:  # pragma: no cover - covered by dependency install
-        raise GoldAIUnavailable("OpenAI SDK is unavailable") from exc
+        raise GoldAIUnavailable("Gemini SDK is unavailable") from exc
 
     try:
-        response = OpenAI(api_key=api_key).responses.parse(
+        response = genai.Client(api_key=api_key).models.generate_content(
             model=model,
-            instructions=SYSTEM_INSTRUCTION,
-            input=_prompt_input(
+            contents=_prompt_input(
                 source_schema=source_schema,
                 source_relation=source_relation,
                 columns=columns,
                 business_requirement=business_requirement,
             ),
-            text_format=GoldAIResponse,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
+                response_mime_type="application/json",
+                response_schema=GoldAIResponse,
+            ),
         )
     except Exception as exc:
-        raise GoldAIUnavailable("OpenAI request failed") from exc
+        raise GoldAIUnavailable("Gemini request failed") from exc
 
-    return _parsed_interpretation(getattr(response, "output_parsed", None))
+    try:
+        return _parsed_interpretation(
+            GoldAIResponse.model_validate_json(getattr(response, "text", None))
+        )
+    except (TypeError, ValidationError, ValueError) as exc:
+        raise GoldAIProposalInvalid(
+            "Gemini returned no valid structured interpretation"
+        ) from exc

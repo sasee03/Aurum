@@ -1,4 +1,4 @@
-"""Builder tests for the OpenAI producer feeding Structured Gold V1."""
+"""Builder tests for the Gemini producer feeding Structured Gold V1."""
 
 from __future__ import annotations
 
@@ -22,9 +22,11 @@ from src.gold_ai import (
     GoldAIUnavailable,
     GoldAIUnsupportedInterpretation,
     _parsed_interpretation,
+    configured_gold_ai_model,
     interpret_gold_requirement,
 )
 from src.gold_catalog import GoldCatalogColumn, GoldCatalogSnapshot, StructuredGoldSourceCatalogSnapshot
+from src.gold_security import GoldStateMalformed, approval_timestamp, new_gold_run_origin
 
 
 client = TestClient(app)
@@ -120,8 +122,15 @@ def _supported(*, expression: dict | None = None, alias: str = "total_amount"):
     )
 
 
-def test_missing_openai_key_returns_safe_unavailable(monkeypatch, ai_catalog):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+def test_configured_model_defaults_and_honors_environment_override(monkeypatch):
+    monkeypatch.delenv("AURUM_GEMINI_MODEL", raising=False)
+    assert configured_gold_ai_model() == "gemini-2.5-flash"
+    monkeypatch.setenv("AURUM_GEMINI_MODEL", "gemini-test-override")
+    assert configured_gold_ai_model() == "gemini-test-override"
+
+
+def test_missing_gemini_key_returns_safe_unavailable(monkeypatch, ai_catalog):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     response = client.post("/api/v1/gold/ai/generate", json=_payload())
     assert response.status_code == 503
     assert response.json() == {"detail": "GOLD_AI_UNAVAILABLE"}
@@ -134,7 +143,7 @@ def test_supported_column_uses_real_structured_gold_kernel(monkeypatch, ai_catal
     body = response.json()
     assert body["verdict"] == "SUPPORTED"
     assert body["generator_provenance"] == router.STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE
-    assert body["generator_family"] == "openai"
+    assert body["generator_family"] == "gemini"
     assert body["generator_model"] == "test-model"
     assert 'SUM("amount") AS "total_amount"' in body["sql_text"]
     with get_connection() as conn:
@@ -142,7 +151,8 @@ def test_supported_column_uses_real_structured_gold_kernel(monkeypatch, ai_catal
             "SELECT generator_family, generator_model FROM gold_run_origin WHERE run_id = ?",
             (body["run_id"],),
         ).fetchone()
-    assert tuple(origin) == ("openai", "test-model")
+    assert tuple(origin) == ("gemini", "test-model")
+    assert client.get(f"/api/v1/gold/review/{body['run_id']}").status_code == 200
 
 
 def test_supported_binary_expression_uses_real_compiler(monkeypatch, ai_catalog):
@@ -224,14 +234,14 @@ def test_malformed_parsed_response_is_safe():
         _parsed_interpretation(None)
 
 
-def test_provider_uses_responses_parse_with_only_authorized_metadata(monkeypatch):
+def test_provider_uses_gemini_structured_output_with_only_authorized_metadata(monkeypatch):
     calls = {}
 
-    class FakeResponses:
-        def parse(self, **kwargs):
+    class FakeModels:
+        def generate_content(self, **kwargs):
             calls.update(kwargs)
             return SimpleNamespace(
-                output_parsed=GoldAIResponse.model_validate(
+                text=json.dumps(
                     {
                         "verdict": "UNSUPPORTED",
                         "reason": "The request is outside Gold V1.",
@@ -239,13 +249,16 @@ def test_provider_uses_responses_parse_with_only_authorized_metadata(monkeypatch
                 )
             )
 
-    class FakeOpenAI:
+    class FakeGemini:
         def __init__(self, *, api_key):
             calls["api_key"] = api_key
-            self.responses = FakeResponses()
+            self.models = FakeModels()
 
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-do-not-persist")
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    fake_types = SimpleNamespace(GenerateContentConfig=lambda **kwargs: kwargs)
+    fake_genai = SimpleNamespace(Client=FakeGemini, types=fake_types)
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-do-not-persist")
+    monkeypatch.setitem(sys.modules, "google", SimpleNamespace(genai=fake_genai))
+    monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
     interpretation = interpret_gold_requirement(
         source_schema=SCHEMAS.silver,
         source_relation="source_facts",
@@ -255,8 +268,9 @@ def test_provider_uses_responses_parse_with_only_authorized_metadata(monkeypatch
     )
     assert interpretation.verdict == "UNSUPPORTED"
     assert calls["model"] == "test-model"
-    assert calls["text_format"] is GoldAIResponse
-    prompt = json.loads(calls["input"])
+    assert calls["config"]["response_schema"] is GoldAIResponse
+    assert calls["config"]["response_mime_type"] == "application/json"
+    prompt = json.loads(calls["contents"])
     assert prompt["authorized_silver_source"] == {
         "schema": SCHEMAS.silver,
         "relation": "source_facts",
@@ -278,7 +292,7 @@ def test_provider_uses_responses_parse_with_only_authorized_metadata(monkeypatch
             },
         ],
     }
-    assert "sk-test-do-not-persist" not in calls["input"]
+    assert "gemini-test-do-not-persist" not in calls["contents"]
 
 
 @pytest.mark.parametrize(
@@ -340,12 +354,55 @@ def test_manual_structured_and_controlled_paths_remain_available(monkeypatch, ai
     assert controlled.status_code == 200
 
 
-def test_openai_key_is_not_persisted_or_returned(monkeypatch, ai_catalog):
-    secret = "sk-test-do-not-persist"
-    monkeypatch.setenv("OPENAI_API_KEY", secret)
+def test_gemini_key_is_not_persisted_or_returned(monkeypatch, ai_catalog):
+    secret = "gemini-test-do-not-persist"
+    monkeypatch.setenv("GEMINI_API_KEY", secret)
     monkeypatch.setattr(router, "interpret_gold_requirement", lambda **kwargs: _supported())
     response = client.post("/api/v1/gold/ai/generate", json=_payload())
     assert secret not in response.text
     with get_connection() as conn:
         sqlite_state = "\n".join(conn.iterdump())
     assert secret not in sqlite_state
+
+
+@pytest.mark.parametrize(
+    ("generator_family", "generator_model"),
+    [("structured_manual", None), ("gemini", "gemini-2.5-flash")],
+)
+def test_origin_authority_accepts_structured_manual_and_gemini(
+    generator_family,
+    generator_model,
+):
+    source = _source_catalog()
+    record = new_gold_run_origin(
+        run_id=f"run_origin_{generator_family}",
+        origin_provenance=router.STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE,
+        generator_family=generator_family,
+        generator_model=generator_model,
+        generation_database_identity={
+            "oid": source.database_oid,
+            "name": source.database_name,
+        },
+        generation_source_identities=[source.source_identity],
+        selected_sources=[{"schema": SCHEMAS.silver, "table": "source_facts"}],
+        created_at=approval_timestamp(),
+    )
+    assert record["generator_family"] == generator_family
+
+
+def test_origin_authority_rejects_removed_openai_family():
+    source = _source_catalog()
+    with pytest.raises(GoldStateMalformed, match="generator family is unsupported"):
+        new_gold_run_origin(
+            run_id="run_origin_openai",
+            origin_provenance=router.STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE,
+            generator_family="openai",
+            generator_model="gpt-5.6-terra",
+            generation_database_identity={
+                "oid": source.database_oid,
+                "name": source.database_name,
+            },
+            generation_source_identities=[source.source_identity],
+            selected_sources=[{"schema": SCHEMAS.silver, "table": "source_facts"}],
+            created_at=approval_timestamp(),
+        )
