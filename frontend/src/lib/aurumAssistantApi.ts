@@ -9,9 +9,12 @@ export {
   type AssistantLayer,
   type ChatContext,
   type ChatRequest,
+  type AssistantChatRequest,
   type EmailDraft,
   type AssistantResponseData,
   type AssistantResponse,
+  type AssistantFact,
+  type AssistantContextIndicators,
   type CustomCheck,
   type CustomCheckRunResult,
 } from './aurumApi';

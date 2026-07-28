@@ -59,9 +59,6 @@ export function AurumAssistantResponseRenderer({ response }: Props) {
       )}
 
       {!isReadOnlyRefusal && <p className="aa-answer">{answer}</p>}
-      {confidence === "low" && (
-        <p className="aa-confidence-warn">Low confidence. Verify against the latest validation report.</p>
-      )}
       {evidence.length > 0 && (
         <div className="aa-evidence-card">
           <strong>Verified Aurum facts</strong>

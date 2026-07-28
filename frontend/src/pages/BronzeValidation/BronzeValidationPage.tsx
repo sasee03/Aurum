@@ -262,7 +262,7 @@ export function BronzeValidationPage() {
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
       <ProjectSubNav runId={runId} />
-      <PageAssistant page="bronze" layer="bronze" runId={runId} />
+      <PageAssistant page="bronze" layer="bronze" runId={runId} selectedTable={carriedTable || undefined} />
 
       {/* Header */}
       <div className="px-6 py-6 border-b border-[#252637]">

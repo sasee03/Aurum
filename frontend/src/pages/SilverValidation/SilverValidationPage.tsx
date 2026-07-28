@@ -510,7 +510,7 @@ export function SilverValidationPage() {
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
       <ProjectSubNav />
-      <PageAssistant page="silver" layer="silver" />
+      <PageAssistant page="silver" layer="silver" selectedTable={selectedTableParam || sourceTable || undefined} />
 
       {/* Header */}
       <div className="px-6 py-6 border-b border-[#252637]">

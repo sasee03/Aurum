@@ -50,16 +50,27 @@ export function AurumAssistantDrawer({
       setInput("");
       setLoading(true);
       try {
-        const response = await postAssistantChat({
-          page,
-          run_id: runId || "latest",
-          layer: layer ?? null,
-          question,
-          context: {
-            selected_check_id: selectedCheckId,
-            selected_table: selectedTable,
-          },
+        let response = await postAssistantChat({
+          message: question,
+          run_id: runId || undefined,
         });
+
+        // Context Safety: If page has a selectedTable but no explicit runId,
+        // ensure returned context actually matches selectedTable context.
+        if (selectedTable && response.status === "answered" && !runId) {
+          const rel = response.context?.source?.relation?.toLowerCase();
+          const target = selectedTable.toLowerCase();
+          if (rel && rel !== target) {
+            response = {
+              answer: "I do not have enough information in the current Aurum context to answer that.",
+              grounded: false,
+              status: "insufficient_information",
+              context: response.context,
+              evidence: [],
+            };
+          }
+        }
+
         setMessages((prev) => [
           ...prev,
           { id: `${Date.now()}-a`, role: "assistant", response },
@@ -71,14 +82,14 @@ export function AurumAssistantDrawer({
             id: `${Date.now()}-e`,
             role: "assistant",
             error:
-              "Aurum Assistant is temporarily unavailable. Validation results in the report are unchanged.",
+              "Aurum Assistant is temporarily unavailable. Grounded context could not be retrieved.",
           },
         ]);
       } finally {
         setLoading(false);
       }
     },
-    [loading, page, runId, layer, selectedCheckId, selectedTable],
+    [loading, runId, selectedTable],
   );
 
   if (!open) return null;

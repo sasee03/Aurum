@@ -466,7 +466,7 @@ export function GoldValidationPage() {
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
       <ProjectSubNav runId={runIdParam} />
-      <PageAssistant page="gold" layer="gold" runId={runIdParam} />
+      <PageAssistant page="gold" layer="gold" runId={runIdParam} selectedTable={selectedSilverTable || targetTableName || tableParam || undefined} />
 
       <div className="px-6 py-6 border-b border-[#252637]">
         <div className="flex flex-wrap items-center gap-3">

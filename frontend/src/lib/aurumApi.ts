@@ -210,13 +210,12 @@ export interface ChatContext {
   selected_table?: string;
 }
 
-export interface ChatRequest {
-  page: AssistantPage;
-  run_id: string;
-  layer?: AssistantLayer | null;
-  question: string;
-  context: ChatContext;
+export interface AssistantChatRequest {
+  message: string;
+  run_id?: string;
 }
+
+export type ChatRequest = AssistantChatRequest;
 
 export interface EmailDraft {
   subject: string;
@@ -233,21 +232,38 @@ export interface AssistantResponseData {
   custom_check?: Record<string, unknown>;
 }
 
-export interface AssistantResponse {
-  intent?: string;
-  answer: string;
-  data?: AssistantResponseData;
-  confidence?: 'high' | 'medium' | 'low';
-  grounded?: boolean;
-  status?: 'answered' | 'insufficient_information' | 'read_only_refusal' | string;
-  evidence?: Array<{ path: string; value: unknown }>;
-  context?: Record<string, unknown>;
+export interface AssistantFact {
+  path: string;
+  value: unknown;
 }
 
-export async function askAurumAssistant(payload: ChatRequest): Promise<AssistantResponse> {
-  return request<AssistantResponse>('/aurum-assistant/chat', {
+export interface AssistantContextIndicators {
+  run_id?: string | null;
+  source?: { schema?: string | null; relation?: string | null };
+  gold_status?: string | null;
+}
+
+export interface AssistantResponse {
+  answer: string;
+  grounded: boolean;
+  status: 'answered' | 'insufficient_information' | 'read_only_refusal';
+  evidence?: AssistantFact[];
+  context?: AssistantContextIndicators;
+  intent?: string;
+  data?: AssistantResponseData;
+  confidence?: 'high' | 'medium' | 'low';
+}
+
+export async function askAurumAssistant(payload: AssistantChatRequest): Promise<AssistantResponse> {
+  const body: Record<string, unknown> = {
+    message: payload.message,
+  };
+  if (payload.run_id) {
+    body.run_id = payload.run_id;
+  }
+  return request<AssistantResponse>('/api/v1/assistant/chat', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
 }
 

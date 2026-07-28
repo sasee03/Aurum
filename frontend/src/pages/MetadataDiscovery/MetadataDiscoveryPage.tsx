@@ -306,7 +306,7 @@ export function MetadataDiscoveryPage() {
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
       <ProjectSubNav runId={runId} />
-      <PageAssistant page="validation" runId={runId} />
+      <PageAssistant page="validation" runId={runId} selectedTable={activeTabId || requestedTable || requestedRelation?.table || undefined} />
 
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Page Header */}
