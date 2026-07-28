@@ -164,6 +164,55 @@ class AssistantContextService:
         except sqlite3.OperationalError:
             return None
 
+    @staticmethod
+    def _fetchall(conn: sqlite3.Connection, query: str, params: tuple = ()) -> list[sqlite3.Row]:
+        try:
+            return conn.execute(query, params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+
+    def _find_gold_bronze_authority(
+        self,
+        conn: sqlite3.Connection,
+        connection_id: str | None,
+        first_source: dict[str, Any] | None,
+    ) -> sqlite3.Row | None:
+        if not connection_id or not first_source:
+            return None
+
+        source_schema = first_source.get("schema")
+        source_table = first_source.get("table")
+        if not source_table:
+            return None
+
+        if source_schema:
+            query = """
+                SELECT ingest_id, project_id, connection_id, database_name,
+                       source_schema, source_relation, bronze_schema, bronze_relation, status
+                FROM bronze_ingest_authority
+                WHERE connection_id = ?
+                  AND (
+                    (source_schema = ? AND source_relation = ?)
+                    OR (bronze_schema = ? AND bronze_relation = ?)
+                  )
+            """
+            params = (connection_id, source_schema, source_table, source_schema, source_table)
+        else:
+            query = """
+                SELECT ingest_id, project_id, connection_id, database_name,
+                       source_schema, source_relation, bronze_schema, bronze_relation, status
+                FROM bronze_ingest_authority
+                WHERE connection_id = ?
+                  AND (source_relation = ? OR bronze_relation = ?)
+            """
+            params = (connection_id, source_table, source_table)
+
+        rows = self._fetchall(conn, query, params)
+        if len(rows) == 1:
+            return rows[0]
+
+        return None
+
     def _load_run(self, conn: sqlite3.Connection, run_id: str | None) -> sqlite3.Row | None:
         fields = """
             run_id, connection_id, status, mode, started_at, finished_at,
@@ -318,49 +367,28 @@ class AssistantContextService:
             else None
         )
 
-        if first_source and first_source.get("table"):
-            ref_table = first_source["table"]
-            authority = self._fetchone(
-                conn,
-                """
-                SELECT ingest_id, project_id, connection_id, database_name,
-                       source_schema, source_relation, bronze_schema, bronze_relation, status
-                FROM bronze_ingest_authority
-                WHERE bronze_relation = ? OR source_relation = ?
-                ORDER BY updated_at DESC, ingest_id DESC LIMIT 1
-                """,
-                (ref_table, ref_table),
-            )
-            if authority is not None:
-                conn_id = connection_id or authority["connection_id"]
-                if context["connection"]["id"] is None and conn_id:
-                    connection = self._load_connection(conn, conn_id)
-                    if connection is not None:
-                        context["connection"] = {
-                            "id": connection["id"],
-                            "database_name": connection["database_name"],
-                            "status": connection["status"],
-                        }
-                context["source"] = {
-                    "schema": authority["source_schema"],
-                    "relation": authority["source_relation"],
-                    "columns": None,
-                }
-                if conn_id and authority["source_schema"] and authority["source_relation"]:
-                    columns = self._source_columns_reader(
-                        conn_id, authority["source_schema"], authority["source_relation"]
-                    )
-                    if columns is not None:
-                        context["source"]["columns"] = _safe_value(columns)
-                context["bronze"] = {
-                    "authority_status": authority["status"],
-                    "ingest_id": authority["ingest_id"],
-                    "schema": authority["bronze_schema"],
-                    "relation": authority["bronze_relation"],
-                    "validation_status": None,
-                    "row_count": None,
-                }
-                context["silver"] = self._silver_context(conn, context["bronze"], None)
+        authority = self._find_gold_bronze_authority(conn, connection_id, first_source)
+        if authority is not None:
+            context["source"] = {
+                "schema": authority["source_schema"],
+                "relation": authority["source_relation"],
+                "columns": None,
+            }
+            if connection_id and authority["source_schema"] and authority["source_relation"]:
+                columns = self._source_columns_reader(
+                    connection_id, authority["source_schema"], authority["source_relation"]
+                )
+                if columns is not None:
+                    context["source"]["columns"] = _safe_value(columns)
+            context["bronze"] = {
+                "authority_status": authority["status"],
+                "ingest_id": authority["ingest_id"],
+                "schema": authority["bronze_schema"],
+                "relation": authority["bronze_relation"],
+                "validation_status": None,
+                "row_count": None,
+            }
+            context["silver"] = self._silver_context(conn, context["bronze"], None)
 
         context["gold"] = self._gold_context(
             conn, context["messages"], run_id=gold_run["run_id"]

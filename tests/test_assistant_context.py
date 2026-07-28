@@ -275,3 +275,200 @@ def test_assistant_remains_strictly_read_only(monkeypatch, tmp_path):
     after = hashlib.sha256(db_path.read_bytes()).hexdigest()
     assert after == before
 
+
+def test_gold_run_never_resolves_different_connection_authority(monkeypatch, tmp_path):
+    db_path = tmp_path / "app_state.sqlite"
+    monkeypatch.setenv("AURUM_APP_STATE_DB", str(db_path))
+    with get_connection() as conn:
+        conn.execute("INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1', 'p1', 'x', 'x')")
+        conn.execute("INSERT INTO data_connections (id, project_id, type, name, host, port, database_name, username, status, created_at, updated_at) VALUES ('conn-A', 'p1', 'postgresql', 'A', 'localhost', 5432, 'db_a', 'user', 'ACTIVE', 'x', 'x')")
+        conn.execute("INSERT INTO data_connections (id, project_id, type, name, host, port, database_name, username, status, created_at, updated_at) VALUES ('conn-B', 'p1', 'postgresql', 'B', 'localhost', 5432, 'db_b', 'user', 'ACTIVE', 'x', 'x')")
+        conn.execute(
+            """
+            INSERT INTO bronze_ingest_authority
+                (ingest_id, project_id, connection_id, database_name, source_schema, source_relation,
+                 source_identity_json, bronze_schema, bronze_relation, bronze_identity_json, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("ing-b", "p1", "conn-B", "db_b", "public", "users", "{}", "bronze", "bronze_users_b", "{}", "READY", "x", "x"),
+        )
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review
+                (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema, generator_provenance, project_id, connection_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("gold-conn-a", "curated_users", "SELECT...", "{}", "2026-07-28T02:00:00Z", "PROMOTED", "cand", "gen", "p1", "conn-A"),
+        )
+        conn.execute(
+            """
+            INSERT INTO gold_security_state
+                (run_id, model_version, policy_version, business_requirement, selected_sources_json,
+                 target_schema, target_name, candidate_schema, candidate_name, generator_provenance,
+                 generator_version, review_snapshot_json, review_revision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("gold-conn-a", "v1", "v1", "req", json.dumps({"sources": [{"schema": "public", "table": "users"}]}),
+             "gold", "curated_users", "cand", "curated_users_c", "gen", "v1", "{}", "c" * 64),
+        )
+        conn.commit()
+
+    service = AssistantContextService(state_path=db_path)
+    context = service.build(run_id="gold-conn-a")
+
+    assert context["run"]["id"] == "gold-conn-a"
+    assert context["connection"]["id"] == "conn-A"
+    assert context["source"]["relation"] is None
+    assert context["bronze"]["relation"] is None
+
+
+def test_gold_run_matches_exact_schema_on_same_connection(monkeypatch, tmp_path):
+    db_path = tmp_path / "app_state.sqlite"
+    monkeypatch.setenv("AURUM_APP_STATE_DB", str(db_path))
+    with get_connection() as conn:
+        conn.execute("INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1', 'p1', 'x', 'x')")
+        conn.execute("INSERT INTO data_connections (id, project_id, type, name, host, port, database_name, username, status, created_at, updated_at) VALUES ('conn-A', 'p1', 'postgresql', 'A', 'localhost', 5432, 'db_a', 'user', 'ACTIVE', 'x', 'x')")
+        conn.execute(
+            """
+            INSERT INTO bronze_ingest_authority
+                (ingest_id, project_id, connection_id, database_name, source_schema, source_relation,
+                 source_identity_json, bronze_schema, bronze_relation, bronze_identity_json, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("ing-a1", "p1", "conn-A", "db_a", "source_a", "users", "{}", "bronze", "bronze_users_a", "{}", "READY", "x", "2026-07-28T01:00:00Z"),
+        )
+        conn.execute(
+            """
+            INSERT INTO bronze_ingest_authority
+                (ingest_id, project_id, connection_id, database_name, source_schema, source_relation,
+                 source_identity_json, bronze_schema, bronze_relation, bronze_identity_json, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("ing-a2", "p1", "conn-A", "db_a", "source_b", "users", "{}", "bronze", "bronze_users_b", "{}", "READY", "x", "2026-07-28T02:00:00Z"),
+        )
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review
+                (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema, generator_provenance, project_id, connection_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("gold-schema-a", "curated_users", "SELECT...", "{}", "2026-07-28T02:00:00Z", "PROMOTED", "cand", "gen", "p1", "conn-A"),
+        )
+        conn.execute(
+            """
+            INSERT INTO gold_security_state
+                (run_id, model_version, policy_version, business_requirement, selected_sources_json,
+                 target_schema, target_name, candidate_schema, candidate_name, generator_provenance,
+                 generator_version, review_snapshot_json, review_revision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("gold-schema-a", "v1", "v1", "req", json.dumps({"sources": [{"schema": "source_a", "table": "users"}]}),
+             "gold", "curated_users", "cand", "curated_users_c", "gen", "v1", "{}", "c" * 64),
+        )
+        conn.commit()
+
+    service = AssistantContextService(state_path=db_path)
+    context = service.build(run_id="gold-schema-a")
+
+    assert context["source"]["schema"] == "source_a"
+    assert context["source"]["relation"] == "users"
+    assert context["bronze"]["relation"] == "bronze_users_a"
+
+
+def test_gold_run_ambiguous_authority_remains_absent(monkeypatch, tmp_path):
+    db_path = tmp_path / "app_state.sqlite"
+    monkeypatch.setenv("AURUM_APP_STATE_DB", str(db_path))
+    with get_connection() as conn:
+        conn.execute("INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1', 'p1', 'x', 'x')")
+        conn.execute("INSERT INTO data_connections (id, project_id, type, name, host, port, database_name, username, status, created_at, updated_at) VALUES ('conn-A', 'p1', 'postgresql', 'A', 'localhost', 5432, 'db_a', 'user', 'ACTIVE', 'x', 'x')")
+        conn.execute(
+            """
+            INSERT INTO bronze_ingest_authority
+                (ingest_id, project_id, connection_id, database_name, source_schema, source_relation,
+                 source_identity_json, bronze_schema, bronze_relation, bronze_identity_json, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("ing-a1", "p1", "conn-A", "db_a", "source_a", "users", "{}", "bronze", "bronze_users_a", "{}", "READY", "x", "2026-07-28T01:00:00Z"),
+        )
+        conn.execute(
+            """
+            INSERT INTO bronze_ingest_authority
+                (ingest_id, project_id, connection_id, database_name, source_schema, source_relation,
+                 source_identity_json, bronze_schema, bronze_relation, bronze_identity_json, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("ing-a2", "p1", "conn-A", "db_a", "source_b", "users", "{}", "bronze", "bronze_users_b", "{}", "READY", "x", "2026-07-28T02:00:00Z"),
+        )
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review
+                (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema, generator_provenance, project_id, connection_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("gold-ambiguous", "curated_users", "SELECT...", "{}", "2026-07-28T02:00:00Z", "PROMOTED", "cand", "gen", "p1", "conn-A"),
+        )
+        conn.execute(
+            """
+            INSERT INTO gold_security_state
+                (run_id, model_version, policy_version, business_requirement, selected_sources_json,
+                 target_schema, target_name, candidate_schema, candidate_name, generator_provenance,
+                 generator_version, review_snapshot_json, review_revision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("gold-ambiguous", "v1", "v1", "req", json.dumps({"sources": [{"table": "users"}]}),
+             "gold", "curated_users", "cand", "curated_users_c", "gen", "v1", "{}", "c" * 64),
+        )
+        conn.commit()
+
+    service = AssistantContextService(state_path=db_path)
+    context = service.build(run_id="gold-ambiguous")
+
+    assert context["source"]["relation"] is None
+    assert context["bronze"]["relation"] is None
+
+
+def test_gold_run_exact_connection_schema_relation_resolves(monkeypatch, tmp_path):
+    db_path = tmp_path / "app_state.sqlite"
+    monkeypatch.setenv("AURUM_APP_STATE_DB", str(db_path))
+    with get_connection() as conn:
+        conn.execute("INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1', 'p1', 'x', 'x')")
+        conn.execute("INSERT INTO data_connections (id, project_id, type, name, host, port, database_name, username, status, created_at, updated_at) VALUES ('conn-A', 'p1', 'postgresql', 'A', 'localhost', 5432, 'db_a', 'user', 'ACTIVE', 'x', 'x')")
+        conn.execute(
+            """
+            INSERT INTO bronze_ingest_authority
+                (ingest_id, project_id, connection_id, database_name, source_schema, source_relation,
+                 source_identity_json, bronze_schema, bronze_relation, bronze_identity_json, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("ing-exact", "p1", "conn-A", "db_a", "prod", "orders", "{}", "bronze", "bronze_orders", "{}", "READY", "x", "2026-07-28T01:00:00Z"),
+        )
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review
+                (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema, generator_provenance, project_id, connection_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("gold-exact", "curated_orders", "SELECT...", "{}", "2026-07-28T02:00:00Z", "PROMOTED", "cand", "gen", "p1", "conn-A"),
+        )
+        conn.execute(
+            """
+            INSERT INTO gold_security_state
+                (run_id, model_version, policy_version, business_requirement, selected_sources_json,
+                 target_schema, target_name, candidate_schema, candidate_name, generator_provenance,
+                 generator_version, review_snapshot_json, review_revision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("gold-exact", "v1", "v1", "req", json.dumps({"sources": [{"schema": "prod", "table": "orders"}]}),
+             "gold", "curated_orders", "cand", "curated_orders_c", "gen", "v1", "{}", "c" * 64),
+        )
+        conn.commit()
+
+    service = AssistantContextService(state_path=db_path)
+    context = service.build(run_id="gold-exact")
+
+    assert context["connection"]["id"] == "conn-A"
+    assert context["source"]["schema"] == "prod"
+    assert context["source"]["relation"] == "orders"
+    assert context["bronze"]["relation"] == "bronze_orders"
+
+
