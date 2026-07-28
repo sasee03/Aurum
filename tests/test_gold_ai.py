@@ -268,7 +268,8 @@ def test_provider_uses_gemini_structured_output_with_only_authorized_metadata(mo
     )
     assert interpretation.verdict == "UNSUPPORTED"
     assert calls["model"] == "test-model"
-    assert calls["config"]["response_schema"] is GoldAIResponse
+    assert calls["config"]["response_json_schema"] == GoldAIResponse.model_json_schema()
+    assert "response_schema" not in calls["config"]
     assert calls["config"]["response_mime_type"] == "application/json"
     prompt = json.loads(calls["contents"])
     assert prompt["authorized_silver_source"] == {

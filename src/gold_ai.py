@@ -191,7 +191,7 @@ def interpret_gold_requirement(
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
                 response_mime_type="application/json",
-                response_schema=GoldAIResponse,
+                response_json_schema=GoldAIResponse.model_json_schema(),
             ),
         )
     except Exception as exc:
