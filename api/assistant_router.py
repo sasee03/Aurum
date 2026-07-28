@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import re
-from typing import Any, Dict, Optional
+import json
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from src.assistant_context import build_assistant_context
 from src.assistant_gemini import (
-    AssistantGeminiResponse,
     AssistantGeminiResponseInvalid,
     AssistantGeminiUnavailable,
     configured_assistant_gemini_model,
@@ -19,11 +18,6 @@ from src.assistant_gemini import (
 
 
 router = APIRouter(prefix="/api/v1/assistant", tags=["assistant"])
-
-_SQL_STATEMENT = re.compile(
-    r"\b(?:select|insert|update|delete|create|drop|alter|truncate|merge)\s+",
-    re.IGNORECASE,
-)
 
 
 class AssistantChatRequest(BaseModel):
@@ -45,31 +39,44 @@ def _context_value(context: Any, path: str) -> tuple[bool, Any]:
     return current is not None, current
 
 
-def _is_grounded(response: AssistantGeminiResponse, context: dict[str, Any]) -> bool:
-    """Require provider-cited values to exactly match deterministic context."""
-    if (
-        response.disposition != "ANSWERED"
-        or not response.evidence
-        or _SQL_STATEMENT.search(response.answer)
-    ):
-        return False
-    for item in response.evidence:
-        found, actual = _context_value(context, item.path)
-        if not found or actual != item.value:
-            return False
-        if isinstance(actual, (str, int, float, bool)) and str(actual).lower() not in response.answer.lower():
-            return False
-    return True
+def _available_fact_paths(context: Any, prefix: str = "") -> List[str]:
+    """Return non-null context paths Gemini may select; no values are trusted back."""
+    if not isinstance(context, dict):
+        return []
+    paths: List[str] = []
+    for key, value in context.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if value is None:
+            continue
+        paths.append(path)
+        if isinstance(value, dict):
+            paths.extend(_available_fact_paths(value, path))
+    return paths
 
 
-def _server_evidence(
-    response: AssistantGeminiResponse, context: dict[str, Any]
-) -> list[dict[str, Any]]:
-    """Return values resolved from context, never provider-supplied values."""
-    return [
-        {"path": item.path, "value": _context_value(context, item.path)[1]}
-        for item in response.evidence
-    ]
+def _server_facts(fact_paths: List[str], context: dict[str, Any]) -> List[Dict[str, Any]]:
+    """Resolve selected paths from server context, rejecting unknown values."""
+    facts: List[Dict[str, Any]] = []
+    for path in fact_paths:
+        found, value = _context_value(context, path)
+        if not found:
+            return []
+        facts.append({"path": path, "value": value})
+    return facts
+
+
+def _fact_label(path: str) -> str:
+    return path.replace("_", " ").replace(".", " ").capitalize()
+
+
+def _render_factual_answer(facts: List[Dict[str, Any]]) -> str:
+    """Render only server-resolved values; Gemini prose is never returned."""
+    lines = []
+    for fact in facts:
+        value = fact["value"]
+        rendered = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
+        lines.append(f"- {_fact_label(fact['path'])}: {rendered}.")
+    return "Verified Aurum facts:\n" + "\n".join(lines)
 
 
 def _context_indicators(context: dict[str, Any]) -> dict[str, Any]:
@@ -109,10 +116,12 @@ def _readonly_response(context: dict[str, Any]) -> dict[str, Any]:
 def assistant_chat(request: AssistantChatRequest) -> Dict[str, Any]:
     """Explain server-built context without accepting frontend factual values."""
     context = build_assistant_context(run_id=request.run_id)
+    available_fact_paths = _available_fact_paths(context)
     try:
         response = explain_with_gemini(
             message=request.message,
             context=context,
+            available_fact_paths=available_fact_paths,
             model=configured_assistant_gemini_model(),
         )
     except AssistantGeminiUnavailable:
@@ -128,12 +137,15 @@ def assistant_chat(request: AssistantChatRequest) -> Dict[str, Any]:
 
     if response.disposition == "READ_ONLY_REFUSAL":
         return _readonly_response(context)
-    if response.disposition == "INSUFFICIENT_INFORMATION" or not _is_grounded(response, context):
+    if response.disposition == "INSUFFICIENT_INFORMATION":
+        return _insufficient_response(context)
+    facts = _server_facts(response.fact_paths, context)
+    if not facts:
         return _insufficient_response(context)
     return {
-        "answer": response.answer,
+        "answer": _render_factual_answer(facts),
         "grounded": True,
         "status": "answered",
-        "evidence": _server_evidence(response, context),
+        "evidence": facts,
         "context": _context_indicators(context),
     }
