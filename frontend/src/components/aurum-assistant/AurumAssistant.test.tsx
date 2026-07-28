@@ -164,4 +164,29 @@ describe('Aurum Assistant Integration & Component Tests', () => {
     expect(markup).toContain('Aurum Assistant is currently read-only.');
     expect(markup).toContain("can&#x27;t approve, execute, promote, or modify pipeline state from chat");
   });
+
+  it('8. selectedTable is never sent as run_id when runId is undefined', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        answer: 'I do not have enough information in the current Aurum context to answer that.',
+        grounded: false,
+        status: 'insufficient_information',
+      }),
+    });
+
+    const payload: AssistantChatRequest = {
+      message: 'What table is this?',
+      run_id: undefined,
+    };
+
+    await askAurumAssistant(payload);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body);
+    expect(body.run_id).toBeUndefined();
+    expect(body).toEqual({ message: 'What table is this?' });
+  });
 });
