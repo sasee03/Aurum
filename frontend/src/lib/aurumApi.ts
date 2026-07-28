@@ -637,6 +637,49 @@ export async function verifyBronze(tables: string[]): Promise<VerifyBronzeRespon
   });
 }
 
+export interface ConnectorRelationPayload {
+  schema: string;
+  table: string;
+}
+
+export interface ConnectorBronzeItemResult {
+  connection_id: string;
+  ingest_id?: string;
+  status: 'success' | 'error';
+  source: ConnectorRelationPayload;
+  bronze: ConnectorRelationPayload;
+  source_row_count?: number;
+  bronze_row_count?: number;
+  row_count?: number | null;
+  match?: boolean;
+  error?: string;
+}
+
+export interface ConnectorBronzeResponse {
+  connection_id: string;
+  results: ConnectorBronzeItemResult[];
+}
+
+export async function ingestConnectorRelationsToBronze(
+  connectionId: string,
+  relations: ConnectorRelationPayload[],
+): Promise<ConnectorBronzeResponse> {
+  return request<ConnectorBronzeResponse>('/connectors/postgres/bronze/ingest', {
+    method: 'POST',
+    body: JSON.stringify({ connection_id: connectionId, relations }),
+  });
+}
+
+export async function verifyConnectorRelationsInBronze(
+  connectionId: string,
+  relations: ConnectorRelationPayload[],
+): Promise<ConnectorBronzeResponse> {
+  return request<ConnectorBronzeResponse>('/connectors/postgres/bronze/verify', {
+    method: 'POST',
+    body: JSON.stringify({ connection_id: connectionId, relations }),
+  });
+}
+
 // ────────────────────────────────────────────
 // P2 Silver Transformation API Client Functions
 // ────────────────────────────────────────────
@@ -660,6 +703,8 @@ export interface TransformGetRulesResponse {
 
 export interface TransformGenerateRequest {
   table_name: string;
+  connection_id?: string;
+  source?: ConnectorRelationPayload;
 }
 
 export interface TransformGenerateResponse {
@@ -719,10 +764,21 @@ export async function transformGetRules(tableName: string): Promise<TransformGet
 }
 
 /** P2.2 & P2.3: Generate SQL via LLM for requested table */
-export async function transformGenerate(tableName: string): Promise<TransformGenerateResponse> {
+export async function transformGenerate(
+  tableName: string,
+  connectorContext?: { connectionId: string; source: ConnectorRelationPayload },
+): Promise<TransformGenerateResponse> {
   return request<TransformGenerateResponse>('/api/v1/transform/generate', {
     method: 'POST',
-    body: JSON.stringify({ table_name: tableName }),
+    body: JSON.stringify({
+      table_name: tableName,
+      ...(connectorContext
+        ? {
+            connection_id: connectorContext.connectionId,
+            source: connectorContext.source,
+          }
+        : {}),
+    }),
   });
 }
 

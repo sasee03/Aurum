@@ -602,9 +602,13 @@ export function DatasetExplorerPage() {
                 rightIcon={<ArrowRight size={14} />}
                 onClick={() => {
                   if (!selectedRelation) return;
+                  const metadataPath = withRunIdQuery(`/projects/${id}/metadata`, runId);
+                  const connectorPath = connectionId
+                    ? `${metadataPath}${metadataPath.includes('?') ? '&' : '?'}connectionId=${encodeURIComponent(connectionId)}`
+                    : metadataPath;
                   navigate(
                     withRelationSelectionQuery(
-                      withRunIdQuery(`/projects/${id}/metadata`, runId),
+                      connectorPath,
                       {
                         schema: selectedRelation.schema,
                         table: selectedRelation.name,

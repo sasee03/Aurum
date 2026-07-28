@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
@@ -17,10 +17,17 @@ import { PageAssistant } from '@/components/common/PageAssistant';
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton';
 import {
   fetchSourceTables,
+  getLiveTablePreview,
   ingestToBronze,
+  ingestConnectorRelationsToBronze,
+  listPostgresTables,
   verifyBronze,
+  verifyConnectorRelationsInBronze,
+  type ConnectorBronzeItemResult,
+  type ConnectorRelationPayload,
   type SourceTableEntry,
   type IngestToBronzeItemResult,
+  type LiveTablePreview,
   type VerifyBronzeItemResult,
 } from '@/lib/aurumApi';
 import { calmApiMessage } from '@/utils/apiErrors';
@@ -33,13 +40,29 @@ import {
 } from '@/utils/bronzeSelection';
 import { readRelationSelection } from '@/utils/relationSelection';
 
+type BronzeResultItem = VerifyBronzeItemResult | ConnectorBronzeItemResult;
+
+function relationKey(relation: ConnectorRelationPayload): string {
+  return `${relation.schema}.${relation.table}`;
+}
+
+function resultSource(result: BronzeResultItem, fallbackSchema = 'configured_source'): ConnectorRelationPayload {
+  if ('source' in result) return result.source;
+  return { schema: fallbackSchema, table: result.table };
+}
+
+function resultBronze(result: BronzeResultItem): ConnectorRelationPayload {
+  if ('bronze' in result) return result.bronze;
+  return { schema: 'bronze', table: result.table };
+}
+
 function formatNumber(n: number | null | undefined): string {
   if (n == null) return '—';
   return n.toLocaleString();
 }
 
 /** Strict Silver Eligibility Rule: Requires backend status === 'success' AND match === true */
-function isEligibleForSilver(r: VerifyBronzeItemResult | undefined): boolean {
+function isEligibleForSilver(r: BronzeResultItem | undefined): boolean {
   return Boolean(r && r.status === 'success' && r.match === true);
 }
 
@@ -48,78 +71,100 @@ export function BronzeValidationPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const runId = searchParams.get('runId') ?? undefined;
+  const connectionId = searchParams.get('connectionId') ?? undefined;
   const carriedRelation = readRelationSelection(searchParams);
+  const carriedSchema = carriedRelation?.schema;
+  const carriedTable = carriedRelation?.table;
+  const connectorMode = Boolean(connectionId);
 
   // Source tables state
   const [loadingTables, setLoadingTables] = useState(true);
   const [tablesError, setTablesError] = useState<string | null>(null);
   const [schema, setSchema] = useState<string>('public');
   const [sourceTables, setSourceTables] = useState<SourceTableEntry[]>([]);
-  const [selectedTableNames, setSelectedTableNames] = useState<string[]>(
-    initialBronzeSelection,
+  const [selectedRelations, setSelectedRelations] = useState<ConnectorRelationPayload[]>(
+    () => (carriedRelation ? [carriedRelation] : []),
   );
 
   // Ingestion & Verification state
   const [ingesting, setIngesting] = useState(false);
   const [ingestResults, setIngestResults] = useState<IngestToBronzeItemResult[] | null>(null);
   const [verifying, setVerifying] = useState(false);
-  const [verifyResults, setVerifyResults] = useState<VerifyBronzeItemResult[] | null>(null);
+  const [verifyResults, setVerifyResults] = useState<BronzeResultItem[] | null>(null);
 
   // Selected table for preview & Silver handoff
-  const [activePreviewTable, setActivePreviewTable] = useState<string | null>(null);
+  const [activePreviewKey, setActivePreviewKey] = useState<string | null>(null);
+  const [bronzePreview, setBronzePreview] = useState<LiveTablePreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const isBusy = ingesting || verifying;
   const canIngest = canIngestBronzeSelection(
-    selectedTableNames,
+    selectedRelations.map(relationKey),
     isBusy,
     loadingTables,
   );
 
-  function resetStaleResults() {
+  const resetStaleResults = useCallback(() => {
     setIngestResults(null);
     setVerifyResults(null);
-    setActivePreviewTable(null);
-  }
+    setActivePreviewKey(null);
+    setBronzePreview(null);
+    setPreviewError(null);
+  }, []);
 
-  async function loadSourceTables() {
-    if (isBusy) return;
+  const loadSourceTables = useCallback(async () => {
     setLoadingTables(true);
     setTablesError(null);
     resetStaleResults();
     try {
-      const res = await fetchSourceTables();
-      setSchema(res.schema || 'public');
-      setSourceTables(res.tables || []);
-      setSelectedTableNames(initialBronzeSelection());
+      if (connectionId) {
+        const res = await listPostgresTables(connectionId, carriedSchema);
+        setSchema(res.schema || carriedSchema || 'public');
+        setSourceTables(res.tables || []);
+        setSelectedRelations(carriedSchema && carriedTable ? [{ schema: carriedSchema, table: carriedTable }] : []);
+      } else {
+        const res = await fetchSourceTables();
+        setSchema(res.schema || 'public');
+        setSourceTables(res.tables || []);
+        setSelectedRelations(initialBronzeSelection().map((table) => ({ schema: res.schema || 'public', table })));
+      }
     } catch (err: any) {
       setTablesError(calmApiMessage(err, 'Failed to discover source tables from backend API.'));
       setSourceTables([]);
-      setSelectedTableNames([]);
+      setSelectedRelations([]);
     } finally {
       setLoadingTables(false);
     }
-  }
+  }, [connectionId, carriedSchema, carriedTable, resetStaleResults]);
 
   useEffect(() => {
     void loadSourceTables();
-  }, []);
+  }, [loadSourceTables]);
 
-  function toggleTableSelection(tableName: string) {
+  function toggleTableSelection(relation: ConnectorRelationPayload) {
     if (isBusy || loadingTables) return;
     resetStaleResults();
-    setSelectedTableNames((previous) =>
-      toggleBronzeTable(previous, tableName),
-    );
+    setSelectedRelations((previous) => {
+      const nextKeys = toggleBronzeTable(previous.map(relationKey), relationKey(relation));
+      return nextKeys
+        .map((key) => {
+          const [schemaName, tableName] = key.split('.');
+          return { schema: schemaName, table: tableName };
+        })
+        .filter((item) => item.schema && item.table);
+    });
   }
 
   function toggleSelectAll() {
     if (isBusy || loadingTables) return;
     resetStaleResults();
-    setSelectedTableNames(
-      toggleAllBronzeTables(
-        selectedTableNames,
-        sourceTables.map((table) => table.table),
-      ),
+    const available = sourceTables.map((table) => relationKey({ schema: table.schema, table: table.table }));
+    const nextKeys = toggleAllBronzeTables(selectedRelations.map(relationKey), available);
+    setSelectedRelations(
+      nextKeys.map((key) => {
+        const [schemaName, tableName] = key.split('.');
+        return { schema: schemaName, table: tableName };
+      }),
     );
   }
 
@@ -131,10 +176,35 @@ export function BronzeValidationPage() {
 
     try {
       // Step 1: Ingest to Bronze
+      if (connectorMode && connectionId) {
+        const ingestRes = await ingestConnectorRelationsToBronze(connectionId, selectedRelations);
+        setIngestResults(ingestRes.results.map((result) => ({
+          table: result.source.table,
+          status: result.status,
+          error: result.error,
+        })));
+
+        const successfulRelations = ingestRes.results
+          .filter((r) => r.status === 'success')
+          .map((r) => r.source);
+
+        setIngesting(false);
+
+        if (successfulRelations.length > 0) {
+          setVerifying(true);
+          const verifyRes = await verifyConnectorRelationsInBronze(connectionId, successfulRelations);
+          setVerifyResults(verifyRes.results);
+
+          const firstEligible = verifyRes.results.find((r) => isEligibleForSilver(r));
+          setActivePreviewKey(firstEligible ? relationKey(resultSource(firstEligible, schema)) : null);
+        }
+        return;
+      }
+
+      const selectedTableNames = selectedRelations.map((relation) => relation.table);
       const ingestRes = await ingestToBronze(selectedTableNames);
       setIngestResults(ingestRes.results);
 
-      // Identify successfully ingested tables
       const successfulTables = ingestRes.results
         .filter((r) => r.status === 'success')
         .map((r) => r.table);
@@ -142,18 +212,12 @@ export function BronzeValidationPage() {
       setIngesting(false);
 
       if (successfulTables.length > 0) {
-        // Step 2: Verify Bronze for successful tables
         setVerifying(true);
         const verifyRes = await verifyBronze(successfulTables);
         setVerifyResults(verifyRes.results);
 
-        // Select the FIRST ELIGIBLE table (status === 'success' AND match === true)
         const firstEligible = verifyRes.results.find((r) => isEligibleForSilver(r));
-        if (firstEligible) {
-          setActivePreviewTable(firstEligible.table);
-        } else {
-          setActivePreviewTable(null);
-        }
+        setActivePreviewKey(firstEligible ? relationKey(resultSource(firstEligible, schema)) : null);
       }
     } catch (err: any) {
       setTablesError(calmApiMessage(err, 'Bronze ingestion or verification failed.'));
@@ -165,10 +229,35 @@ export function BronzeValidationPage() {
 
   // Bronze shows Live ONLY when there is genuine verified data (status === 'success' AND match === true)
   const hasLiveResults = Boolean(verifyResults && verifyResults.some(isEligibleForSilver));
-  const activeVerifyItem = verifyResults?.find((r) => r.table === activePreviewTable);
+  const activeVerifyItem = verifyResults?.find((r) => relationKey(resultSource(r, schema)) === activePreviewKey);
   const activeIsEligible = isEligibleForSilver(activeVerifyItem);
-  const previewRows = activeVerifyItem?.preview_sample ?? [];
+  const previewRows = activeVerifyItem && 'preview_sample' in activeVerifyItem
+    ? activeVerifyItem.preview_sample ?? []
+    : bronzePreview?.rows ?? [];
   const previewColumns = previewRows.length > 0 ? Object.keys(previewRows[0]) : [];
+
+  useEffect(() => {
+    let active = true;
+    async function loadBronzePreview() {
+      setBronzePreview(null);
+      setPreviewError(null);
+      if (!activeVerifyItem || !activeIsEligible) return;
+      if ('preview_sample' in activeVerifyItem && activeVerifyItem.preview_sample?.length) return;
+      const bronze = resultBronze(activeVerifyItem);
+      try {
+        const preview = await getLiveTablePreview(bronze.table, bronze.schema);
+        if (active) setBronzePreview(preview);
+      } catch (err) {
+        if (active) {
+          setPreviewError(calmApiMessage(err, 'Verified Bronze relation has no available live preview endpoint response.'));
+        }
+      }
+    }
+    void loadBronzePreview();
+    return () => {
+      active = false;
+    };
+  }, [activePreviewKey, activeIsEligible, activeVerifyItem]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
@@ -216,7 +305,7 @@ export function BronzeValidationPage() {
                       disabled={loadingTables || isBusy}
                       className="text-xs text-[#6366f1] hover:text-[#818cf8] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                     >
-                      {selectedTableNames.length === sourceTables.length ? 'Deselect All' : 'Select All'}
+                      {selectedRelations.length === sourceTables.length ? 'Deselect All' : 'Select All'}
                     </button>
                   )}
                   <button
@@ -261,11 +350,13 @@ export function BronzeValidationPage() {
               ) : (
                 <div className="space-y-2">
                   {sourceTables.map((entry) => {
-                    const isSelected = selectedTableNames.includes(entry.table);
+                    const entryRelation = { schema: entry.schema, table: entry.table };
+                    const entryKey = relationKey(entryRelation);
+                    const isSelected = selectedRelations.some((item) => relationKey(item) === entryKey);
                     return (
                       <div
-                        key={entry.table}
-                        onClick={() => toggleTableSelection(entry.table)}
+                        key={entryKey}
+                        onClick={() => toggleTableSelection(entryRelation)}
                         className={`flex items-center justify-between p-3.5 rounded-lg border transition-all ${
                           isBusy || loadingTables ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
                         } ${
@@ -311,7 +402,7 @@ export function BronzeValidationPage() {
               {/* Ingest Action Bar */}
               <div className="mt-5 flex items-center justify-between pt-4 border-t border-[#252637]">
                 <span className="text-xs text-[#94a3b8]">
-                  {selectedTableNames.length} of {sourceTables.length} table
+                  {selectedRelations.length} of {sourceTables.length} table
                   {sourceTables.length === 1 ? '' : 's'} selected
                 </span>
                 <Button
@@ -338,19 +429,21 @@ export function BronzeValidationPage() {
                 </div>
 
                 <div className="space-y-3">
-                  {selectedTableNames.map((tableName) => {
-                    const ingRes = ingestResults?.find((r) => r.table === tableName);
-                    const verRes = verifyResults?.find((r) => r.table === tableName);
+                  {selectedRelations.map((relation) => {
+                    const sourceKey = relationKey(relation);
+                    const ingRes = ingestResults?.find((r) => relationKey({ schema: relation.schema, table: r.table }) === sourceKey);
+                    const verRes = verifyResults?.find((r) => relationKey(resultSource(r, schema)) === sourceKey);
                     const eligible = isEligibleForSilver(verRes);
+                    const bronze = verRes ? resultBronze(verRes) : null;
 
                     return (
                       <div
-                        key={tableName}
+                        key={sourceKey}
                         className="rounded-lg border border-[#252637] bg-[#13141e] p-4 space-y-2"
                       >
                         <div className="flex items-center justify-between">
                           <span className="text-sm font-semibold text-[#f1f5f9]">
-                            {tableName}
+                            {relation.schema}.{relation.table}
                           </span>
                           {ingRes?.status === 'error' ? (
                             <Badge variant="failed">Ingestion Failed</Badge>
@@ -370,7 +463,13 @@ export function BronzeValidationPage() {
                         )}
 
                         {verRes && verRes.status === 'success' && (
-                          <div className="grid grid-cols-3 gap-2 pt-2 text-xs text-[#94a3b8] border-t border-[#252637]">
+                          <div className="grid grid-cols-2 gap-2 pt-2 text-xs text-[#94a3b8] border-t border-[#252637] md:grid-cols-4">
+                            <div>
+                              <span className="text-[#6b7280]">Bronze: </span>
+                              <span className="font-mono text-[#f1f5f9]">
+                                {bronze ? `${bronze.schema}.${bronze.table}` : '—'}
+                              </span>
+                            </div>
                             <div>
                               <span className="text-[#6b7280]">Source Rows: </span>
                               <span className="font-mono text-[#f1f5f9]">
@@ -421,13 +520,16 @@ export function BronzeValidationPage() {
                 <div className="space-y-3">
                   {verifyResults.map((v) => {
                     const eligible = isEligibleForSilver(v);
-                    const isSelected = activePreviewTable === v.table;
+                    const source = resultSource(v, schema);
+                    const bronze = resultBronze(v);
+                    const sourceKey = relationKey(source);
+                    const isSelected = activePreviewKey === sourceKey;
                     return (
                       <div
-                        key={v.table}
+                        key={sourceKey}
                         onClick={() => {
                           if (eligible && !isBusy) {
-                            setActivePreviewTable(v.table);
+                            setActivePreviewKey(sourceKey);
                           }
                         }}
                         className={`p-3 rounded-lg border transition-colors ${
@@ -439,7 +541,7 @@ export function BronzeValidationPage() {
                         }`}
                       >
                         <div className="flex justify-between items-center text-xs font-semibold text-[#f1f5f9]">
-                          <span>{v.table}</span>
+                          <span>{source.schema}.{source.table}</span>
                           <span className={eligible ? 'text-[#22c55e]' : 'text-[#ef4444]'}>
                             {eligible ? 'Matched (Eligible)' : 'Mismatch (Ineligible)'}
                           </span>
@@ -447,6 +549,9 @@ export function BronzeValidationPage() {
                         <div className="mt-2 flex justify-between text-xs text-[#94a3b8]">
                           <span>Source: {formatNumber(v.source_row_count)}</span>
                           <span>Bronze: {formatNumber(v.bronze_row_count)}</span>
+                        </div>
+                        <div className="mt-1 text-[11px] text-[#6b7280]">
+                          Target {bronze.schema}.{bronze.table}
                         </div>
                       </div>
                     );
@@ -487,20 +592,22 @@ export function BronzeValidationPage() {
                 {verifyResults && verifyResults.length > 1 && (
                   <select
                     className="rounded border border-[#252637] bg-[#1a1b28] px-2 py-1 text-xs text-[#f1f5f9] focus:outline-none"
-                    value={activePreviewTable || ''}
+                    value={activePreviewKey || ''}
                     disabled={isBusy}
                     onChange={(e) => {
-                      const selectedItem = verifyResults.find((r) => r.table === e.target.value);
+                      const selectedItem = verifyResults.find((r) => relationKey(resultSource(r, schema)) === e.target.value);
                       if (isEligibleForSilver(selectedItem)) {
-                        setActivePreviewTable(e.target.value);
+                        setActivePreviewKey(e.target.value);
                       }
                     }}
                   >
                     {verifyResults.map((v) => {
                       const eligible = isEligibleForSilver(v);
+                      const source = resultSource(v, schema);
+                      const sourceKey = relationKey(source);
                       return (
-                        <option key={v.table} value={v.table} disabled={!eligible}>
-                          {v.table} {eligible ? '(Eligible)' : '(Ineligible - Mismatch)'}
+                        <option key={sourceKey} value={sourceKey} disabled={!eligible}>
+                          {source.schema}.{source.table} {eligible ? '(Eligible)' : '(Ineligible - Mismatch)'}
                         </option>
                       );
                     })}
@@ -508,10 +615,10 @@ export function BronzeValidationPage() {
                 )}
               </div>
 
-              {activePreviewTable && activeIsEligible && previewRows.length > 0 ? (
+              {activeVerifyItem && activeIsEligible && previewRows.length > 0 ? (
                 <div>
                   <p className="text-xs text-[#6b7280] mb-3">
-                    Showing sample rows from <span className="font-mono text-[#f1f5f9]">bronze.{activePreviewTable}</span>
+                    Showing sample rows from <span className="font-mono text-[#f1f5f9]">{resultBronze(activeVerifyItem).schema}.{resultBronze(activeVerifyItem).table}</span>
                   </p>
                   <div className="overflow-x-auto max-h-[340px] rounded-lg border border-[#252637] scrollbar-thin">
                     <table className="w-full text-left text-xs whitespace-nowrap">
@@ -542,7 +649,9 @@ export function BronzeValidationPage() {
                 </div>
               ) : (
                 <div className="rounded-lg border border-[#252637] bg-[#13141e] p-6 text-center text-xs text-[#6b7280]">
-                  {verifying
+                  {previewError
+                    ? previewError
+                    : verifying
                     ? 'Fetching preview sample from backend…'
                     : verifyResults && verifyResults.length > 0 && !activeIsEligible
                       ? 'No verified 1:1 matching table is available for Silver handoff.'
@@ -564,16 +673,25 @@ export function BronzeValidationPage() {
         </Button>
         <Button
           variant="primary"
-          disabled={!activePreviewTable || !activeIsEligible || isBusy}
+          disabled={!activeVerifyItem || !activeIsEligible || isBusy}
           rightIcon={<ArrowRight size={16} />}
           onClick={() => {
-            if (activePreviewTable && activeIsEligible) {
-              navigate(`/projects/${encodeURIComponent(id || '')}/silver?table=${encodeURIComponent(activePreviewTable)}`);
+            if (activeVerifyItem && activeIsEligible) {
+              const source = resultSource(activeVerifyItem, schema);
+              const bronze = resultBronze(activeVerifyItem);
+              const params = new URLSearchParams({
+                table: bronze.table,
+                bronzeSchema: bronze.schema,
+                sourceSchema: source.schema,
+                sourceTable: source.table,
+              });
+              if (connectionId) params.set('connectionId', connectionId);
+              navigate(`/projects/${encodeURIComponent(id || '')}/silver?${params.toString()}`);
             }
           }}
         >
-          {activePreviewTable && activeIsEligible
-            ? `Continue to Silver (${activePreviewTable})`
+          {activeVerifyItem && activeIsEligible
+            ? `Continue to Silver (${resultBronze(activeVerifyItem).table})`
             : 'Continue to Silver'}
         </Button>
       </div>

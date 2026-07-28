@@ -40,6 +40,14 @@ export function SilverValidationPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const selectedTableParam = searchParams.get('table');
+  const connectionId = searchParams.get('connectionId');
+  const sourceSchema = searchParams.get('sourceSchema');
+  const sourceTable = searchParams.get('sourceTable');
+  const connectorContext =
+    connectionId && sourceSchema && sourceTable
+      ? { connectionId, source: { schema: sourceSchema, table: sourceTable } }
+      : undefined;
+  const connectorContextIncomplete = Boolean(connectionId) && !connectorContext;
 
   // Per-operation async ownership and stale-response protection refs
   const activeTableRef = useRef<string | null>(selectedTableParam);
@@ -308,6 +316,10 @@ export function SilverValidationPage() {
 
   async function handleGenerate() {
     if (!selectedTableParam || generating || executing) return;
+    if (connectorContextIncomplete) {
+      setGenerateError('Connector context is incomplete. Return to Bronze and verify the selected source relation again.');
+      return;
+    }
 
     const validated = validateRulesInput(rules);
     if (!validated) return;
@@ -343,7 +355,7 @@ export function SilverValidationPage() {
     resetRunState();
 
     try {
-      const genRes = await transformGenerate(reqTable);
+      const genRes = await transformGenerate(reqTable, connectorContext);
       if (
         !mountedRef.current ||
         activeTableRef.current !== reqTable ||

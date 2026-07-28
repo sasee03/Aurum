@@ -348,6 +348,33 @@ describe('aurumApi error parsing', () => {
     );
   });
 
+  it('transformGenerate sends connector authority when supplied', async () => {
+    const { transformGenerate } = await import('./aurumApi');
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ run_id: 'run_1', status: 'PENDING', message: 'Generated' }),
+    });
+
+    await transformGenerate('orders', {
+      connectionId: 'conn_123',
+      source: { schema: 'source_schema', table: 'orders' },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/transform/generate',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          table_name: 'orders',
+          connection_id: 'conn_123',
+          source: { schema: 'source_schema', table: 'orders' },
+        }),
+      }),
+    );
+  });
+
   it('buildUrl normalizes base URL and path correctly', async () => {
     const { buildUrl } = await import('./aurumApi');
     expect(buildUrl('/api/v1/health')).toBe('/api/v1/health');

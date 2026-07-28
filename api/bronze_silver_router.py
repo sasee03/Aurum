@@ -8,10 +8,11 @@ import logging
 import datetime
 from typing import List, Optional, Set, Tuple, Any
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.app_state.db import get_connection, compute_rule_revision, is_valid_rule_revision, compute_silver_lineage_id, validate_promoted_identity_json
+from src.bronze_authority import BronzeAuthorityError, load_bronze_authority
 from src.db_config import (
     get_ingestion_pool, 
     get_generated_sql_pool, 
@@ -22,6 +23,7 @@ from src.db_config import (
 )
 from src.sql_safety import validate_generated_sql, execute_candidate_sql
 from src.promotion import promote_candidate_table, resolve_relation_identity
+from src.postgres_connector import get_session_connection, open_session_connection
 from src.generator_trust import GeneratorTrustPolicy
 from src.silver_rules import (
     PostgresColumnType,
@@ -72,8 +74,16 @@ class RulesPayload(BaseModel):
     table_name: str
     rules: List[Any]
 
+class ConnectorSilverSourcePayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_name: str = Field(alias="schema")
+    table: str
+
 class GeneratePayload(BaseModel):
     table_name: str
+    connection_id: Optional[str] = None
+    source: Optional[ConnectorSilverSourcePayload] = None
 
 def is_trusted_provenance(provenance: Optional[str]) -> bool:
     """Return True if provenance is recognized as a trusted generator implementation."""
@@ -172,6 +182,279 @@ def _load_exact_bronze_column_types(
             type_kind=str(row[10]),
         )
     return column_types
+
+
+def _database_identity(conn: Any) -> tuple[int, str]:
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT oid, datname
+            FROM pg_catalog.pg_database
+            WHERE datname = pg_catalog.current_database()
+            """
+        )
+        row = cursor.fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "database_identity_unresolved",
+                "message": "The active connector database identity could not be resolved.",
+            },
+        )
+    return int(row[0]), str(row[1])
+
+
+def _assert_connector_database_is_aurum_database(
+    *,
+    connector_identity: tuple[int, str],
+    aurum_identity: tuple[int, str],
+) -> None:
+    if connector_identity == aurum_identity:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "CONNECTOR_DATABASE_NOT_AURUM_DATABASE",
+            "message": (
+                "This Aurum V1 pipeline requires the connected source and managed "
+                "Bronze/Silver/Gold schemas to be in the same PostgreSQL database."
+            ),
+        },
+    )
+
+
+def _assert_identity_matches(
+    *,
+    current: dict[str, Any] | None,
+    expected: dict[str, Any],
+    missing_error: str,
+    changed_error: str,
+    message: str,
+    relation: dict[str, str],
+) -> None:
+    if current is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": missing_error,
+                "message": message,
+                "relation": relation,
+            },
+        )
+    for key in (
+        "database_oid",
+        "namespace_oid",
+        "relation_oid",
+        "schema",
+        "relation_name",
+        "relation_kind",
+    ):
+        if current.get(key) != expected[key]:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": changed_error,
+                    "message": message,
+                    "relation": relation,
+                },
+            )
+
+
+def _load_connector_ready_bronze_authority(
+    *,
+    connection_id: str,
+    source_schema: str,
+    source_table: str,
+    database_oid: int,
+    database_name: str,
+) -> dict[str, Any]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM bronze_ingest_authority
+            WHERE connection_id = ?
+              AND source_schema = ?
+              AND source_relation = ?
+              AND status = 'READY'
+            ORDER BY created_at DESC, ingest_id DESC
+            """,
+            (connection_id, source_schema, source_table),
+        ).fetchall()
+
+    matching_database: list[dict[str, Any]] = []
+    mismatched_database: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            authority = load_bronze_authority(row)
+        except BronzeAuthorityError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "connector_bronze_authority_invalid",
+                    "message": str(exc),
+                    "source": {"schema": source_schema, "table": source_table},
+                },
+            ) from None
+        if (
+            authority["source_identity"]["database_oid"] == database_oid
+            and authority["database_name"] == database_name
+        ):
+            matching_database.append(authority)
+        else:
+            mismatched_database.append(authority)
+
+    source = {"schema": source_schema, "table": source_table}
+    if len(matching_database) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "connector_bronze_authority_ambiguous",
+                "message": (
+                    f"Multiple READY Bronze authorities match source "
+                    f"'{source_schema}.{source_table}' for this connector session."
+                ),
+                "source": source,
+            },
+        )
+    if matching_database:
+        return matching_database[0]
+    if mismatched_database:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "connector_bronze_database_mismatch",
+                "message": (
+                    f"READY Bronze authority for source '{source_schema}.{source_table}' "
+                    "belongs to a different database identity than the active connector session."
+                ),
+                "source": source,
+            },
+        )
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={
+            "error": "connector_bronze_authority_not_found",
+            "message": (
+                f"No READY connector-bound Bronze authority exists for "
+                f"source '{source_schema}.{source_table}'."
+            ),
+            "source": source,
+        },
+    )
+
+
+def _resolve_connector_silver_source(payload: GeneratePayload) -> dict[str, Any] | None:
+    connector_requested = bool(payload.connection_id or payload.source)
+    if not connector_requested:
+        return None
+    if not payload.connection_id or not payload.connection_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Connector-bound Silver generation requires connection_id.",
+        )
+    if payload.source is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Connector-bound Silver generation requires source schema and table.",
+        )
+
+    try:
+        source_schema = validate_sql_identifier(payload.source.schema_name.strip())
+        source_table = validate_sql_identifier(payload.source.table.strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    session = get_session_connection(payload.connection_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "connection_not_found",
+                "message": (
+                    "Connection session expired or unknown. "
+                    "Re-test the connection (password is not persisted)."
+                ),
+            },
+        )
+
+    try:
+        with open_session_connection(session) as session_conn:
+            database_oid, database_name = _database_identity(session_conn)
+            with get_generated_sql_pool().connection() as execution_conn:
+                _assert_connector_database_is_aurum_database(
+                    connector_identity=(database_oid, database_name),
+                    aurum_identity=_database_identity(execution_conn),
+                )
+            authority = _load_connector_ready_bronze_authority(
+                connection_id=session.connection_id,
+                source_schema=source_schema,
+                source_table=source_table,
+                database_oid=database_oid,
+                database_name=database_name,
+            )
+            source_relation = {
+                "schema": authority["source_schema"],
+                "table": authority["source_relation"],
+            }
+            bronze_relation = {
+                "schema": authority["bronze_schema"],
+                "table": authority["bronze_relation"],
+            }
+            try:
+                live_source = resolve_relation_identity(
+                    session_conn,
+                    authority["source_schema"],
+                    authority["source_relation"],
+                )
+                live_bronze = resolve_relation_identity(
+                    session_conn,
+                    authority["bronze_schema"],
+                    authority["bronze_relation"],
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "error": "connector_bronze_identity_unresolved",
+                        "message": str(exc),
+                        "source": source_relation,
+                        "bronze": bronze_relation,
+                    },
+                ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to resolve connector-bound Bronze authority")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "connector_bronze_authority_resolution_failed",
+                "message": str(exc),
+            },
+        ) from None
+
+    _assert_identity_matches(
+        current=live_source,
+        expected=authority["source_identity"],
+        missing_error="source_identity_missing",
+        changed_error="source_identity_changed",
+        message=(
+            "The recorded connector source relation is missing or its physical identity changed."
+        ),
+        relation=source_relation,
+    )
+    _assert_identity_matches(
+        current=live_bronze,
+        expected=authority["bronze_identity"],
+        missing_error="bronze_target_missing",
+        changed_error="bronze_identity_changed",
+        message=(
+            "The recorded Bronze target is missing or its physical identity changed."
+        ),
+        relation=bronze_relation,
+    )
+    return authority
 
 def parse_attribution_log(raw_json: Optional[str]) -> Tuple[Optional[List[str]], bool]:
     """Structurally parse stored attribution_log_json.
@@ -357,22 +640,83 @@ def get_rules(table_name: str):
 @router.post("/generate")
 def generate_sql(payload: GeneratePayload):
     """P2.2 & P2.3: Generate SQL for requested table (503 contained if no deterministic rules)."""
-    # 1. Fetch rules
-    rules_resp = get_rules(payload.table_name)
-    rules = rules_resp.get("rules", [])
-    if not rules or not (isinstance(rules, list) and all(isinstance(r, dict) for r in rules)):
-        raise HTTPException(
-            status_code=503,
-            detail="Production Silver generation is unavailable."
-        )
+    try:
+        table_name = validate_sql_identifier(payload.table_name.strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     try:
+        connector_authority = _resolve_connector_silver_source(payload)
+        if (
+            connector_authority is not None
+            and table_name != connector_authority["source_relation"]
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "connector_table_authority_mismatch",
+                    "message": (
+                        "Connector-bound Silver table_name must match the persisted "
+                        "Bronze authority source relation."
+                    ),
+                    "source": {
+                        "schema": connector_authority["source_schema"],
+                        "table": connector_authority["source_relation"],
+                    },
+                },
+            )
+
+        # 1. Fetch rules only after connector authority has bound the table identity.
+        rules_resp = get_rules(table_name)
+        rules = rules_resp.get("rules", [])
+        if not rules or not (isinstance(rules, list) and all(isinstance(r, dict) for r in rules)):
+            raise HTTPException(
+                status_code=503,
+                detail="Production Silver generation is unavailable."
+            )
+
         schemas = load_layer_schemas()
-        with get_generated_sql_pool().connection() as pg_conn:
-            source_identity = resolve_relation_identity(pg_conn, schemas.bronze, payload.table_name)
-            if not source_identity:
-                raise HTTPException(status_code=404, detail=f"Bronze table '{payload.table_name}' not found.")
+        if connector_authority is None:
+            project_id = "default_project"
+            connection_id = "default_connection"
+            database_name = postgres_target_info()["database"]
+            bronze_schema = schemas.bronze
+            bronze_relation = table_name
+            source_response = None
+            ingest_id = None
+            with get_generated_sql_pool().connection() as pg_conn:
+                source_identity = resolve_relation_identity(pg_conn, bronze_schema, bronze_relation)
+                if not source_identity:
+                    raise HTTPException(status_code=404, detail=f"Bronze table '{table_name}' not found.")
+                column_types = _load_exact_bronze_column_types(source_identity)
+        else:
+            project_id = connector_authority["project_id"]
+            connection_id = connector_authority["connection_id"]
+            database_name = connector_authority["database_name"]
+            bronze_schema = connector_authority["bronze_schema"]
+            bronze_relation = connector_authority["bronze_relation"]
+            source_identity = connector_authority["bronze_identity"]
+            source_response = {
+                "schema": connector_authority["source_schema"],
+                "table": connector_authority["source_relation"],
+                "identity": connector_authority["source_identity"],
+            }
+            ingest_id = connector_authority["ingest_id"]
             column_types = _load_exact_bronze_column_types(source_identity)
+
+        with get_generated_sql_pool().connection() as pg_conn:
+            live_bronze_identity = resolve_relation_identity(pg_conn, bronze_schema, bronze_relation)
+            _assert_identity_matches(
+                current=live_bronze_identity,
+                expected=source_identity,
+                missing_error="bronze_target_missing",
+                changed_error="bronze_identity_changed",
+                message=(
+                    "The recorded Bronze target is missing from the Silver execution "
+                    "database or its physical identity changed."
+                ),
+                relation={"schema": bronze_schema, "table": bronze_relation},
+            )
             
         validated_rules = validate_deterministic_rules(
             rules,
@@ -382,28 +726,38 @@ def generate_sql(payload: GeneratePayload):
         rule_rev = compute_rule_revision(validated_rules)
         import uuid
         run_id = f"run_{uuid.uuid4().hex[:12]}"
-        candidate_name = f"{payload.table_name}_candidate_{run_id}"
+        candidate_name = f"{table_name}_candidate_{run_id}"
         
         sql_text = build_deterministic_silver_sql(
             candidate_schema=schemas.silver_candidates,
             candidate_name=candidate_name,
-            bronze_schema=schemas.bronze,
-            bronze_relation=payload.table_name,
+            bronze_schema=bronze_schema,
+            bronze_relation=bronze_relation,
             rules=validated_rules,
         )
         
         lineage_id = compute_silver_lineage_id(
-            project_id="default_project",
-            connection_id="default_connection",
-            database_name=postgres_target_info()["database"],
-            bronze_schema=schemas.bronze,
-            bronze_relation=payload.table_name,
+            project_id=project_id,
+            connection_id=connection_id,
+            database_name=database_name,
+            bronze_schema=bronze_schema,
+            bronze_relation=bronze_relation,
             silver_schema=schemas.silver,
-            silver_target_relation=payload.table_name,
+            silver_target_relation=table_name,
         )
         
         created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        planned_changes = {"rules": validated_rules}
+        planned_changes = {
+            "rules": validated_rules,
+            "source": source_response,
+            "bronze": {
+                "schema": bronze_schema,
+                "table": bronze_relation,
+                "identity": source_identity,
+                "ingest_id": ingest_id,
+            },
+            "silver": {"schema": schemas.silver, "table": table_name},
+        }
         
         with get_connection() as conn:
             conn.execute(
@@ -418,15 +772,15 @@ def generate_sql(payload: GeneratePayload):
                 """,
                 (
                     run_id,
-                    payload.table_name,
+                    table_name,
                     sql_text,
                     json.dumps(planned_changes, sort_keys=True, separators=(",", ":")),
                     created_at,
                     schemas.silver_candidates,
                     SERVER_DETERMINISTIC_PROVENANCE,
                     rule_rev,
-                    "default_project",
-                    "default_connection",
+                    project_id,
+                    connection_id,
                     lineage_id,
                     json.dumps(source_identity, sort_keys=True, separators=(",", ":")),
                 ),
@@ -435,12 +789,17 @@ def generate_sql(payload: GeneratePayload):
             
         return {
             "run_id": run_id,
-            "table_name": payload.table_name,
+            "table_name": table_name,
             "sql_text": sql_text,
             "planned_changes": planned_changes,
             "status": "PENDING",
             "rule_revision": rule_rev,
             "generator_provenance": SERVER_DETERMINISTIC_PROVENANCE,
+            "connection_id": None if connector_authority is None else connection_id,
+            "bronze": planned_changes["bronze"],
+            "silver": planned_changes["silver"],
+            "source": source_response,
+            "silver_lineage_id": lineage_id,
         }
     except SilverRuleError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
