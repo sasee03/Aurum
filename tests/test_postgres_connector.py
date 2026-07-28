@@ -735,3 +735,279 @@ def test_preview_endpoint(client):
                     cur.execute(f"DROP TABLE IF EXISTS {table_name}")
         except Exception:
             pass
+
+
+class _FakeConnectionContext:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def __enter__(self):
+        return self.conn
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeConnectorConn:
+    pass
+
+
+def _identity(
+    *,
+    database_oid: int = 101,
+    namespace_oid: int,
+    relation_oid: int,
+    schema: str,
+    table: str,
+    relation_kind: str = "r",
+) -> dict:
+    return {
+        "database_oid": database_oid,
+        "namespace_oid": namespace_oid,
+        "relation_oid": relation_oid,
+        "schema": schema,
+        "relation_name": table,
+        "relation_kind": relation_kind,
+    }
+
+
+def _connector_bronze_session(password: str = "aurum") -> str:
+    session = store_session_connection(
+        UserPostgresTarget(
+            host="localhost",
+            port=5433,
+            database="aurum",
+            username="aurum",
+            password=password,
+        )
+    )
+    return session.connection_id
+
+
+def _patch_connector_bronze_happy_path(monkeypatch, *, source_schema: str, source_table: str):
+    fake_conn = _FakeConnectorConn()
+    copied: dict = {}
+
+    def fake_list_user_tables(_conn, schema=None):
+        if schema == source_schema:
+            return [
+                {"schema": source_schema, "table": source_table, "layer": "unknown"},
+                {"schema": "other_schema", "table": source_table, "layer": "unknown"},
+            ]
+        return []
+
+    def fake_resolve(_conn, schema, table):
+        if schema == source_schema and table == source_table:
+            return _identity(
+                namespace_oid=201,
+                relation_oid=301,
+                schema=schema,
+                table=table,
+            )
+        return None
+
+    def fake_copy(_conn, **kwargs):
+        copied.update(kwargs)
+        return {
+            "source_row_count": 3,
+            "bronze_row_count": 3,
+            "match": True,
+            "bronze_identity": _identity(
+                namespace_oid=202,
+                relation_oid=302,
+                schema=kwargs["bronze_schema"],
+                table=kwargs["bronze_table"],
+            ),
+        }
+
+    monkeypatch.setattr(
+        "api.connectors_router.open_session_connection",
+        lambda _session: _FakeConnectionContext(fake_conn),
+    )
+    monkeypatch.setattr("api.connectors_router._database_identity", lambda _conn: (101, "aurum"))
+    monkeypatch.setattr("api.connectors_router._namespace_oid", lambda _conn, _schema: 202)
+    monkeypatch.setattr("api.connectors_router.list_user_tables", fake_list_user_tables)
+    monkeypatch.setattr("api.connectors_router.resolve_relation_identity", fake_resolve)
+    monkeypatch.setattr("api.connectors_router._copy_relation_to_bronze", fake_copy)
+    return copied
+
+
+def test_connector_bound_bronze_ingests_exact_selected_relation(client, monkeypatch):
+    connection_id = _connector_bronze_session(password="secret-never-return")
+    copied = _patch_connector_bronze_happy_path(
+        monkeypatch,
+        source_schema="tenant_a",
+        source_table="events",
+    )
+
+    response = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "tenant_a", "table": "events"}],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    result = body["results"][0]
+    assert result["status"] == "success"
+    assert result["connection_id"] == connection_id
+    assert result["source"] == {"schema": "tenant_a", "table": "events"}
+    assert result["bronze"] == {"schema": "bronze", "table": "events"}
+    assert result["source_row_count"] == 3
+    assert result["bronze_row_count"] == 3
+    assert result["row_count"] == 3
+    assert copied["source_schema"] == "tenant_a"
+    assert copied["source_table"] == "events"
+    assert "secret-never-return" not in response.text
+    assert "password" not in response.text.lower()
+
+
+def test_connector_bound_bronze_preserves_schema_when_table_names_overlap(client, monkeypatch):
+    connection_id = _connector_bronze_session()
+    copied = _patch_connector_bronze_happy_path(
+        monkeypatch,
+        source_schema="tenant_b",
+        source_table="orders",
+    )
+    monkeypatch.setenv("AURUM_SCHEMA_SOURCE", "configured_source_must_not_be_used")
+
+    response = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "tenant_b", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()["results"][0]
+    assert result["source"] == {"schema": "tenant_b", "table": "orders"}
+    assert copied["source_schema"] == "tenant_b"
+    assert copied["source_schema"] != "configured_source_must_not_be_used"
+
+
+def test_connector_bound_bronze_rejects_unknown_connection(client):
+    response = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": "conn_missing",
+            "relations": [{"schema": "public", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "connection_not_found"
+
+
+def test_connector_bound_bronze_rejects_expired_session(client):
+    connection_id = _connector_bronze_session()
+    session = get_session_connection(connection_id)
+    assert session is not None
+    session.created_at_monotonic -= SESSION_TTL_SECONDS + 1
+
+    response = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "public", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "connection_not_found"
+
+
+def test_connector_bound_bronze_rejects_nonexistent_selected_relation(client, monkeypatch):
+    connection_id = _connector_bronze_session()
+    fake_conn = _FakeConnectorConn()
+    copy = MagicMock()
+    monkeypatch.setattr(
+        "api.connectors_router.open_session_connection",
+        lambda _session: _FakeConnectionContext(fake_conn),
+    )
+    monkeypatch.setattr("api.connectors_router._database_identity", lambda _conn: (101, "aurum"))
+    monkeypatch.setattr("api.connectors_router._namespace_oid", lambda _conn, _schema: 202)
+    monkeypatch.setattr("api.connectors_router.list_user_tables", lambda _conn, schema=None: [])
+    monkeypatch.setattr("api.connectors_router._copy_relation_to_bronze", copy)
+
+    response = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "tenant_a", "table": "missing"}],
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "source_relation_not_found"
+    copy.assert_not_called()
+
+
+def test_connector_bound_bronze_rejects_source_identity_from_other_database(client, monkeypatch):
+    connection_id = _connector_bronze_session()
+    fake_conn = _FakeConnectorConn()
+    monkeypatch.setattr(
+        "api.connectors_router.open_session_connection",
+        lambda _session: _FakeConnectionContext(fake_conn),
+    )
+    monkeypatch.setattr("api.connectors_router._database_identity", lambda _conn: (101, "aurum"))
+    monkeypatch.setattr("api.connectors_router._namespace_oid", lambda _conn, _schema: 202)
+    monkeypatch.setattr(
+        "api.connectors_router.list_user_tables",
+        lambda _conn, schema=None: [{"schema": "tenant_a", "table": "orders"}],
+    )
+    monkeypatch.setattr(
+        "api.connectors_router.resolve_relation_identity",
+        lambda _conn, schema, table: _identity(
+            database_oid=999,
+            namespace_oid=201,
+            relation_oid=301,
+            schema=schema,
+            table=table,
+        ),
+    )
+
+    response = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "tenant_a", "table": "orders"}],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "source_database_identity_mismatch"
+
+
+def test_connector_bound_bronze_rejects_same_table_two_schema_target_collision(client):
+    connection_id = _connector_bronze_session()
+
+    response = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [
+                {"schema": "tenant_a", "table": "orders"},
+                {"schema": "tenant_b", "table": "orders"},
+            ],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "bronze_target_name_collision"
+
+
+def test_connector_bound_bronze_legacy_source_endpoint_contract_unchanged(client):
+    response = client.post(
+        "/api/v1/source/ingest-to-bronze",
+        json={
+            "connection_id": "conn_ignored_by_legacy_model",
+            "relations": [{"schema": "tenant_a", "table": "orders"}],
+            "tables": [],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "No tables selected for ingestion."
