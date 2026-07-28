@@ -160,3 +160,118 @@ def test_context_reader_never_mutates_app_state(monkeypatch, tmp_path):
     with get_readonly_connection(db_path) as conn:
         with pytest.raises(sqlite3.OperationalError):
             conn.execute("INSERT INTO projects (id, name, created_at, updated_at) VALUES ('nope', 'nope', 'x', 'x')")
+
+
+def test_gold_run_only_resolves_grounded_gold_context(monkeypatch, tmp_path):
+    db_path = tmp_path / "app_state.sqlite"
+    monkeypatch.setenv("AURUM_APP_STATE_DB", str(db_path))
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review
+                (run_id, table_name, sql_text, planned_changes_json, created_at, status,
+                 candidate_schema, generator_provenance, project_id, connection_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("gold-only-1", "curated_customers", "CREATE TABLE ...", json.dumps({"metric": "COUNT(*)"}),
+             "2026-07-28T02:00:00Z", "PROMOTED", "gold_candidates", "manual_controlled_gold_v1",
+             "project-1", "conn-1"),
+        )
+        conn.execute(
+            """
+            INSERT INTO gold_security_state
+                (run_id, model_version, policy_version, business_requirement, selected_sources_json,
+                 target_schema, target_name, candidate_schema, candidate_name, generator_provenance,
+                 generator_version, review_snapshot_json, review_revision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("gold-only-1", "v1", "v1", "Summarize customers", json.dumps({"sources": [{"schema": "silver", "table": "customers"}]}),
+             "gold", "curated_customers", "gold_candidates", "curated_customers_cand", "manual_controlled_gold_v1",
+             "v1", "{}", "c" * 64),
+        )
+        conn.commit()
+
+    service = AssistantContextService(state_path=db_path)
+    context = service.build(run_id="gold-only-1")
+
+    assert context["run"]["id"] == "gold-only-1"
+    assert context["run"]["mode"] == "gold"
+    assert context["gold"]["status"] == "PROMOTED"
+    assert context["gold"]["business_requirement"] == "Summarize customers"
+    assert context["gold"]["target"] == {"schema": "gold", "relation": "curated_customers"}
+
+
+def test_existing_validation_runs_context_preserved(monkeypatch, tmp_path):
+    db_path = tmp_path / "app_state.sqlite"
+    _seed_state(monkeypatch, db_path)
+    service = AssistantContextService(state_path=db_path)
+
+    context = service.build(run_id="run-1")
+
+    assert context["run"]["id"] == "run-1"
+    assert context["connection"]["id"] == "conn-1"
+    assert context["source"]["relation"] == "orders"
+
+
+def test_unknown_run_id_returns_empty_context(monkeypatch, tmp_path):
+    db_path = tmp_path / "app_state.sqlite"
+    _seed_state(monkeypatch, db_path)
+    service = AssistantContextService(state_path=db_path)
+
+    context = service.build(run_id="unknown-run-999")
+
+    assert context["run"]["id"] is None
+    assert context["gold"]["status"] is None
+    assert context["source"]["relation"] is None
+
+
+def test_no_fabricated_facts_when_lineage_unpersisted(monkeypatch, tmp_path):
+    db_path = tmp_path / "app_state.sqlite"
+    monkeypatch.setenv("AURUM_APP_STATE_DB", str(db_path))
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review
+                (run_id, table_name, sql_text, planned_changes_json, created_at, status,
+                 candidate_schema, generator_provenance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("gold-unlinked-1", "isolated_gold", "CREATE TABLE ...", json.dumps({}),
+             "2026-07-28T02:00:00Z", "PROMOTED", "gold_candidates", "manual_controlled_gold_v1"),
+        )
+        conn.execute(
+            """
+            INSERT INTO gold_security_state
+                (run_id, model_version, policy_version, business_requirement, selected_sources_json,
+                 target_schema, target_name, candidate_schema, candidate_name, generator_provenance,
+                 generator_version, review_snapshot_json, review_revision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("gold-unlinked-1", "v1", "v1", "Isolated requirement", json.dumps({"sources": [{"schema": "silver", "table": "isolated_table"}]}),
+             "gold", "isolated_gold", "gold_candidates", "isolated_gold_cand", "manual_controlled_gold_v1",
+             "v1", "{}", "d" * 64),
+        )
+        conn.commit()
+
+    service = AssistantContextService(state_path=db_path)
+    context = service.build(run_id="gold-unlinked-1")
+
+    assert context["run"]["id"] == "gold-unlinked-1"
+    assert context["gold"]["status"] == "PROMOTED"
+    assert context["source"]["schema"] is None
+    assert context["source"]["relation"] is None
+    assert context["bronze"]["authority_status"] is None
+    assert context["silver"]["validation_status"] is None
+
+
+def test_assistant_remains_strictly_read_only(monkeypatch, tmp_path):
+    db_path = tmp_path / "app_state.sqlite"
+    _seed_state(monkeypatch, db_path)
+    before = hashlib.sha256(db_path.read_bytes()).hexdigest()
+
+    service = AssistantContextService(state_path=db_path)
+    service.build(run_id="gold-1")
+
+    after = hashlib.sha256(db_path.read_bytes()).hexdigest()
+    assert after == before
+

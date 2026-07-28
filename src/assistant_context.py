@@ -103,7 +103,10 @@ class AssistantContextService:
         try:
             run = self._load_run(conn, run_id)
             if run is None:
-                return context
+                gold_run = self._load_gold_run_header(conn, run_id)
+                if gold_run is None:
+                    return context
+                return self._build_from_gold_run(conn, context, gold_run)
 
             context["run"] = {
                 "id": run["run_id"],
@@ -255,19 +258,142 @@ class AssistantContextService:
             },
         }
 
-    def _gold_context(self, conn: sqlite3.Connection, messages: list[dict[str, Any]]) -> dict[str, Any]:
-        row = self._fetchone(
+    def _load_gold_run_header(self, conn: sqlite3.Connection, run_id: str | None) -> sqlite3.Row | None:
+        fields = """
+            r.run_id, r.status, r.created_at, r.table_name, r.planned_changes_json,
+            s.business_requirement, s.selected_sources_json, s.target_schema,
+            s.target_name, s.candidate_schema, s.candidate_name,
+            s.execution_failure_code, s.promotion_failure_code,
+            r.connection_id
+        """
+        if run_id:
+            return self._fetchone(
+                conn,
+                f"""
+                SELECT {fields}
+                FROM generated_sql_review r
+                JOIN gold_security_state s ON s.run_id = r.run_id
+                WHERE r.run_id = ?
+                """,
+                (run_id,),
+            )
+        return self._fetchone(
             conn,
-            """
-            SELECT r.run_id, r.status, r.created_at, r.table_name, r.planned_changes_json,
-                   s.business_requirement, s.selected_sources_json, s.target_schema,
-                   s.target_name, s.candidate_schema, s.candidate_name,
-                   s.execution_failure_code, s.promotion_failure_code
+            f"""
+            SELECT {fields}
             FROM generated_sql_review r
             JOIN gold_security_state s ON s.run_id = r.run_id
             ORDER BY r.created_at DESC, r.run_id DESC LIMIT 1
             """,
         )
+
+    def _build_from_gold_run(
+        self, conn: sqlite3.Connection, context: dict[str, Any], gold_run: sqlite3.Row
+    ) -> dict[str, Any]:
+        context["run"] = {
+            "id": gold_run["run_id"],
+            "status": gold_run["status"],
+            "mode": "gold",
+            "started_at": gold_run["created_at"],
+            "finished_at": gold_run["created_at"],
+            "dataset_config": None,
+        }
+        connection_id = gold_run["connection_id"]
+        if connection_id:
+            connection = self._load_connection(conn, connection_id)
+            if connection is not None:
+                context["connection"] = {
+                    "id": connection["id"],
+                    "database_name": connection["database_name"],
+                    "status": connection["status"],
+                }
+
+        sources_obj = _json_object(gold_run["selected_sources_json"])
+        sources_list = sources_obj.get("sources") if sources_obj else None
+        first_source = (
+            sources_list[0]
+            if isinstance(sources_list, list)
+            and len(sources_list) > 0
+            and isinstance(sources_list[0], dict)
+            else None
+        )
+
+        if first_source and first_source.get("table"):
+            ref_table = first_source["table"]
+            authority = self._fetchone(
+                conn,
+                """
+                SELECT ingest_id, project_id, connection_id, database_name,
+                       source_schema, source_relation, bronze_schema, bronze_relation, status
+                FROM bronze_ingest_authority
+                WHERE bronze_relation = ? OR source_relation = ?
+                ORDER BY updated_at DESC, ingest_id DESC LIMIT 1
+                """,
+                (ref_table, ref_table),
+            )
+            if authority is not None:
+                conn_id = connection_id or authority["connection_id"]
+                if context["connection"]["id"] is None and conn_id:
+                    connection = self._load_connection(conn, conn_id)
+                    if connection is not None:
+                        context["connection"] = {
+                            "id": connection["id"],
+                            "database_name": connection["database_name"],
+                            "status": connection["status"],
+                        }
+                context["source"] = {
+                    "schema": authority["source_schema"],
+                    "relation": authority["source_relation"],
+                    "columns": None,
+                }
+                if conn_id and authority["source_schema"] and authority["source_relation"]:
+                    columns = self._source_columns_reader(
+                        conn_id, authority["source_schema"], authority["source_relation"]
+                    )
+                    if columns is not None:
+                        context["source"]["columns"] = _safe_value(columns)
+                context["bronze"] = {
+                    "authority_status": authority["status"],
+                    "ingest_id": authority["ingest_id"],
+                    "schema": authority["bronze_schema"],
+                    "relation": authority["bronze_relation"],
+                    "validation_status": None,
+                    "row_count": None,
+                }
+                context["silver"] = self._silver_context(conn, context["bronze"], None)
+
+        context["gold"] = self._gold_context(
+            conn, context["messages"], run_id=gold_run["run_id"]
+        )
+        return context
+
+    def _gold_context(
+        self, conn: sqlite3.Connection, messages: list[dict[str, Any]], run_id: str | None = None
+    ) -> dict[str, Any]:
+        fields = """
+            r.run_id, r.status, r.created_at, r.table_name, r.planned_changes_json,
+            s.business_requirement, s.selected_sources_json, s.target_schema,
+            s.target_name, s.candidate_schema, s.candidate_name,
+            s.execution_failure_code, s.promotion_failure_code
+        """
+        if run_id:
+            query = f"""
+                SELECT {fields}
+                FROM generated_sql_review r
+                JOIN gold_security_state s ON s.run_id = r.run_id
+                WHERE r.run_id = ?
+                LIMIT 1
+            """
+            params: tuple = (run_id,)
+        else:
+            query = f"""
+                SELECT {fields}
+                FROM generated_sql_review r
+                JOIN gold_security_state s ON s.run_id = r.run_id
+                ORDER BY r.created_at DESC, r.run_id DESC LIMIT 1
+            """
+            params = ()
+        row = self._fetchone(conn, query, params)
         if row is None:
             return _empty_gold_context()
         for field, code in (
