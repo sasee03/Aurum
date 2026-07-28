@@ -56,6 +56,15 @@ from src.gold_execution import (
     execute_gold_candidate,
     validate_approved_gold_sql,
 )
+from src.gold_ai import (
+    GoldAIAmbiguousInterpretation,
+    GoldAIProposalInvalid,
+    GoldAISupportedInterpretation,
+    GoldAIUnavailable,
+    GoldAIUnsupportedInterpretation,
+    configured_gold_ai_model,
+    interpret_gold_requirement,
+)
 from src.gold_promotion import (
     GOLD_CANDIDATE_IDENTITY_CHANGED,
     GOLD_OVERWRITE_NOT_AUTHORIZED,
@@ -186,6 +195,19 @@ class GenerateStructuredGoldPayload(BaseModel):
         max_length=63,
     )
     business_purpose: StrictStr = Field(min_length=1, max_length=4000)
+
+
+class GenerateAIGoldPayload(BaseModel):
+    """Natural-language producer input for the existing Structured Gold kernel."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: StructuredGoldSourcePayload
+    target_table_name: StrictStr = Field(
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+        max_length=63,
+    )
+    business_requirement: StrictStr = Field(min_length=1, max_length=4000)
 
 
 class ExecuteGoldPayload(BaseModel):
@@ -366,6 +388,8 @@ def _persist_gold_proposal(
     generation_source_identities: list[dict] | None = None,
     origin_database_identity: dict | None = None,
     origin_source_identities: list[dict] | None = None,
+    generator_family: str = "structured_manual",
+    generator_model: str | None = None,
 ) -> dict:
     """Persist the existing review envelope and Gold security companion state."""
     try:
@@ -396,8 +420,8 @@ def _persist_gold_proposal(
         origin_record = new_gold_run_origin(
             run_id=run_id,
             origin_provenance=provenance,
-            generator_family="structured_manual",
-            generator_model=None,
+            generator_family=generator_family,
+            generator_model=generator_model,
             generation_database_identity=(
                 origin_database_identity or generation_database_identity or {}
             ),
@@ -522,16 +546,11 @@ def generate_gold_sql(payload: GenerateGoldPayload):
     )
 
 
-@router.post("/generate-structured")
-def generate_structured_gold_sql(payload: GenerateStructuredGoldPayload):
-    """Compile one exact structured aggregation into the existing Gold review flow."""
-    if not GOLD_GENERATOR_TRUST.trusts_run(
-        STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE
-    ):
-        raise HTTPException(status_code=503, detail=GOLD_GENERATION_UNAVAILABLE)
-
+def _resolve_structured_gold_source_or_error(
+    source: StructuredGoldSourcePayload,
+):
     schemas = load_layer_schemas()
-    if payload.source.schema_name != schemas.silver:
+    if source.schema_name != schemas.silver:
         raise HTTPException(
             status_code=422,
             detail="Structured Gold source must use the configured Silver schema.",
@@ -540,7 +559,7 @@ def generate_structured_gold_sql(payload: GenerateStructuredGoldPayload):
     try:
         source_catalog = resolve_structured_gold_source(
             schema=schemas.silver,
-            relation_name=payload.source.table,
+            relation_name=source.table,
         )
     except Exception as exc:
         if _is_connectivity_error(exc):
@@ -562,6 +581,25 @@ def generate_structured_gold_sql(payload: GenerateStructuredGoldPayload):
             status_code=500,
             detail="Structured Gold source validation failed.",
         ) from None
+    return schemas, source_catalog
+
+
+def _generate_structured_gold_proposal(
+    payload: GenerateStructuredGoldPayload,
+    *,
+    source_catalog=None,
+    generator_family: str = "structured_manual",
+    generator_model: str | None = None,
+):
+    """Compile and persist one validated definition through the shared Gold path."""
+    if not GOLD_GENERATOR_TRUST.trusts_run(
+        STRUCTURED_DETERMINISTIC_GOLD_PROVENANCE
+    ):
+        raise HTTPException(status_code=503, detail=GOLD_GENERATION_UNAVAILABLE)
+
+    schemas = load_layer_schemas()
+    if source_catalog is None:
+        _, source_catalog = _resolve_structured_gold_source_or_error(payload.source)
 
     columns = {column.name: column for column in source_catalog.columns}
     expression = payload.metric.expression.model_dump()
@@ -647,7 +685,74 @@ def generate_structured_gold_sql(payload: GenerateStructuredGoldPayload):
             "name": source_catalog.database_name,
         },
         generation_source_identities=[source_identity],
+        generator_family=generator_family,
+        generator_model=generator_model,
     )
+
+
+@router.post("/generate-structured")
+def generate_structured_gold_sql(payload: GenerateStructuredGoldPayload):
+    """Compile one exact structured aggregation into the existing Gold review flow."""
+    return _generate_structured_gold_proposal(payload)
+
+
+@router.post("/ai/generate")
+def generate_ai_structured_gold(payload: GenerateAIGoldPayload):
+    """Translate intent once, then reuse the deterministic Structured Gold kernel."""
+    schemas, source_catalog = _resolve_structured_gold_source_or_error(payload.source)
+    model = configured_gold_ai_model()
+    try:
+        interpretation = interpret_gold_requirement(
+            source_schema=schemas.silver,
+            source_relation=source_catalog.source_identity["relation_name"],
+            columns=source_catalog.columns,
+            business_requirement=payload.business_requirement,
+            model=model,
+        )
+    except GoldAIUnavailable:
+        raise HTTPException(status_code=503, detail="GOLD_AI_UNAVAILABLE") from None
+    except GoldAIProposalInvalid:
+        raise HTTPException(status_code=422, detail="GOLD_AI_PROPOSAL_INVALID") from None
+
+    if isinstance(interpretation, GoldAIAmbiguousInterpretation):
+        return interpretation.model_dump()
+    if isinstance(interpretation, GoldAIUnsupportedInterpretation):
+        return interpretation.model_dump()
+    if not isinstance(interpretation, GoldAISupportedInterpretation):
+        raise HTTPException(status_code=422, detail="GOLD_AI_PROPOSAL_INVALID")
+
+    definition = interpretation.definition
+    structured_payload = GenerateStructuredGoldPayload(
+        source=payload.source,
+        dimension=StructuredGoldDimensionPayload(column=definition.dimension),
+        metric=StructuredGoldMetricPayload(
+            aggregation=definition.aggregation,
+            expression=definition.expression.model_dump(),
+            alias=definition.alias,
+        ),
+        target_table_name=payload.target_table_name,
+        business_purpose=payload.business_requirement,
+    )
+    try:
+        response = _generate_structured_gold_proposal(
+            structured_payload,
+            source_catalog=source_catalog,
+            generator_family="openai",
+            generator_model=model,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 422:
+            raise HTTPException(
+                status_code=422,
+                detail="GOLD_AI_PROPOSAL_INVALID",
+            ) from None
+        raise
+
+    response["verdict"] = "SUPPORTED"
+    response["ai_interpretation"] = interpretation.model_dump()
+    response["generator_family"] = "openai"
+    response["generator_model"] = model
+    return response
 
 @router.get("/review/{run_id}")
 def review_gold_sql(run_id: str):
