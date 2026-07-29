@@ -16,6 +16,7 @@ import {
   relationSelectionKey,
   withRelationSelectionQuery,
 } from '@/utils/relationSelection';
+import { withConnectorFlowQuery } from '@/utils/connectorFlow';
 
 interface ColumnProfile {
   name: string;
@@ -137,7 +138,6 @@ export function MetadataDiscoveryPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const runId = searchParams.get('runId') ?? undefined;
-  const connectionId = searchParams.get('connectionId');
   const requestedSchema = searchParams.get('schema');
   const requestedTable = searchParams.get('table');
   const requestedRelation = readRelationSelection(searchParams);
@@ -255,9 +255,7 @@ export function MetadataDiscoveryPage() {
 
   function pathWithActiveRelation(path: string): string {
     const pathWithRun = withRunIdQuery(path, runId);
-    const pathWithConnector = connectionId
-      ? `${pathWithRun}${pathWithRun.includes('?') ? '&' : '?'}connectionId=${encodeURIComponent(connectionId)}`
-      : pathWithRun;
+    const pathWithConnector = withConnectorFlowQuery(pathWithRun, searchParams);
     return activeRelation
       ? withRelationSelectionQuery(pathWithConnector, {
           schema: activeRelation.schema,

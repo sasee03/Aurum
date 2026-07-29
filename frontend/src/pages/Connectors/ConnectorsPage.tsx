@@ -11,9 +11,10 @@ import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { useAppMode } from '@/context/AppModeContext';
 import {
   CsvUploadError,
-  sourceConnect,
+  testPostgresConnection,
   uploadDatasetCsv,
   type CsvUploadMismatch,
+  type PostgresTestSuccess,
 } from '@/lib/aurumApi';
 import { calmApiMessage, ApiError } from '@/utils/apiErrors';
 import connectorsData from '@/mocks/connectors.json';
@@ -276,6 +277,7 @@ function PostgresPanel({ projectId }: { projectId: string }) {
 
   const [status, setStatus] = useState<ConnectStatus>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [connection, setConnection] = useState<PostgresTestSuccess | null>(null);
 
   async function handleTest() {
     if (!host.trim() || !port.trim() || !database.trim() || !username.trim()) {
@@ -292,23 +294,26 @@ function PostgresPanel({ projectId }: { projectId: string }) {
     setPassword('');
     setStatus('testing');
     setError(null);
+    setConnection(null);
 
     try {
-      const res = await sourceConnect({
+      const res = await testPostgresConnection({
         host: host.trim(),
         port: portNum,
         database: database.trim(),
-        user: username.trim(),
+        username: username.trim(),
         password: submittedPassword,
+        project_id: projectId,
       });
 
       if (!res.connected) {
         setStatus('failed');
-        setError(res.message || 'Connection failed.');
-        toast.error(res.message || 'Connection failed.');
+        setError(res.error || 'Connection failed.');
+        toast.error(res.error || 'Connection failed.');
         return;
       }
 
+      setConnection(res);
       setStatus('connected');
       toast.success('Connection verified.');
     } catch (err: any) {
@@ -412,13 +417,21 @@ function PostgresPanel({ projectId }: { projectId: string }) {
             Connection verified.
           </div>
           <p className="text-xs text-[#cbd5e1] leading-relaxed">
-            For this demo, Bronze uses Aurum&apos;s configured Source environment. External database handoff will be supported separately.
+            Continue with this live PostgreSQL session. Passwords are not persisted, so re-test after an API restart or session expiry.
           </p>
           <div className="pt-2 flex justify-end">
             <Button
               variant="primary"
               rightIcon={<ArrowRight size={16} />}
-              onClick={() => navigate(`/projects/${projectId}/select`)}
+              disabled={!connection}
+              onClick={() => {
+                if (!connection) return;
+                const params = new URLSearchParams({
+                  connectionId: connection.connection_id,
+                  database: connection.database,
+                });
+                navigate(`/projects/${projectId}/select?${params.toString()}`);
+              }}
             >
               Discover Tables
             </Button>

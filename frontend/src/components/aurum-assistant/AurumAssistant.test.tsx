@@ -57,7 +57,7 @@ describe('Aurum Assistant Integration & Component Tests', () => {
     const markup = renderToStaticMarkup(<AurumAssistantResponseRenderer response={response} />);
 
     expect(markup).toContain('Gold status is PROMOTED');
-    expect(markup).toContain('Grounding');
+    expect(markup).toContain('Evidence');
     expect(markup).not.toContain('Verified Aurum facts');
     expect(markup).toContain('Gold status');
     expect(markup).toContain('PROMOTED');
@@ -73,7 +73,7 @@ describe('Aurum Assistant Integration & Component Tests', () => {
     const markup = renderToStaticMarkup(<AurumAssistantResponseRenderer response={response} />);
 
     expect(markup).toContain('Insufficient information');
-    expect(markup).toContain('The backend did not return enough grounded Aurum context for this answer.');
+    expect(markup).toContain('Aurum Assistant doesn’t have enough pipeline context to answer this right now.');
   });
 
   it('4. legacy "report.json / validation report" fallback is not used in renderer', () => {

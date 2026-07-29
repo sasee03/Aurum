@@ -39,6 +39,7 @@ import {
   toggleBronzeTable,
 } from '@/utils/bronzeSelection';
 import { readRelationSelection } from '@/utils/relationSelection';
+import { bronzeDiscoveryErrorMessage, withConnectorFlowQuery } from '@/utils/connectorFlow';
 
 type BronzeResultItem = VerifyBronzeItemResult | ConnectorBronzeItemResult;
 
@@ -129,13 +130,13 @@ export function BronzeValidationPage() {
         setSelectedRelations(initialBronzeSelection().map((table) => ({ schema: res.schema || 'public', table })));
       }
     } catch (err: any) {
-      setTablesError(calmApiMessage(err, 'Failed to discover source tables from backend API.'));
+      setTablesError(bronzeDiscoveryErrorMessage(err, connectorMode));
       setSourceTables([]);
       setSelectedRelations([]);
     } finally {
       setLoadingTables(false);
     }
-  }, [connectionId, carriedSchema, carriedTable, resetStaleResults]);
+  }, [connectionId, connectorMode, carriedSchema, carriedTable, resetStaleResults]);
 
   useEffect(() => {
     void loadSourceTables();
@@ -667,7 +668,7 @@ export function BronzeValidationPage() {
       <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-4 flex items-center justify-between">
         <Button
           variant="ghost"
-          onClick={() => navigate(withRunIdQuery(`/projects/${id}/connect`, runId))}
+          onClick={() => navigate(withConnectorFlowQuery(withRunIdQuery(`/projects/${id}/connect`, runId), searchParams))}
         >
           Back to Connect
         </Button>

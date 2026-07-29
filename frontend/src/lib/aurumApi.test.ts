@@ -375,6 +375,53 @@ describe('aurumApi error parsing', () => {
     );
   });
 
+  it('listPostgresTables carries connector id and selected schema for Bronze discovery', async () => {
+    const { listPostgresTables } = await import('./aurumApi');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        connection_id: 'conn_123',
+        schema: 'source',
+        tables: [{ schema: 'source', table: 'online_retail_uci', layer: 'source' }],
+      }),
+    });
+
+    const res = await listPostgresTables('conn_123', 'source');
+
+    expect(res.tables).toEqual([
+      { schema: 'source', table: 'online_retail_uci', layer: 'source' },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/connectors/postgres/tables?connection_id=conn_123&schema=source',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+      }),
+    );
+  });
+
+  it('fetchSourceTables remains the no-connector default Bronze discovery path', async () => {
+    const { fetchSourceTables } = await import('./aurumApi');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        schema: 'source',
+        tables: [],
+      }),
+    });
+
+    const res = await fetchSourceTables();
+
+    expect(res.tables).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/source/tables',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+      }),
+    );
+  });
+
   it('buildUrl normalizes base URL and path correctly', async () => {
     const { buildUrl } = await import('./aurumApi');
     expect(buildUrl('/api/v1/health')).toBe('/api/v1/health');

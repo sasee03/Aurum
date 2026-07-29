@@ -14,6 +14,7 @@ import {
   relationSelectionKey,
   withRelationSelectionQuery,
 } from '@/utils/relationSelection';
+import { withConnectorFlowQuery } from '@/utils/connectorFlow';
 import {
   getMetadataTables,
   getLiveTablePreview,
@@ -603,9 +604,7 @@ export function DatasetExplorerPage() {
                 onClick={() => {
                   if (!selectedRelation) return;
                   const metadataPath = withRunIdQuery(`/projects/${id}/metadata`, runId);
-                  const connectorPath = connectionId
-                    ? `${metadataPath}${metadataPath.includes('?') ? '&' : '?'}connectionId=${encodeURIComponent(connectionId)}`
-                    : metadataPath;
+                  const connectorPath = withConnectorFlowQuery(metadataPath, searchParams);
                   navigate(
                     withRelationSelectionQuery(
                       connectorPath,

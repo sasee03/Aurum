@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/Badge';
 import { FlowBackButton } from '@/components/common/FlowBackButton';
 import { isPersistedUserRunId, withRunIdQuery } from '@/hooks/useReport';
 import { getFlowBackTarget } from '@/utils/flowNavigation';
+import { withConnectorFlowQuery } from '@/utils/connectorFlow';
 
 interface ProjectSubNavProps {
   runId?: string;
@@ -21,7 +22,7 @@ export function ProjectSubNav({ runId, isRunning }: ProjectSubNavProps = {}) {
   const keepRun = isPersistedUserRunId(activeRunId);
 
   const stepPath = (path: string) =>
-    keepRun ? withRunIdQuery(path, activeRunId) : path;
+    withConnectorFlowQuery(keepRun ? withRunIdQuery(path, activeRunId) : path, searchParams);
 
   const steps = [
     { label: 'Connect', path: stepPath(`/projects/${id}/connect`) },
@@ -38,13 +39,14 @@ export function ProjectSubNav({ runId, isRunning }: ProjectSubNavProps = {}) {
 
   const isExecuting = isRunning ?? false;
   const back = getFlowBackTarget(pathname, id, activeRunId);
+  const backPath = back ? withConnectorFlowQuery(back.path, searchParams) : null;
 
   return (
     <div className="border-b border-[#252637] bg-[#0d0e14] px-5 flex items-end justify-between gap-3">
       <div className="flex items-end min-w-0">
         {back && (
           <div className="mr-2 border-r border-[#252637] pr-2 shrink-0">
-            <FlowBackButton path={back.path} label={back.label} variant="nav" />
+            <FlowBackButton path={backPath ?? back.path} label={back.label} variant="nav" />
           </div>
         )}
         <nav className="flex gap-0 overflow-x-auto scrollbar-thin" aria-label="Project steps">
