@@ -54,7 +54,6 @@ export function AurumAssistantDrawer({
           run_id: runId || undefined,
         });
 
-        // Context Safety removed: Grounded checks are no longer performed.
 
 
         setMessages((prev) => [
@@ -68,7 +67,7 @@ export function AurumAssistantDrawer({
             id: `${Date.now()}-e`,
             role: "assistant",
             error:
-              "Aurum Assistant is temporarily unavailable. Grounded context could not be retrieved.",
+              "Aurum Assistant is temporarily unavailable. Please try again.",
           },
         ]);
       } finally {
@@ -119,7 +118,7 @@ export function AurumAssistantDrawer({
           {loading && (
             <div className="aa-loading">
               <Loader2 size={14} />
-              Reading grounded Aurum context...
+              Aurum Assistant is thinking…
             </div>
           )}
         </div>

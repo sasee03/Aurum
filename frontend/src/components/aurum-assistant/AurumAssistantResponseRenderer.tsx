@@ -45,14 +45,14 @@ export function AurumAssistantResponseRenderer({ response }: Props) {
       {isInsufficient && (
         <div className="aa-state-card">
           <strong>Insufficient information</strong>
-          <p>The backend did not return enough grounded Aurum context for this answer.</p>
+          <p>Aurum Assistant doesn’t have enough pipeline context to answer this right now. Try selecting a run first.</p>
         </div>
       )}
 
       {!isReadOnlyRefusal && <p className="aa-answer">{answer}</p>}
       {evidence.length > 0 && (
         <details className="aa-evidence-card">
-          <summary>Grounding</summary>
+          <summary>Evidence</summary>
           <dl>
             {evidence.map((fact) => (
               <div key={fact.path}>

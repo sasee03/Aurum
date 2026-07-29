@@ -79,11 +79,6 @@
   font-weight: 700;
 }
 
-.aa-state-pill--grounded {
-  color: #a7f3d0;
-  border-color: rgba(34, 197, 94, 0.28);
-  background: rgba(34, 197, 94, 0.08);
-}
 
 .aa-subtitle {
   margin: 10px 0 0;
@@ -188,40 +183,6 @@
   }
 }
 
-.aa-prompts {
-  padding: 12px 22px;
-  border-top: 1px solid #252637;
-  background: #0b0c12;
-}
-
-.aa-prompts-label {
-  font-size: 0.75rem;
-  color: #9aa0ad;
-  display: block;
-  margin-bottom: 8px;
-}
-
-.aa-prompts-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.aa-prompt-chip {
-  padding: 7px 10px;
-  border-radius: 8px;
-  border: 1px solid #252637;
-  background: #1a1d26;
-  color: #e8e8ec;
-  font-size: 0.75rem;
-  cursor: pointer;
-  text-align: left;
-}
-
-.aa-prompt-chip:hover {
-  border-color: rgba(99, 102, 241, 0.7);
-  color: #f1f5f9;
-}
 
 .aa-input-row {
   display: flex;
