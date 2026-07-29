@@ -184,6 +184,7 @@ def apply_role_setup(
             # Generated SQL grants: USAGE on execution read layers, CREATE ONLY on candidates
             cur.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO aurum_generated_sql").format(sql.Identifier(schemas.bronze)))
             cur.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO aurum_generated_sql").format(sql.Identifier(schemas.silver)))
+            cur.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO aurum_generated_sql").format(sql.Identifier(schemas.gold)))
             cur.execute(sql.SQL("GRANT USAGE, CREATE ON SCHEMA {} TO aurum_generated_sql").format(sql.Identifier(schemas.silver_candidates)))
             cur.execute(sql.SQL("GRANT USAGE, CREATE ON SCHEMA {} TO aurum_generated_sql").format(sql.Identifier(schemas.gold_candidates)))
 

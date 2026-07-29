@@ -37,7 +37,7 @@ from src.bronze_authority import (
     BRONZE_INGEST_FAILED_RETRYABLE,
     BRONZE_INGEST_RECONCILIATION_REQUIRED,
 )
-from src.db_config import load_layer_schemas, postgres_target_info
+from src.db_config import get_ingestion_pool, load_layer_schemas, postgres_target_info
 from src.postgres_connector import (
     SessionConnection,
     UserPostgresTarget,
@@ -196,6 +196,29 @@ def _database_identity(conn: Any) -> tuple[int, str]:
             },
         )
     return int(row[0]), str(row[1])
+
+
+def _assert_same_database(
+    *,
+    session_identity: tuple[int, str],
+    managed_identity: tuple[int, str],
+) -> None:
+    if session_identity == managed_identity:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "connector_database_not_aurum_database",
+            "message": (
+                "Connector-bound Bronze ingest requires the selected source "
+                "relation and managed Aurum schemas to be in the same PostgreSQL database."
+            ),
+        },
+    )
+
+
+def _open_managed_ingestion_connection() -> Any:
+    return get_ingestion_pool().connection()
 
 
 def _namespace_oid(conn: Any, schema_name: str) -> int:
@@ -610,7 +633,21 @@ def postgres_tables(
         )
     try:
         with open_session_connection(session) as conn:
-            tables = list_user_tables(conn, schema=schema)
+            raw_tables = list_user_tables(conn, schema=schema)
+            from src.metadata_discovery import get_row_count, get_column_count
+            tables = []
+            for t in raw_tables:
+                try:
+                    r_count = get_row_count(conn, t["schema"], t["table"])
+                    c_count = get_column_count(conn, t["schema"], t["table"])
+                except Exception:
+                    r_count = None
+                    c_count = None
+                tables.append({
+                    **t,
+                    "row_count": r_count,
+                    "column_count": c_count,
+                })
     except Exception as exc:  # noqa: BLE001
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -640,20 +677,37 @@ def preview_postgres_table(
         )
     try:
         with open_session_connection(session) as conn:
+            schema_name = schema or "public"
+            if not any(
+                item.get("schema") == schema_name and item.get("table") == table
+                for item in list_user_tables(conn, schema=schema_name)
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={
+                        "error": "source_relation_not_found",
+                        "message": (
+                            f"Source relation '{schema_name}.{table}' was not found "
+                            "in this connector session."
+                        ),
+                        "source": {"schema": schema_name, "table": table},
+                    },
+                )
             # 1. Gather rich metadata (columns, types, row count, nullability)
-            metadata = discover_table_metadata(conn, schema_name=schema or "public", table_name=table)
+            metadata = discover_table_metadata(conn, schema_name=schema_name, table_name=table)
 
             # 2. Fetch a real sample of rows
             # Using dict_row to match column names to values cleanly
             with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-                # Default schema to 'public' if not provided to avoid ambiguity errors
                 qualified_name = sql.SQL("{}.{}").format(
-                    sql.Identifier(schema or "public"),
+                    sql.Identifier(schema_name),
                     sql.Identifier(table)
                 )
                 cur.execute(sql.SQL("SELECT * FROM {} LIMIT 50").format(qualified_name))
                 sample_data = cur.fetchall()
 
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -662,7 +716,7 @@ def preview_postgres_table(
 
     return {
         "connection_id": connection_id,
-        "schema": schema,
+        "schema": schema_name,
         "table": table,
         "metadata": metadata,
         "data": sample_data
@@ -721,7 +775,7 @@ def ingest_connector_relations_to_bronze(body: ConnectorBronzeIngestRequest) -> 
     try:
         with open_session_connection(session) as conn:
             database_oid, database_name = _database_identity(conn)
-            bronze_namespace_oid = _namespace_oid(conn, schemas.bronze)
+            session_identity = (database_oid, database_name)
             for relation in relations:
                 source_identity = _validate_selected_relation(
                     conn,
@@ -729,12 +783,34 @@ def ingest_connector_relations_to_bronze(body: ConnectorBronzeIngestRequest) -> 
                     relation=relation,
                 )
                 bronze_relation = relation["table"]
-                _assert_bronze_target_available(
-                    conn,
-                    source=relation,
-                    bronze_schema=schemas.bronze,
-                    bronze_relation=bronze_relation,
-                )
+                with _open_managed_ingestion_connection() as ingest_conn:
+                    _assert_same_database(
+                        session_identity=session_identity,
+                        managed_identity=_database_identity(ingest_conn),
+                    )
+                    bronze_namespace_oid = _namespace_oid(ingest_conn, schemas.bronze)
+                    _assert_bronze_target_available(
+                        ingest_conn,
+                        source=relation,
+                        bronze_schema=schemas.bronze,
+                        bronze_relation=bronze_relation,
+                    )
+                    managed_source_identity = resolve_relation_identity(
+                        ingest_conn,
+                        relation["schema"],
+                        relation["table"],
+                    )
+                    _assert_relation_identity_matches(
+                        managed_source_identity,
+                        source_identity,
+                        missing_error="source_identity_missing_for_ingestion_role",
+                        changed_error="source_identity_changed_for_ingestion_role",
+                        message=(
+                            "The managed ingestion role could not bind the exact "
+                            "selected source relation identity."
+                        ),
+                        relation=relation,
+                    )
                 ingest_id = f"bronze_{uuid.uuid4().hex}"
                 operation = claim_bronze_ingest_operation(
                     ingest_id=ingest_id,
@@ -754,13 +830,14 @@ def ingest_connector_relations_to_bronze(body: ConnectorBronzeIngestRequest) -> 
                         operation["ingest_id"],
                         source_identity=source_identity,
                     )
-                    copied = _copy_relation_to_bronze(
-                        conn,
-                        source_schema=relation["schema"],
-                        source_table=relation["table"],
-                        bronze_schema=schemas.bronze,
-                        bronze_table=bronze_relation,
-                    )
+                    with _open_managed_ingestion_connection() as ingest_conn:
+                        copied = _copy_relation_to_bronze(
+                            ingest_conn,
+                            source_schema=relation["schema"],
+                            source_table=relation["table"],
+                            bronze_schema=schemas.bronze,
+                            bronze_table=bronze_relation,
+                        )
                     if not copied["match"]:
                         raise BronzeAuthorityError(
                             "Bronze row count did not match the selected source relation"

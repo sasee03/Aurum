@@ -11,6 +11,9 @@ export interface AurumAssistantButtonProps {
   layer?: AssistantLayer;
   selectedCheckId?: string;
   selectedTable?: string;
+  connectionId?: string;
+  sourceSchema?: string;
+  sourceTable?: string;
 }
 
 interface ChatEntry {
@@ -36,6 +39,9 @@ export function AurumAssistantDrawer({
   layer,
   selectedCheckId,
   selectedTable,
+  connectionId,
+  sourceSchema,
+  sourceTable,
 }: AurumAssistantButtonProps & { open: boolean; onClose: () => void }) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -52,6 +58,10 @@ export function AurumAssistantDrawer({
         let response = await postAssistantChat({
           message: question,
           run_id: runId || undefined,
+          connection_id: connectionId || undefined,
+          source_schema: sourceSchema || undefined,
+          source_table: sourceTable || undefined,
+          selected_table: selectedTable || undefined,
         });
 
 
@@ -74,7 +84,7 @@ export function AurumAssistantDrawer({
         setLoading(false);
       }
     },
-    [loading, runId, selectedTable],
+    [loading, runId, connectionId, sourceSchema, sourceTable, selectedTable],
   );
 
   if (!open) return null;

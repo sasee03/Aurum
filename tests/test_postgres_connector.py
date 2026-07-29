@@ -844,6 +844,10 @@ def _patch_connector_bronze_happy_path(monkeypatch, *, source_schema: str, sourc
         "api.connectors_router.open_session_connection",
         lambda _session: _FakeConnectionContext(fake_conn),
     )
+    monkeypatch.setattr(
+        "api.connectors_router._open_managed_ingestion_connection",
+        lambda: _FakeConnectionContext(fake_conn),
+    )
     monkeypatch.setattr("api.connectors_router._database_identity", lambda _conn: (101, "aurum"))
     monkeypatch.setattr("api.connectors_router._namespace_oid", lambda _conn, _schema: 202)
     monkeypatch.setattr("api.connectors_router.list_user_tables", fake_list_user_tables)
@@ -868,6 +872,103 @@ def _patch_connector_bronze_verify_counts(
 
     monkeypatch.setattr("api.connectors_router._count_relation_rows", fake_count)
     return counted
+
+
+def test_connector_preview_uses_exact_selected_schema_and_never_falls_back(client, monkeypatch):
+    connection_id = _connector_bronze_session()
+    fake_conn = _FakeConnectorConn()
+    discover = MagicMock()
+    monkeypatch.setattr(
+        "api.connectors_router.open_session_connection",
+        lambda _session: _FakeConnectionContext(fake_conn),
+    )
+    monkeypatch.setattr(
+        "api.connectors_router.list_user_tables",
+        lambda _conn, schema=None: [
+            {"schema": "public", "table": "online_retail_uci", "layer": "unknown"}
+        ] if schema == "public" else [],
+    )
+    monkeypatch.setattr("api.connectors_router.discover_table_metadata", discover)
+
+    response = client.get(
+        f"/connectors/postgres/tables/online_retail_uci/preview?connection_id={connection_id}&schema=source"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "source_relation_not_found"
+    assert response.json()["detail"]["source"] == {
+        "schema": "source",
+        "table": "online_retail_uci",
+    }
+    discover.assert_not_called()
+
+
+def test_connector_bound_bronze_copy_uses_managed_ingestion_role_not_connector_session(client, monkeypatch):
+    connection_id = _connector_bronze_session(password="source-reader-only")
+    session_conn = _FakeConnectorConn()
+    managed_conn = _FakeConnectorConn()
+    copied = {}
+
+    monkeypatch.setattr(
+        "api.connectors_router.open_session_connection",
+        lambda _session: _FakeConnectionContext(session_conn),
+    )
+    monkeypatch.setattr(
+        "api.connectors_router._open_managed_ingestion_connection",
+        lambda: _FakeConnectionContext(managed_conn),
+    )
+    monkeypatch.setattr(
+        "api.connectors_router._database_identity",
+        lambda _conn: (101, "aurum"),
+    )
+    monkeypatch.setattr("api.connectors_router._namespace_oid", lambda _conn, _schema: 202)
+    monkeypatch.setattr(
+        "api.connectors_router.list_user_tables",
+        lambda _conn, schema=None: [
+            {"schema": "source", "table": "online_retail_uci", "layer": "source"}
+        ],
+    )
+
+    def fake_resolve(_conn, schema, table):
+        if schema == "source" and table == "online_retail_uci":
+            return _identity(namespace_oid=201, relation_oid=301, schema=schema, table=table)
+        return None
+
+    def fake_copy(conn, **kwargs):
+        copied["conn"] = conn
+        copied.update(kwargs)
+        return {
+            "source_row_count": 541_909,
+            "bronze_row_count": 541_909,
+            "match": True,
+            "bronze_identity": _identity(
+                namespace_oid=202,
+                relation_oid=302,
+                schema="bronze",
+                table="online_retail_uci",
+            ),
+        }
+
+    monkeypatch.setattr("api.connectors_router.resolve_relation_identity", fake_resolve)
+    monkeypatch.setattr("api.connectors_router._copy_relation_to_bronze", fake_copy)
+
+    response = client.post(
+        "/connectors/postgres/bronze/ingest",
+        json={
+            "connection_id": connection_id,
+            "relations": [{"schema": "source", "table": "online_retail_uci"}],
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()["results"][0]
+    assert result["status"] == "success"
+    assert result["source_row_count"] == 541_909
+    assert result["bronze_row_count"] == 541_909
+    assert copied["conn"] is managed_conn
+    assert copied["conn"] is not session_conn
+    assert copied["source_schema"] == "source"
+    assert copied["source_table"] == "online_retail_uci"
 
 
 def test_connector_bound_bronze_ingests_exact_selected_relation(client, monkeypatch):
@@ -965,6 +1066,10 @@ def test_connector_bound_bronze_rejects_nonexistent_selected_relation(client, mo
         "api.connectors_router.open_session_connection",
         lambda _session: _FakeConnectionContext(fake_conn),
     )
+    monkeypatch.setattr(
+        "api.connectors_router._open_managed_ingestion_connection",
+        lambda: _FakeConnectionContext(fake_conn),
+    )
     monkeypatch.setattr("api.connectors_router._database_identity", lambda _conn: (101, "aurum"))
     monkeypatch.setattr("api.connectors_router._namespace_oid", lambda _conn, _schema: 202)
     monkeypatch.setattr("api.connectors_router.list_user_tables", lambda _conn, schema=None: [])
@@ -989,6 +1094,10 @@ def test_connector_bound_bronze_rejects_source_identity_from_other_database(clie
     monkeypatch.setattr(
         "api.connectors_router.open_session_connection",
         lambda _session: _FakeConnectionContext(fake_conn),
+    )
+    monkeypatch.setattr(
+        "api.connectors_router._open_managed_ingestion_connection",
+        lambda: _FakeConnectionContext(fake_conn),
     )
     monkeypatch.setattr("api.connectors_router._database_identity", lambda _conn: (101, "aurum"))
     monkeypatch.setattr("api.connectors_router._namespace_oid", lambda _conn, _schema: 202)
@@ -1180,6 +1289,10 @@ def test_connector_bound_bronze_verify_rejects_missing_authority(client, monkeyp
     monkeypatch.setattr(
         "api.connectors_router.open_session_connection",
         lambda _session: _FakeConnectionContext(fake_conn),
+    )
+    monkeypatch.setattr(
+        "api.connectors_router._open_managed_ingestion_connection",
+        lambda: _FakeConnectionContext(fake_conn),
     )
     monkeypatch.setattr("api.connectors_router._database_identity", lambda _conn: (101, "aurum"))
 

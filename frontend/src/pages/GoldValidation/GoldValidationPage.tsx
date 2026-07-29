@@ -42,6 +42,7 @@ import {
   type ReviewGoldResponse,
 } from '@/lib/aurumApi';
 import { calmApiMessage } from '@/utils/apiErrors';
+import { withConnectorFlowQuery } from '@/utils/connectorFlow';
 
 type TableMetadata = MetadataTableDetailResponse['tables'][number];
 
@@ -466,7 +467,15 @@ export function GoldValidationPage() {
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
       <ProjectSubNav runId={runIdParam} />
-      <PageAssistant page="gold" layer="gold" runId={review?.run_id || generatedGold?.run_id || runIdParam} selectedTable={selectedSilverTable || targetTableName || tableParam || undefined} />
+      <PageAssistant
+        page="gold"
+        layer="gold"
+        runId={review?.run_id || generatedGold?.run_id || runIdParam}
+        selectedTable={selectedSilverTable || targetTableName || tableParam || undefined}
+        connectionId={searchParams.get('connectionId') || undefined}
+        sourceSchema={searchParams.get('sourceSchema') || undefined}
+        sourceTable={searchParams.get('sourceTable') || undefined}
+      />
 
       <div className="px-6 py-6 border-b border-[#252637]">
         <div className="flex flex-wrap items-center gap-3">
@@ -869,7 +878,10 @@ export function GoldValidationPage() {
           variant="ghost"
           onClick={() =>
             navigate(
-              `/projects/${encodeURIComponent(id || '')}/silver?table=${encodeURIComponent(selectedSilverTable)}`,
+              withConnectorFlowQuery(
+                `/projects/${encodeURIComponent(id || '')}/silver?table=${encodeURIComponent(selectedSilverTable)}`,
+                searchParams,
+              ),
             )
           }
         >

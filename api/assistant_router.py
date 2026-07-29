@@ -21,12 +21,16 @@ router = APIRouter(prefix="/api/v1/assistant", tags=["assistant"])
 
 
 class AssistantChatRequest(BaseModel):
-    """Only UI identifiers; all pipeline facts are resolved by the backend."""
+    """Only UI selectors; all pipeline facts are resolved by the backend."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
     message: StrictStr = Field(min_length=1, max_length=4000)
     run_id: Optional[StrictStr] = Field(default=None, min_length=1, max_length=200)
+    connection_id: Optional[StrictStr] = Field(default=None, min_length=1, max_length=200)
+    source_schema: Optional[StrictStr] = Field(default=None, min_length=1, max_length=63)
+    source_table: Optional[StrictStr] = Field(default=None, min_length=1, max_length=63)
+    selected_table: Optional[StrictStr] = Field(default=None, min_length=1, max_length=63)
 
 
 def _context_value(context: Any, path: str) -> tuple[bool, Any]:
@@ -116,7 +120,7 @@ def _format_rule(rule: Any) -> str | None:
         if isinstance(column, str) and isinstance(operator, str) and value is not None:
             return f"keep rows where {column} {operator} {_format_scalar(value)}"
     if rule_type == "distinct":
-        return "remove duplicate rows"
+        return "remove exact duplicate rows"
     if rule_type == "filter":
         column = rule.get("column")
         if isinstance(column, str):
@@ -178,9 +182,26 @@ def _render_human_summary(facts: List[Dict[str, Any]]) -> str | None:
     if bronze_relation and bronze_relation != source_relation:
         sentences.append(f"The Bronze relation is {bronze_relation}.")
 
+    bronze_row_count = by_path.get("bronze.row_count")
+    if bronze_relation and isinstance(bronze_row_count, int):
+        sentences.append(f"Bronze has {_format_scalar(bronze_row_count)} rows.")
+
+    silver_row_count = by_path.get("silver.row_count")
+    if isinstance(silver_row_count, int):
+        sentences.append(f"Silver has {_format_scalar(silver_row_count)} rows.")
+
+    silver_removed_count = by_path.get("silver.removed_count")
+    if isinstance(silver_removed_count, int):
+        sentences.append(f"Silver removed {_format_scalar(silver_removed_count)} rows in total.")
+
     rules = _format_rules(by_path.get("silver.transformation.rules"))
     if rules:
         sentences.append(f"Silver currently applies these transformation rules: {rules}.")
+
+    attribution_log = by_path.get("silver.transformation.attribution_log")
+    if isinstance(attribution_log, list) and attribution_log:
+        rendered_log = "; ".join(str(line) for line in attribution_log)
+        sentences.append(f"Silver attribution: {rendered_log}.")
 
     silver_status = by_path.get("silver.validation_status")
     if isinstance(silver_status, str):
@@ -294,6 +315,7 @@ def _fallback_fact_paths(message: str, available_fact_paths: List[str]) -> List[
                 "silver.removed_count",
                 "silver.transformation.summary",
                 "silver.transformation.rules",
+                "silver.transformation.attribution_log",
             ]
         )
     if wants_gold or wants_overview:
@@ -308,10 +330,12 @@ def _context_indicators(context: dict[str, Any]) -> dict[str, Any]:
     """Small non-secret provenance indicators for a client response."""
     run = context.get("run") if isinstance(context.get("run"), dict) else {}
     source = context.get("source") if isinstance(context.get("source"), dict) else {}
+    bronze = context.get("bronze") if isinstance(context.get("bronze"), dict) else {}
     gold = context.get("gold") if isinstance(context.get("gold"), dict) else {}
     return {
         "run_id": run.get("id"),
         "source": {"schema": source.get("schema"), "relation": source.get("relation")},
+        "bronze": {"schema": bronze.get("schema"), "relation": bronze.get("relation")},
         "gold_status": gold.get("status"),
     }
 
@@ -340,19 +364,13 @@ def _readonly_response(context: dict[str, Any]) -> dict[str, Any]:
 @router.post("/chat")
 def assistant_chat(request: AssistantChatRequest) -> Dict[str, Any]:
     """Explain server-built context without accepting frontend factual values."""
-    effective_run_id = request.run_id
-    if not effective_run_id:
-        try:
-            from src.app_state.db import get_readonly_connection
-            with get_readonly_connection() as conn:
-                row = conn.execute("SELECT run_id FROM generated_sql_review ORDER BY created_at DESC LIMIT 1").fetchone()
-                if not row:
-                    row = conn.execute("SELECT run_id FROM validation_runs ORDER BY started_at DESC LIMIT 1").fetchone()
-                if row:
-                    effective_run_id = row["run_id"]
-        except Exception:
-            effective_run_id = None
-    context = build_assistant_context(run_id=effective_run_id)
+    context = build_assistant_context(
+        run_id=request.run_id,
+        connection_id=request.connection_id,
+        source_schema=request.source_schema,
+        source_table=request.source_table,
+        selected_table=request.selected_table,
+    )
     available_fact_paths = _available_fact_paths(context)
     try:
         response = explain_with_gemini(
@@ -374,10 +392,7 @@ def assistant_chat(request: AssistantChatRequest) -> Dict[str, Any]:
                 "evidence": facts,
                 "context": _context_indicators(context),
             }
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="ASSISTANT_GEMINI_UNAVAILABLE",
-        ) from None
+        return _insufficient_response(context)
     except AssistantGeminiResponseInvalid:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

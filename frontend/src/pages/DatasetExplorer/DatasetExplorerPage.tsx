@@ -234,9 +234,9 @@ export function DatasetExplorerPage() {
           schema: table.schema,
           name: table.table,
           owner: table.layer === 'unknown' ? 'postgresql' : table.layer,
-          rows: '???',
-          columns: 0,
-          size: '???',
+          rows: table.row_count !== undefined && table.row_count !== null ? table.row_count.toString() : '-',
+          columns: table.column_count || 0,
+          size: '-',
           lastUpdated: 'live',
         }));
         const tablesBySchema = new Map<string, DbTable[]>();
@@ -406,8 +406,8 @@ export function DatasetExplorerPage() {
       } else {
         toast.error('No preview metadata returned', { id: 'preview' });
       }
-    } catch {
-      toast.error('Failed to load table preview', { id: 'preview' });
+    } catch (err) {
+      toast.error(calmApiMessage(err, 'Failed to load table preview.'), { id: 'preview' });
     } finally {
       setPreviewingTableId(null);
     }
@@ -603,8 +603,8 @@ export function DatasetExplorerPage() {
                 rightIcon={<ArrowRight size={14} />}
                 onClick={() => {
                   if (!selectedRelation) return;
-                  const metadataPath = withRunIdQuery(`/projects/${id}/metadata`, runId);
-                  const connectorPath = withConnectorFlowQuery(metadataPath, searchParams);
+                  const bronzePath = withRunIdQuery(`/projects/${id}/bronze`, runId);
+                  const connectorPath = withConnectorFlowQuery(bronzePath, searchParams);
                   navigate(
                     withRelationSelectionQuery(
                       connectorPath,
@@ -617,7 +617,7 @@ export function DatasetExplorerPage() {
                 }}
                 className="flex-shrink-0"
               >
-                Continue with {selectedRelation?.schema}.{selectedRelation?.name}
+                Continue to Bronze
               </Button>
             </div>
           )}

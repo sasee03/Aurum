@@ -23,6 +23,7 @@ describe('Aurum Assistant Integration & Component Tests', () => {
         context: {
           run_id: 'run_148b79da3c07',
           source: { schema: 'source', relation: 'live_e2e_customers' },
+          bronze: { schema: 'bronze', relation: 'live_e2e_customers' },
           gold_status: 'PROMOTED',
         },
       }),
@@ -166,7 +167,7 @@ describe('Aurum Assistant Integration & Component Tests', () => {
     expect(markup).toContain("can&#x27;t approve, execute, promote, or modify pipeline state from chat");
   });
 
-  it('8. selectedTable is never sent as run_id when runId is undefined', async () => {
+  it('8. selectedTable is sent only as a selector when runId is undefined', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -180,6 +181,7 @@ describe('Aurum Assistant Integration & Component Tests', () => {
     const payload: AssistantChatRequest = {
       message: 'What table is this?',
       run_id: undefined,
+      selected_table: 'online_retail_uci',
     };
 
     await askAurumAssistant(payload);
@@ -188,6 +190,9 @@ describe('Aurum Assistant Integration & Component Tests', () => {
     const [, init] = fetchMock.mock.calls[0];
     const body = JSON.parse(init.body);
     expect(body.run_id).toBeUndefined();
-    expect(body).toEqual({ message: 'What table is this?' });
+    expect(body).toEqual({
+      message: 'What table is this?',
+      selected_table: 'online_retail_uci',
+    });
   });
 });

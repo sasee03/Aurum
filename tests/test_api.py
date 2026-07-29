@@ -66,6 +66,7 @@ def _mock_pg_connect(monkeypatch):
 
 
 def test_health_ok(client, monkeypatch):
+    monkeypatch.setenv("DB_HOST", "localhost")
     mock_cursor = _mock_pg_connect(monkeypatch)
     response = client.get("/health")
     assert response.status_code == 200

@@ -39,7 +39,7 @@ import {
   toggleBronzeTable,
 } from '@/utils/bronzeSelection';
 import { readRelationSelection } from '@/utils/relationSelection';
-import { bronzeDiscoveryErrorMessage, withConnectorFlowQuery } from '@/utils/connectorFlow';
+import { bronzeContinueToSilverLabel, bronzeDiscoveryErrorMessage, withConnectorFlowQuery } from '@/utils/connectorFlow';
 
 type BronzeResultItem = VerifyBronzeItemResult | ConnectorBronzeItemResult;
 
@@ -263,7 +263,15 @@ export function BronzeValidationPage() {
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
       <ProjectSubNav runId={runId} />
-      <PageAssistant page="bronze" layer="bronze" runId={runId} selectedTable={carriedTable || undefined} />
+      <PageAssistant
+        page="bronze"
+        layer="bronze"
+        runId={runId}
+        selectedTable={carriedTable || undefined}
+        connectionId={connectionId}
+        sourceSchema={carriedSchema}
+        sourceTable={carriedTable}
+      />
 
       {/* Header */}
       <div className="px-6 py-6 border-b border-[#252637]">
@@ -687,13 +695,16 @@ export function BronzeValidationPage() {
                 sourceTable: source.table,
               });
               if (connectionId) params.set('connectionId', connectionId);
-              navigate(`/projects/${encodeURIComponent(id || '')}/silver?${params.toString()}`);
+              navigate(
+                withConnectorFlowQuery(
+                  `/projects/${encodeURIComponent(id || '')}/silver?${params.toString()}`,
+                  searchParams,
+                ),
+              );
             }
           }}
         >
-          {activeVerifyItem && activeIsEligible
-            ? `Continue to Silver (${resultBronze(activeVerifyItem).table})`
-            : 'Continue to Silver'}
+          {bronzeContinueToSilverLabel()}
         </Button>
       </div>
     </div>

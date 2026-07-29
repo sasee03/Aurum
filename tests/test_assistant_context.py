@@ -727,3 +727,228 @@ def test_validation_runs_backed_exact_run_still_works(monkeypatch, tmp_path):
     assert context["run"]["id"] == "run-1"
     assert context["source"]["relation"] == "orders"
     assert context["bronze"]["authority_status"] == "READY"
+
+
+def test_active_uci_relation_context_beats_unrelated_latest_silver_run(monkeypatch, tmp_path):
+    db_path = tmp_path / "app_state.sqlite"
+    monkeypatch.setenv("AURUM_APP_STATE_DB", str(db_path))
+    uci_rules = [
+        {"type": "compare", "column": "quantity", "operator": ">", "value": 0},
+        {"type": "distinct"},
+    ]
+    bronze_identity = {
+        "database_oid": 101,
+        "namespace_oid": 202,
+        "relation_oid": 302,
+        "schema": "bronze",
+        "relation_name": "online_retail_uci",
+        "relation_kind": "r",
+    }
+    source_identity = {
+        "database_oid": 101,
+        "namespace_oid": 201,
+        "relation_oid": 301,
+        "schema": "source",
+        "relation_name": "online_retail_uci",
+        "relation_kind": "r",
+    }
+    with get_connection() as conn:
+        conn.execute("INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1', 'p1', 'x', 'x')")
+        conn.execute("INSERT INTO data_connections (id, project_id, type, name, host, port, database_name, username, status, created_at, updated_at) VALUES ('conn-uci', 'p1', 'postgresql', 'office', 'localhost', 5432, 'aurum', 'reader', 'active', 'x', 'x')")
+        conn.execute(
+            """
+            INSERT INTO bronze_ingest_authority
+                (ingest_id, project_id, connection_id, database_name, source_schema, source_relation,
+                 source_identity_json, bronze_schema, bronze_relation, bronze_identity_json, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "ing-uci", "p1", "conn-uci", "aurum", "source", "online_retail_uci",
+                json.dumps(source_identity), "bronze", "online_retail_uci", json.dumps(bronze_identity),
+                "READY", "2026-07-28T01:00:00+00:00", "2026-07-28T01:01:00+00:00",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO table_rules (table_name, rules_json, rule_revision, updated_at) VALUES (?, ?, ?, ?)",
+            ("online_retail_uci", json.dumps(uci_rules), "a" * 64, "2026-07-28T01:02:00+00:00"),
+        )
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review
+                (run_id, table_name, sql_text, planned_changes_json, created_at, status,
+                 candidate_schema, generator_provenance, project_id, connection_id,
+                 source_identity_json, attribution_log_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "silver-uci-current", "online_retail_uci", "SQL", json.dumps({"rules": uci_rules}),
+                "2026-07-28T01:03:00+00:00", "PROMOTED", "silver_candidates", "server_deterministic_rules_v1",
+                "p1", "conn-uci", json.dumps(bronze_identity),
+                json.dumps([
+                    "Initial Bronze Rows: 541909",
+                    "quantity > configured value: 10624 rows removed (Remaining: 531285)",
+                    "Remove exact duplicate rows: 5231 rows removed (Remaining: 526054)",
+                ]),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review
+                (run_id, table_name, sql_text, planned_changes_json, created_at, status,
+                 candidate_schema, generator_provenance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "silver-stale-orders", "bronze_orders", "SQL", json.dumps({"rules": [{"type": "distinct"}]}),
+                "2026-07-28T09:00:00+00:00", "PROMOTED", "silver_candidates", "server_deterministic_rules_v1",
+            ),
+        )
+        conn.commit()
+
+    service = AssistantContextService(state_path=db_path, source_columns_reader=lambda *_args: None)
+    context = service.build(
+        connection_id="conn-uci",
+        source_schema="source",
+        source_table="online_retail_uci",
+        selected_table="online_retail_uci",
+    )
+    payload = json.dumps(context)
+
+    assert context["run"]["id"] == "silver-uci-current"
+    assert context["source"] == {"schema": "source", "relation": "online_retail_uci", "columns": None}
+    assert context["bronze"]["schema"] == "bronze"
+    assert context["bronze"]["relation"] == "online_retail_uci"
+    assert context["bronze"]["row_count"] == 541_909
+    assert context["silver"]["row_count"] == 526_054
+    assert context["silver"]["removed_count"] == 15_855
+    assert context["silver"]["transformation"]["rules"] == uci_rules
+    assert "bronze_orders" not in payload
+
+
+def test_relation_context_without_silver_run_uses_bronze_authority_not_latest_history(monkeypatch, tmp_path):
+    db_path = tmp_path / "app_state.sqlite"
+    monkeypatch.setenv("AURUM_APP_STATE_DB", str(db_path))
+    with get_connection() as conn:
+        conn.execute("INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1', 'p1', 'x', 'x')")
+        conn.execute("INSERT INTO data_connections (id, project_id, type, name, host, port, database_name, username, status, created_at, updated_at) VALUES ('conn-uci', 'p1', 'postgresql', 'office', 'localhost', 5432, 'aurum', 'reader', 'active', 'x', 'x')")
+        conn.execute(
+            """
+            INSERT INTO bronze_ingest_authority
+                (ingest_id, project_id, connection_id, database_name, source_schema, source_relation,
+                 source_identity_json, bronze_schema, bronze_relation, bronze_identity_json, status, created_at, updated_at)
+            VALUES ('ing-uci', 'p1', 'conn-uci', 'aurum', 'source', 'online_retail_uci', '{}', 'bronze', 'online_retail_uci', '{}', 'READY', 'x', 'x')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review
+                (run_id, table_name, sql_text, planned_changes_json, created_at, status, candidate_schema, generator_provenance)
+            VALUES ('latest-unrelated', 'bronze_orders', 'SQL', '{}', '2026-07-28T09:00:00+00:00', 'PROMOTED', 'silver_candidates', 'gen')
+            """
+        )
+        conn.commit()
+
+    service = AssistantContextService(state_path=db_path, source_columns_reader=lambda *_args: None)
+    context = service.build(
+        connection_id="conn-uci",
+        source_schema="source",
+        source_table="online_retail_uci",
+        selected_table="online_retail_uci",
+    )
+
+    assert context["run"]["id"] is None
+    assert context["source"]["relation"] == "online_retail_uci"
+    assert context["bronze"]["relation"] == "online_retail_uci"
+    assert context["silver"]["transformation"]["rules"] is None
+
+
+def test_relation_selector_overrides_unrelated_run_id(monkeypatch, tmp_path):
+    db_path = tmp_path / "app_state.sqlite"
+    monkeypatch.setenv("AURUM_APP_STATE_DB", str(db_path))
+    uci_rules = [
+        {"type": "compare", "column": "quantity", "operator": ">", "value": 0},
+        {"type": "distinct"},
+    ]
+    bronze_identity = {
+        "database_oid": 101,
+        "namespace_oid": 202,
+        "relation_oid": 302,
+        "schema": "bronze",
+        "relation_name": "online_retail_uci",
+        "relation_kind": "r",
+    }
+    source_identity = {
+        "database_oid": 101,
+        "namespace_oid": 201,
+        "relation_oid": 301,
+        "schema": "source",
+        "relation_name": "online_retail_uci",
+        "relation_kind": "r",
+    }
+    with get_connection() as conn:
+        conn.execute("INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1', 'p1', 'x', 'x')")
+        conn.execute("INSERT INTO data_connections (id, project_id, type, name, host, port, database_name, username, status, created_at, updated_at) VALUES ('conn-uci', 'p1', 'postgresql', 'office', 'localhost', 5432, 'aurum', 'reader', 'active', 'x', 'x')")
+        conn.execute(
+            """
+            INSERT INTO bronze_ingest_authority
+                (ingest_id, project_id, connection_id, database_name, source_schema, source_relation,
+                 source_identity_json, bronze_schema, bronze_relation, bronze_identity_json, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "ing-uci", "p1", "conn-uci", "aurum", "source", "online_retail_uci",
+                json.dumps(source_identity), "bronze", "online_retail_uci", json.dumps(bronze_identity),
+                "READY", "2026-07-28T01:00:00+00:00", "2026-07-28T01:01:00+00:00",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO table_rules (table_name, rules_json, rule_revision, updated_at) VALUES (?, ?, ?, ?)",
+            ("online_retail_uci", json.dumps(uci_rules), "a" * 64, "2026-07-28T01:02:00+00:00"),
+        )
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review
+                (run_id, table_name, sql_text, planned_changes_json, created_at, status,
+                 candidate_schema, generator_provenance, project_id, connection_id,
+                 source_identity_json, attribution_log_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "silver-uci-current", "online_retail_uci", "SQL", json.dumps({"rules": uci_rules}),
+                "2026-07-28T01:03:00+00:00", "PROMOTED", "silver_candidates", "server_deterministic_rules_v1",
+                "p1", "conn-uci", json.dumps(bronze_identity),
+                json.dumps([
+                    "Initial Bronze Rows: 541909",
+                    "quantity > configured value: 10624 rows removed (Remaining: 531285)",
+                    "Remove exact duplicate rows: 5231 rows removed (Remaining: 526054)",
+                ]),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review
+                (run_id, table_name, sql_text, planned_changes_json, created_at, status,
+                 candidate_schema, generator_provenance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "silver-stale-orders", "bronze_orders", "SQL", json.dumps({"rules": [{"type": "distinct"}]}),
+                "2026-07-28T09:00:00+00:00", "PROMOTED", "silver_candidates", "server_deterministic_rules_v1",
+            ),
+        )
+        conn.commit()
+
+    service = AssistantContextService(state_path=db_path, source_columns_reader=lambda *_args: None)
+    context = service.build(
+        run_id="silver-stale-orders",
+        connection_id="conn-uci",
+        source_schema="source",
+        source_table="online_retail_uci",
+        selected_table="online_retail_uci",
+    )
+
+    assert context["run"]["id"] == "silver-uci-current"
+    assert context["source"]["relation"] == "online_retail_uci"
+    assert context["bronze"]["relation"] == "online_retail_uci"
+    assert context["silver"]["row_count"] == 526_054
+    assert "bronze_orders" not in json.dumps(context)

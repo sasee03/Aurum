@@ -30,6 +30,7 @@ import {
   type LiveTablePreview,
 } from '@/lib/aurumApi';
 import { calmApiMessage } from '@/utils/apiErrors';
+import { withConnectorFlowQuery } from '@/utils/connectorFlow';
 import {
   formatSilverRule,
   parseSilverRuleInput,
@@ -512,7 +513,15 @@ export function SilverValidationPage() {
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
       <ProjectSubNav />
-      <PageAssistant page="silver" layer="silver" runId={runId || runIdParam} selectedTable={selectedTableParam || sourceTable || undefined} />
+      <PageAssistant
+        page="silver"
+        layer="silver"
+        runId={runId || runIdParam}
+        selectedTable={selectedTableParam || sourceTable || undefined}
+        connectionId={connectionId || undefined}
+        sourceSchema={sourceSchema || undefined}
+        sourceTable={sourceTable || undefined}
+      />
 
       {/* Header */}
       <div className="px-6 py-6 border-b border-[#252637]">
@@ -908,7 +917,7 @@ export function SilverValidationPage() {
       <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-4 flex items-center justify-between">
         <Button
           variant="ghost"
-          onClick={() => navigate(`/projects/${encodeURIComponent(id || '')}/bronze`)}
+          onClick={() => navigate(withConnectorFlowQuery(`/projects/${encodeURIComponent(id || '')}/bronze`, searchParams))}
         >
           Back to Bronze
         </Button>
@@ -917,7 +926,18 @@ export function SilverValidationPage() {
           rightIcon={<ArrowRight size={16} />}
           disabled={!silverComplete}
           title={silverComplete ? undefined : 'Complete Silver promotion before continuing.'}
-          onClick={() => navigate(`/projects/${encodeURIComponent(id || '')}/gold?table=${encodeURIComponent(selectedTableParam || '')}`)}
+          onClick={() => {
+            const params = new URLSearchParams({
+              table: selectedTableParam || '',
+            });
+            if (runId) params.set('runId', runId);
+            navigate(
+              withConnectorFlowQuery(
+                `/projects/${encodeURIComponent(id || '')}/gold?${params.toString()}`,
+                searchParams,
+              ),
+            );
+          }}
         >
           Continue to Gold
         </Button>

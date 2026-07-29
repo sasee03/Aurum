@@ -213,6 +213,10 @@ export interface ChatContext {
 export interface AssistantChatRequest {
   message: string;
   run_id?: string;
+  connection_id?: string;
+  source_schema?: string;
+  source_table?: string;
+  selected_table?: string;
 }
 
 export type ChatRequest = AssistantChatRequest;
@@ -240,6 +244,7 @@ export interface AssistantFact {
 export interface AssistantContextIndicators {
   run_id?: string | null;
   source?: { schema?: string | null; relation?: string | null };
+  bronze?: { schema?: string | null; relation?: string | null };
   gold_status?: string | null;
 }
 
@@ -260,6 +265,18 @@ export async function askAurumAssistant(payload: AssistantChatRequest): Promise<
   };
   if (payload.run_id) {
     body.run_id = payload.run_id;
+  }
+  if (payload.connection_id) {
+    body.connection_id = payload.connection_id;
+  }
+  if (payload.source_schema) {
+    body.source_schema = payload.source_schema;
+  }
+  if (payload.source_table) {
+    body.source_table = payload.source_table;
+  }
+  if (payload.selected_table) {
+    body.selected_table = payload.selected_table;
   }
   return request<AssistantResponse>('/api/v1/assistant/chat', {
     method: 'POST',
@@ -503,6 +520,8 @@ export interface PostgresTableEntry {
   schema: string;
   table: string;
   layer: string;
+  row_count?: number;
+  column_count?: number;
 }
 
 export async function listPostgresTables(

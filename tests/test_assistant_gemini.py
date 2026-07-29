@@ -89,6 +89,7 @@ def test_server_renders_answer_from_backend_context(monkeypatch, client):
         "context": {
             "run_id": "run-1",
             "source": {"schema": "public", "relation": "orders"},
+            "bronze": {"schema": None, "relation": None},
             "gold_status": "PENDING",
         },
     }
@@ -457,3 +458,49 @@ def test_gemini_provider_receives_only_context_message_and_fact_paths(monkeypatc
         "aurum_context": CONTEXT,
         "available_fact_paths": ["bronze.row_count"],
     }
+
+
+def test_gemini_unavailable_uci_silver_fallback_renders_counts_and_rules(monkeypatch, client):
+    context = {
+        **CONTEXT,
+        "source": {"schema": "source", "relation": "online_retail_uci", "columns": None},
+        "bronze": {
+            "schema": "bronze",
+            "relation": "online_retail_uci",
+            "authority_status": "READY",
+            "row_count": 541_909,
+        },
+        "silver": {
+            "validation_status": None,
+            "row_count": 526_054,
+            "removed_count": 15_855,
+            "transformation": {
+                "rules": [
+                    {"type": "compare", "column": "quantity", "operator": ">", "value": 0},
+                    {"type": "distinct"},
+                ],
+                "attribution_log": [
+                    "Initial Bronze Rows: 541909",
+                    "quantity > configured value: 10624 rows removed (Remaining: 531285)",
+                    "Remove exact duplicate rows: 5231 rows removed (Remaining: 526054)",
+                ],
+            },
+        },
+    }
+    monkeypatch.setattr(router, "build_assistant_context", lambda **_kwargs: context)
+    monkeypatch.setattr(
+        router,
+        "explain_with_gemini",
+        lambda **_kwargs: (_ for _ in ()).throw(AssistantGeminiUnavailable("key missing")),
+    )
+
+    response = client.post("/api/v1/assistant/chat", json={"message": "What changed from Bronze to Silver?"})
+
+    assert response.status_code == 200
+    answer = response.json()["answer"]
+    assert "bronze.online_retail_uci" in answer
+    assert "Bronze has 541,909 rows" in answer
+    assert "Silver has 526,054 rows" in answer
+    assert "Silver removed 15,855 rows" in answer
+    assert "keep rows where quantity > 0" in answer
+    assert "remove exact duplicate rows" in answer

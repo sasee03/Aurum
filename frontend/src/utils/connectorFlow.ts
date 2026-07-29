@@ -1,6 +1,15 @@
 import { ApiError, calmApiMessage } from './apiErrors';
 
-const CONNECTOR_FLOW_KEYS = ['connectionId', 'database', 'schema', 'table'] as const;
+const CONNECTOR_FLOW_KEYS = [
+  'runId',
+  'connectionId',
+  'database',
+  'schema',
+  'table',
+  'bronzeSchema',
+  'sourceSchema',
+  'sourceTable',
+] as const;
 
 export function withConnectorFlowQuery(path: string, searchParams: URLSearchParams): string {
   const [basePath, rawQuery = ''] = path.split('?');
@@ -33,4 +42,8 @@ export function bronzeDiscoveryErrorMessage(error: unknown, connectorMode: boole
       ? 'Failed to discover tables from this PostgreSQL connection. Re-test the connection and try again.'
       : 'Failed to discover source tables from backend API.',
   );
+}
+
+export function bronzeContinueToSilverLabel(): string {
+  return 'Continue to Silver';
 }

@@ -10,7 +10,7 @@ import {
   relationSelectionKey,
   withRelationSelectionQuery,
 } from './relationSelection';
-import { bronzeDiscoveryErrorMessage, withConnectorFlowQuery } from './connectorFlow';
+import { bronzeContinueToSilverLabel, bronzeDiscoveryErrorMessage, withConnectorFlowQuery } from './connectorFlow';
 import { ApiError } from './apiErrors';
 
 describe('Dataset relation selection propagation', () => {
@@ -37,7 +37,26 @@ describe('Dataset relation selection propagation', () => {
     );
   });
 
-  it('preserves connector session and selected relation across flow navigation', () => {
+  it('preserves connector session, run, and selected relation across flow navigation', () => {
+    const params = new URLSearchParams({
+      runId: 'run_uci_current',
+      connectionId: 'conn_abc',
+      database: 'aurum',
+      schema: 'source',
+      table: 'online_retail_uci',
+      sourceSchema: 'source',
+      sourceTable: 'online_retail_uci',
+      bronzeSchema: 'bronze',
+    });
+
+    const path = withConnectorFlowQuery('/projects/demo/gold', params);
+
+    expect(path).toBe(
+      '/projects/demo/gold?runId=run_uci_current&connectionId=conn_abc&database=aurum&schema=source&table=online_retail_uci&bronzeSchema=bronze&sourceSchema=source&sourceTable=online_retail_uci',
+    );
+  });
+
+  it('preserves the selected connector relation from Dataset Explorer to Bronze', () => {
     const params = new URLSearchParams({
       connectionId: 'conn_abc',
       database: 'aurum',
@@ -45,11 +64,19 @@ describe('Dataset relation selection propagation', () => {
       table: 'online_retail_uci',
     });
 
-    const path = withConnectorFlowQuery('/projects/demo/bronze', params);
+    const connectorPath = withConnectorFlowQuery('/projects/demo/bronze', params);
+    const path = withRelationSelectionQuery(connectorPath, {
+      schema: 'source',
+      table: 'online_retail_uci',
+    });
 
     expect(path).toBe(
       '/projects/demo/bronze?connectionId=conn_abc&database=aurum&schema=source&table=online_retail_uci',
     );
+  });
+  it('keeps the Bronze footer CTA label independent of selected table names', () => {
+    expect(bronzeContinueToSilverLabel()).toBe('Continue to Silver');
+    expect(bronzeContinueToSilverLabel()).not.toContain('online_retail_uci');
   });
 });
 
