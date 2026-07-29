@@ -79,7 +79,7 @@ def test_server_renders_answer_from_backend_context(monkeypatch, client):
 
     assert response.status_code == 200
     assert response.json() == {
-        "answer": "Verified Aurum facts:\n- Source schema: public.\n- Source relation: orders.",
+        "answer": "This dataset is currently represented by public.orders.",
         "grounded": True,
         "status": "answered",
         "evidence": [
@@ -129,6 +129,27 @@ def test_unknown_provider_fact_path_returns_insufficient_information(monkeypatch
     assert response.json()["status"] == "insufficient_information"
 
 
+def test_empty_selected_fact_path_returns_insufficient_information(monkeypatch, client):
+    context = {
+        **CONTEXT,
+        "dataset": {
+            "config": None,
+            "source": None,
+            "available_layers": [],
+            "layer_relations": {"source": None, "bronze": None, "gold": None},
+            "row_counts": {"bronze": None, "silver": None},
+            "quality_status": {},
+        },
+    }
+    monkeypatch.setattr(router, "build_assistant_context", lambda **_kwargs: context)
+    monkeypatch.setattr(router, "explain_with_gemini", lambda **_kwargs: _answered("dataset"))
+
+    response = client.post("/api/v1/assistant/chat", json={"message": "What dataset is this?"})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "insufficient_information"
+
+
 def test_action_request_is_refused_without_mutation(monkeypatch, client):
     monkeypatch.setattr(router, "build_assistant_context", lambda **_kwargs: CONTEXT)
     monkeypatch.setattr(
@@ -166,7 +187,7 @@ def test_prompt_injection_cannot_request_sql_execution_or_secrets(monkeypatch, c
     assert secret not in json.dumps(calls[0]["context"])
 
 
-def test_gemini_unavailable_returns_safe_service_error(monkeypatch, client):
+def test_gemini_unavailable_uses_deterministic_dataset_fallback(monkeypatch, client):
     monkeypatch.setattr(router, "build_assistant_context", lambda **_kwargs: CONTEXT)
     monkeypatch.setattr(
         router,
@@ -174,10 +195,14 @@ def test_gemini_unavailable_returns_safe_service_error(monkeypatch, client):
         lambda **_kwargs: (_ for _ in ()).throw(AssistantGeminiUnavailable("key missing")),
     )
 
-    response = client.post("/api/v1/assistant/chat", json={"message": "Explain Bronze."})
+    response = client.post("/api/v1/assistant/chat", json={"message": "tell me about this dataset"})
 
-    assert response.status_code == 503
-    assert response.json() == {"detail": "ASSISTANT_GEMINI_UNAVAILABLE"}
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "answered"
+    assert body["grounded"] is True
+    assert "public.orders" in body["answer"]
+    assert "Verified Aurum facts" not in body["answer"]
 
 
 @pytest.mark.parametrize(
@@ -283,6 +308,52 @@ def test_adversarial_normal_and_paraphrased_questions_render_only_selected_serve
     assert [fact["path"] for fact in response.json()["evidence"]] == fact_paths
 
 
+def test_broad_dataset_question_can_use_cross_layer_dataset_and_quality_facts(monkeypatch, client):
+    context = {
+        **CONTEXT,
+        "dataset": {
+            "config": "orders-v1",
+            "source": {"schema": "public", "relation": "orders"},
+            "available_layers": ["source", "bronze", "silver", "gold"],
+            "layer_relations": {
+                "source": {"schema": "public", "relation": "orders"},
+                "bronze": {"schema": "bronze", "relation": "bronze_orders"},
+                "gold": {"schema": "gold", "relation": "daily_revenue"},
+            },
+            "row_counts": {"bronze": 10, "silver": 8},
+            "quality_status": {"bronze": "PASS", "silver": "FAIL", "gold": "PENDING"},
+        },
+        "quality": {
+            "layer_status": {"bronze": "PASS", "silver": "FAIL", "gold": "PENDING"},
+            "first_failed_layer": "silver",
+            "failed_checks": [{"layer": "silver", "check_id": "S1", "status": "FAIL"}],
+        },
+    }
+    fact_paths = [
+        "dataset.available_layers",
+        "dataset.layer_relations",
+        "dataset.row_counts",
+        "quality.layer_status",
+        "quality.failed_checks",
+        "gold.status",
+    ]
+    monkeypatch.setattr(router, "build_assistant_context", lambda **_kwargs: context)
+    monkeypatch.setattr(router, "explain_with_gemini", lambda **_kwargs: _answered(*fact_paths))
+
+    response = client.post(
+        "/api/v1/assistant/chat",
+        json={"message": "Explain this dataset across Bronze, Silver, and Gold."},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "answered"
+    assert [fact["path"] for fact in body["evidence"]] == fact_paths
+    assert "bronze_orders" in body["answer"]
+    assert "daily_revenue" in body["answer"]
+    assert "Verified Aurum facts" not in body["answer"]
+
+
 @pytest.mark.parametrize(
     "message",
     ["Delete bad rows.", "Run Silver again.", "Approve Gold.", "Create a new Gold table."],
@@ -341,7 +412,7 @@ def test_adversarial_hallucination_and_missing_stage_evidence_are_insufficient(m
 
 def test_assistant_model_configuration_is_independent_from_gold(monkeypatch):
     monkeypatch.delenv("AURUM_ASSISTANT_GEMINI_MODEL", raising=False)
-    assert configured_assistant_gemini_model() == "gemini-3.6-flash"
+    assert configured_assistant_gemini_model() == "gemini-3.5-flash"
     monkeypatch.setenv("AURUM_ASSISTANT_GEMINI_MODEL", "assistant-test-model")
     assert configured_assistant_gemini_model() == "assistant-test-model"
 

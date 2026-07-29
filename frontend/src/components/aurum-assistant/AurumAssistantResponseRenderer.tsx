@@ -23,7 +23,7 @@ function factLabel(path: string): string {
 }
 
 export function AurumAssistantResponseRenderer({ response }: Props) {
-  const { answer, confidence, grounded, status } = response;
+  const { answer, status } = response;
   const data = response.data ?? {};
   const evidence = response.evidence ?? [];
   const isReadOnlyRefusal = status === "read_only_refusal";
@@ -31,15 +31,6 @@ export function AurumAssistantResponseRenderer({ response }: Props) {
 
   return (
     <div className="aa-response">
-      <div className="aa-response-meta">
-        {typeof grounded === "boolean" && (
-          <span className={grounded ? "aa-fact-chip aa-fact-chip--good" : "aa-fact-chip"}>
-            {grounded ? "Grounded" : "Not grounded"}
-          </span>
-        )}
-        {status && <span className="aa-fact-chip">{status.replace(/_/g, " ")}</span>}
-        {confidence && <span className="aa-fact-chip">Confidence: {confidence}</span>}
-      </div>
 
       {isReadOnlyRefusal && (
         <div className="aa-state-card aa-state-card--readonly">
@@ -60,8 +51,8 @@ export function AurumAssistantResponseRenderer({ response }: Props) {
 
       {!isReadOnlyRefusal && <p className="aa-answer">{answer}</p>}
       {evidence.length > 0 && (
-        <div className="aa-evidence-card">
-          <strong>Verified Aurum facts</strong>
+        <details className="aa-evidence-card">
+          <summary>Grounding</summary>
           <dl>
             {evidence.map((fact) => (
               <div key={fact.path}>
@@ -70,7 +61,7 @@ export function AurumAssistantResponseRenderer({ response }: Props) {
               </div>
             ))}
           </dl>
-        </div>
+        </details>
       )}
       {data.sql && <SqlCard sql={data.sql} />}
       {data.table && data.table.length > 0 && <ResultTableCard rows={data.table} />}

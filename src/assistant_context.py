@@ -31,6 +31,10 @@ _SENSITIVE_VALUE = re.compile(
     re.IGNORECASE,
 )
 _URI_USERINFO = re.compile(r"(?<=://)[^\s/:@]+:[^\s/@]+@")
+_REPORT_DETAIL_KEY = re.compile(
+    r"(?:sql|query|statement|ddl|dml|prompt|credential|secret|token|api[_-]?key)",
+    re.IGNORECASE,
+)
 
 
 def _redact_text(value: Any) -> Any:
@@ -50,6 +54,19 @@ def _safe_value(value: Any) -> Any:
     if isinstance(value, list):
         return [_safe_value(item) for item in value]
     return _redact_text(value)
+
+
+def _safe_report_summary(value: Any) -> Any:
+    """Keep human report summaries while dropping raw SQL/query/detail fields."""
+    if isinstance(value, dict):
+        return {
+            str(key): _safe_report_summary(item)
+            for key, item in value.items()
+            if not _REPORT_DETAIL_KEY.search(str(key))
+        }
+    if isinstance(value, list):
+        return [_safe_report_summary(item) for item in value]
+    return _safe_value(value)
 
 
 def _json_object(value: Any) -> dict[str, Any] | None:
@@ -96,23 +113,23 @@ class AssistantContextService:
     def build(self, *, run_id: str | None = None) -> dict[str, Any]:
         context = _empty_context()
         if not run_id:
-            return context
+            return _finalize_context(context)
 
         try:
             conn = get_readonly_connection(self._state_path)
         except sqlite3.OperationalError:
-            return context
+            return _finalize_context(context)
 
         try:
             run = self._load_run(conn, run_id)
             if run is None:
                 gold_run = self._load_gold_run_header(conn, run_id)
                 if gold_run is not None:
-                    return self._build_from_gold_run(conn, context, gold_run)
+                    return _finalize_context(self._build_from_gold_run(conn, context, gold_run))
                 silver_run = self._load_silver_run_header(conn, run_id)
                 if silver_run is not None:
-                    return self._build_from_silver_run(conn, context, silver_run)
-                return context
+                    return _finalize_context(self._build_from_silver_run(conn, context, silver_run))
+                return _finalize_context(context)
 
             context["run"] = {
                 "id": run["run_id"],
@@ -159,7 +176,8 @@ class AssistantContextService:
             )
             context["silver"] = self._silver_context(conn, context["bronze"], report)
             context["gold"] = self._gold_context(conn, context["messages"], run_id=run["run_id"])
-            return context
+            context["quality"] = _quality_context(report)
+            return _finalize_context(context)
         finally:
             conn.close()
 
@@ -183,7 +201,7 @@ class AssistantContextService:
         connection_id: str | None,
         first_source: dict[str, Any] | None,
     ) -> sqlite3.Row | None:
-        if not connection_id or not first_source:
+        if not first_source:
             return None
 
         source_schema = first_source.get("schema")
@@ -191,27 +209,50 @@ class AssistantContextService:
         if not source_table:
             return None
 
+        if connection_id:
+            if source_schema:
+                query = """
+                    SELECT ingest_id, project_id, connection_id, database_name,
+                           source_schema, source_relation, bronze_schema, bronze_relation, status
+                    FROM bronze_ingest_authority
+                    WHERE connection_id = ?
+                      AND (
+                        (source_schema = ? AND source_relation = ?)
+                        OR (bronze_schema = ? AND bronze_relation = ?)
+                      )
+                """
+                params = (connection_id, source_schema, source_table, source_schema, source_table)
+            else:
+                query = """
+                    SELECT ingest_id, project_id, connection_id, database_name,
+                           source_schema, source_relation, bronze_schema, bronze_relation, status
+                    FROM bronze_ingest_authority
+                    WHERE connection_id = ?
+                      AND (source_relation = ? OR bronze_relation = ?)
+                """
+                params = (connection_id, source_table, source_table)
+            rows = self._fetchall(conn, query, params)
+            if len(rows) == 1:
+                return rows[0]
+            return None
+
         if source_schema:
             query = """
                 SELECT ingest_id, project_id, connection_id, database_name,
                        source_schema, source_relation, bronze_schema, bronze_relation, status
                 FROM bronze_ingest_authority
-                WHERE connection_id = ?
-                  AND (
-                    (source_schema = ? AND source_relation = ?)
-                    OR (bronze_schema = ? AND bronze_relation = ?)
-                  )
+                WHERE (source_schema = ? AND source_relation = ?)
+                   OR (bronze_schema = ? AND bronze_relation = ?)
             """
-            params = (connection_id, source_schema, source_table, source_schema, source_table)
+            params = (source_schema, source_table, source_schema, source_table)
         else:
             query = """
                 SELECT ingest_id, project_id, connection_id, database_name,
                        source_schema, source_relation, bronze_schema, bronze_relation, status
                 FROM bronze_ingest_authority
-                WHERE connection_id = ?
-                  AND (source_relation = ? OR bronze_relation = ?)
+                WHERE source_relation = ? OR bronze_relation = ?
             """
-            params = (connection_id, source_table, source_table)
+            params = (source_table, source_table)
 
         rows = self._fetchall(conn, query, params)
         if len(rows) == 1:
@@ -295,17 +336,24 @@ class AssistantContextService:
             except (TypeError, ValueError):
                 parsed_rules = None
             rules = {"rules": parsed_rules} if isinstance(parsed_rules, list) else None
+        rule_list = rules.get("rules") if rules else None
+        rule_summary = _safe_value(root_cause.get("summary"))
+        if not rule_summary and rule_list:
+            rule_summary = f"Silver transformation configured with rules: {json.dumps(rule_list)}"
+        val_status = _layer_status(report, "silver")
+        if not val_status and rules_row is not None:
+            val_status = "RULES_CONFIGURED"
         return {
-            "validation_status": _layer_status(report, "silver"),
+            "validation_status": val_status,
             "row_count": _as_int(s1_extra.get("silver")),
             "retained_count": None,
             "removed_count": _as_int(s8_extra.get("missing")),
             "invalid_count": None,
             "transformation": {
-                "rules": _safe_value(rules.get("rules")) if rules else None,
+                "rules": _safe_value(rule_list),
                 "rule_revision": rules_row["rule_revision"] if rules_row is not None else None,
                 "updated_at": rules_row["updated_at"] if rules_row is not None else None,
-                "summary": _safe_value(root_cause.get("summary")),
+                "summary": rule_summary,
                 "suspected_filter": _safe_value(s10_extra.get("suspected_filter")) if s10_extra else None,
             },
         }
@@ -377,7 +425,8 @@ class AssistantContextService:
         if connection_id and source_table:
             if source_schema:
                 query = """
-                    SELECT ingest_id, bronze_schema, bronze_relation, status
+                    SELECT ingest_id, source_schema, source_relation,
+                           bronze_schema, bronze_relation, status
                     FROM bronze_ingest_authority
                     WHERE connection_id = ? AND (
                         (source_schema = ? AND source_relation = ?)
@@ -387,7 +436,8 @@ class AssistantContextService:
                 params = (connection_id, source_schema, source_table, source_schema, source_table)
             else:
                 query = """
-                    SELECT ingest_id, bronze_schema, bronze_relation, status
+                    SELECT ingest_id, source_schema, source_relation,
+                           bronze_schema, bronze_relation, status
                     FROM bronze_ingest_authority
                     WHERE connection_id = ? AND (
                         source_relation = ? OR bronze_relation = ?
@@ -459,15 +509,17 @@ class AssistantContextService:
         )
 
         authority = self._find_gold_bronze_authority(conn, connection_id, first_source)
+        silver_relation = None
         if authority is not None:
             context["source"] = {
                 "schema": authority["source_schema"],
                 "relation": authority["source_relation"],
                 "columns": None,
             }
-            if connection_id and authority["source_schema"] and authority["source_relation"]:
+            conn_id = connection_id or authority["connection_id"]
+            if conn_id and authority["source_schema"] and authority["source_relation"]:
                 columns = self._source_columns_reader(
-                    connection_id, authority["source_schema"], authority["source_relation"]
+                    conn_id, authority["source_schema"], authority["source_relation"]
                 )
                 if columns is not None:
                     context["source"]["columns"] = _safe_value(columns)
@@ -479,7 +531,27 @@ class AssistantContextService:
                 "validation_status": None,
                 "row_count": None,
             }
-            context["silver"] = self._silver_context(conn, context["bronze"], None)
+            silver_relation = authority["bronze_relation"]
+        elif first_source and first_source.get("table"):
+            silver_relation = first_source["table"]
+            rules_check = self._fetchone(conn, "SELECT table_name FROM table_rules WHERE table_name = ?", (silver_relation,))
+            if rules_check is not None:
+                context["source"] = {
+                    "schema": "bronze",
+                    "relation": silver_relation,
+                    "columns": None,
+                }
+                context["bronze"] = {
+                    "authority_status": "READY",
+                    "ingest_id": None,
+                    "schema": "bronze",
+                    "relation": silver_relation,
+                    "validation_status": "READY",
+                    "row_count": None,
+                }
+
+        if silver_relation:
+            context["silver"] = self._silver_context(conn, {"relation": silver_relation}, None)
 
         context["gold"] = self._gold_context(
             conn, context["messages"], run_id=gold_run["run_id"]
@@ -563,6 +635,105 @@ def _layer_status(report: dict[str, Any] | None, layer: str) -> str | None:
     return status if isinstance(status, str) else None
 
 
+def _safe_check_summaries(report: dict[str, Any] | None) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    checks = _as_dict(_as_dict(report).get("checks"))
+    for layer, layer_checks in checks.items():
+        if not isinstance(layer, str) or not isinstance(layer_checks, list):
+            continue
+        for check in layer_checks:
+            if not isinstance(check, dict):
+                continue
+            status = check.get("status")
+            if status != "FAIL":
+                continue
+            summary = {
+                "layer": layer,
+                "check_id": check.get("check_id"),
+                "name": check.get("name"),
+                "status": status,
+                "meaning": check.get("meaning"),
+                "observed": check.get("observed"),
+                "expected": check.get("expected"),
+            }
+            summaries.append(_safe_value({k: v for k, v in summary.items() if v is not None}))
+    return summaries
+
+
+def _quality_context(report: dict[str, Any] | None) -> dict[str, Any]:
+    report_obj = _as_dict(report)
+    return {
+        "layer_status": _safe_value(_as_dict(report_obj.get("layer_status"))),
+        "first_failed_layer": _safe_value(report_obj.get("first_failed_layer")),
+        "trust_decision": _safe_value(
+            report_obj.get("trust_decision")
+            or report_obj.get("trust_status")
+            or report_obj.get("verdict")
+        ),
+        "root_cause": _safe_report_summary(report_obj.get("root_cause")),
+        "business_impact": _safe_report_summary(report_obj.get("business_impact")),
+        "suggested_action": _safe_report_summary(report_obj.get("suggested_action")),
+        "failed_checks": _safe_check_summaries(report),
+    }
+
+
+def _relation_fact(schema: Any, relation: Any) -> dict[str, Any] | None:
+    if isinstance(schema, str) and isinstance(relation, str):
+        return {"schema": schema, "relation": relation}
+    return None
+
+
+def _has_known_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, dict):
+        return any(_has_known_value(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_known_value(item) for item in value)
+    return True
+
+
+def _dataset_context(context: dict[str, Any]) -> dict[str, Any]:
+    run = _as_dict(context.get("run"))
+    source = _as_dict(context.get("source"))
+    bronze = _as_dict(context.get("bronze"))
+    silver = _as_dict(context.get("silver"))
+    gold = _as_dict(context.get("gold"))
+    gold_target = _as_dict(gold.get("target"))
+
+    layer_relations = {
+        "source": _relation_fact(source.get("schema"), source.get("relation")),
+        "bronze": _relation_fact(bronze.get("schema"), bronze.get("relation")),
+        "gold": _relation_fact(gold_target.get("schema"), gold_target.get("relation")),
+    }
+    available_layers = [
+        layer
+        for layer, facts in (
+            ("source", layer_relations["source"]),
+            ("bronze", layer_relations["bronze"] or bronze.get("authority_status")),
+            ("silver", silver.get("validation_status") or _as_dict(silver.get("transformation"))),
+            ("gold", gold.get("status") or layer_relations["gold"]),
+        )
+        if _has_known_value(facts)
+    ]
+    return {
+        "config": run.get("dataset_config"),
+        "source": layer_relations["source"],
+        "available_layers": available_layers,
+        "layer_relations": layer_relations,
+        "row_counts": {
+            "bronze": bronze.get("row_count"),
+            "silver": silver.get("row_count"),
+        },
+        "quality_status": _as_dict(context.get("quality")).get("layer_status"),
+    }
+
+
+def _finalize_context(context: dict[str, Any]) -> dict[str, Any]:
+    context["dataset"] = _dataset_context(context)
+    return context
+
+
 def _empty_gold_context() -> dict[str, Any]:
     return {
         "run_id": None,
@@ -589,6 +760,14 @@ def _empty_context() -> dict[str, Any]:
         },
         "connection": {"id": None, "database_name": None, "status": None},
         "source": {"schema": None, "relation": None, "columns": None},
+        "dataset": {
+            "config": None,
+            "source": None,
+            "available_layers": [],
+            "layer_relations": {"source": None, "bronze": None, "gold": None},
+            "row_counts": {"bronze": None, "silver": None},
+            "quality_status": {},
+        },
         "bronze": {
             "authority_status": None,
             "ingest_id": None,
@@ -612,6 +791,7 @@ def _empty_context() -> dict[str, Any]:
             },
         },
         "gold": _empty_gold_context(),
+        "quality": _quality_context(None),
         "messages": [],
     }
 

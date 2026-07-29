@@ -16,7 +16,7 @@ describe('Aurum Assistant Integration & Component Tests', () => {
       ok: true,
       status: 200,
       json: async () => ({
-        answer: 'Verified Aurum facts:\n- Source relation: "live_e2e_customers".',
+        answer: 'This dataset is currently represented by source.live_e2e_customers.',
         grounded: true,
         status: 'answered',
         evidence: [{ path: 'source.relation', value: 'live_e2e_customers' }],
@@ -48,7 +48,7 @@ describe('Aurum Assistant Integration & Component Tests', () => {
 
   it('2. grounded backend response is rendered properly by renderer', () => {
     const response: AssistantResponse = {
-      answer: 'Verified Aurum facts:\n- Gold status: PROMOTED.',
+      answer: 'Gold status is PROMOTED.',
       grounded: true,
       status: 'answered',
       evidence: [{ path: 'gold.status', value: 'PROMOTED' }],
@@ -56,8 +56,9 @@ describe('Aurum Assistant Integration & Component Tests', () => {
 
     const markup = renderToStaticMarkup(<AurumAssistantResponseRenderer response={response} />);
 
-    expect(markup).toContain('Grounded');
-    expect(markup).toContain('Verified Aurum facts');
+    expect(markup).toContain('Gold status is PROMOTED');
+    expect(markup).toContain('Grounding');
+    expect(markup).not.toContain('Verified Aurum facts');
     expect(markup).toContain('Gold status');
     expect(markup).toContain('PROMOTED');
   });
@@ -115,7 +116,7 @@ describe('Aurum Assistant Integration & Component Tests', () => {
 
   it('6. unrelated latest run context safety check logic intercepts mismatched relations', () => {
     const backendResponse: AssistantResponse = {
-      answer: 'Verified Aurum facts:\n- Source relation: "live_e2e_customers".',
+      answer: 'This dataset is currently represented by source.live_e2e_customers.',
       grounded: true,
       status: 'answered',
       evidence: [{ path: 'source.relation', value: 'live_e2e_customers' }],

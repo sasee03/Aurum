@@ -320,11 +320,16 @@
 }
 
 .aa-state-card strong,
-.aa-evidence-card strong {
+.aa-evidence-card summary {
   display: block;
   color: #f1f5f9;
   font-size: 0.86rem;
   margin-bottom: 5px;
+}
+
+.aa-evidence-card summary {
+  cursor: pointer;
+  user-select: none;
 }
 
 .aa-state-card p {

@@ -15,11 +15,21 @@ def _seed_state(monkeypatch: pytest.MonkeyPatch, db_path: Path) -> None:
     monkeypatch.setenv("AURUM_APP_STATE_DB", str(db_path))
     report = {
         "layer_status": {"bronze": "PASS", "silver": "FAIL"},
-        "root_cause": {"summary": "Valid Bronze rows were removed."},
+        "root_cause": {
+            "summary": "Valid Bronze rows were removed.",
+            "evidence_query": "SELECT root_cause_probe FROM bronze_orders",
+        },
         "checks": {
             "bronze": [{"check_id": "B1", "observed": 10}],
             "silver": [
-                {"check_id": "S1", "extra": {"bronze": 10, "silver": 8}},
+                {
+                    "check_id": "S1",
+                    "status": "FAIL",
+                    "name": "Bronze to Silver row retention",
+                    "meaning": "Silver retained fewer rows than Bronze.",
+                    "extra": {"bronze": 10, "silver": 8},
+                    "evidence_query": "SELECT * FROM bronze_orders",
+                },
                 {"check_id": "S8", "extra": {"missing": 2}},
                 {
                     "check_id": "S10",
@@ -119,6 +129,20 @@ def test_known_context_uses_persisted_pipeline_state(monkeypatch, tmp_path):
     assert context["silver"]["row_count"] == 8
     assert context["silver"]["removed_count"] == 2
     assert context["silver"]["transformation"]["rules"] == [{"kind": "filter", "column": "amount"}]
+    assert context["dataset"]["source"] == {"schema": "public", "relation": "orders"}
+    assert context["dataset"]["available_layers"] == ["source", "bronze", "silver"]
+    assert context["dataset"]["row_counts"] == {"bronze": 10, "silver": 8}
+    assert context["quality"]["layer_status"] == {"bronze": "PASS", "silver": "FAIL"}
+    assert context["quality"]["root_cause"] == {"summary": "Valid Bronze rows were removed."}
+    assert context["quality"]["failed_checks"] == [
+        {
+            "layer": "silver",
+            "check_id": "S1",
+            "name": "Bronze to Silver row retention",
+            "status": "FAIL",
+            "meaning": "Silver retained fewer rows than Bronze.",
+        }
+    ]
     assert context["gold"]["status"] is None
     assert {message["code"] for message in context["messages"]} == {"run_error"}
 
@@ -144,6 +168,8 @@ def test_context_redacts_secrets_and_never_returns_sql_or_credentials(monkeypatc
     assert "analyst" not in payload
     assert "db.example" not in payload
     assert "CREATE TABLE never_returned" not in payload
+    assert "SELECT * FROM bronze_orders" not in payload
+    assert "SELECT root_cause_probe FROM bronze_orders" not in payload
 
 
 def test_context_reader_never_mutates_app_state(monkeypatch, tmp_path):
@@ -701,5 +727,3 @@ def test_validation_runs_backed_exact_run_still_works(monkeypatch, tmp_path):
     assert context["run"]["id"] == "run-1"
     assert context["source"]["relation"] == "orders"
     assert context["bronze"]["authority_status"] == "READY"
-
-
