@@ -3,7 +3,6 @@ import { Loader2, LockKeyhole, Send, ShieldCheck, X } from "lucide-react";
 import type { AssistantLayer, AssistantPage, AssistantResponse } from "../../lib/aurumAssistantApi";
 import { postAssistantChat } from "../../lib/aurumAssistantApi";
 import { AurumAssistantMessage } from "./AurumAssistantMessage";
-import { SuggestedPrompts } from "./SuggestedPrompts";
 import "./aurum-assistant.css";
 
 export interface AurumAssistantButtonProps {
@@ -55,21 +54,8 @@ export function AurumAssistantDrawer({
           run_id: runId || undefined,
         });
 
-        // Context Safety: If page has a selectedTable but no explicit runId,
-        // ensure returned context actually matches selectedTable context.
-        if (selectedTable && response.status === "answered" && !runId) {
-          const rel = response.context?.source?.relation?.toLowerCase();
-          const target = selectedTable.toLowerCase();
-          if (rel && rel !== target) {
-            response = {
-              answer: "I do not have enough information in the current Aurum context to answer that.",
-              grounded: false,
-              status: "insufficient_information",
-              context: response.context,
-              evidence: [],
-            };
-          }
-        }
+        // Context Safety removed: Grounded checks are no longer performed.
+
 
         setMessages((prev) => [
           ...prev,
@@ -101,10 +87,6 @@ export function AurumAssistantDrawer({
           <div>
             <h2>Aurum Assistant</h2>
             <div className="aa-state-pills" aria-label="Assistant state">
-              <span className="aa-state-pill aa-state-pill--grounded">
-                <ShieldCheck size={12} />
-                Grounded
-              </span>
               <span className="aa-state-pill">
                 <LockKeyhole size={12} />
                 Read-only
@@ -141,8 +123,6 @@ export function AurumAssistantDrawer({
             </div>
           )}
         </div>
-
-        <SuggestedPrompts page={page} onSelect={sendQuestion} />
 
         <form
           className="aa-input-row"

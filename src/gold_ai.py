@@ -12,7 +12,7 @@ from typing_extensions import Annotated
 from src.gold_catalog import GoldCatalogColumn
 
 
-DEFAULT_GOLD_AI_MODEL = "gemini-3.6-flash"
+DEFAULT_GOLD_AI_MODEL = "gemini-3.5-flash"
 
 
 class GoldAIUnavailable(RuntimeError):

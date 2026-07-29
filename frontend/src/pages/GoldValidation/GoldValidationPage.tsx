@@ -466,7 +466,7 @@ export function GoldValidationPage() {
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
       <ProjectSubNav runId={runIdParam} />
-      <PageAssistant page="gold" layer="gold" runId={runIdParam} selectedTable={selectedSilverTable || targetTableName || tableParam || undefined} />
+      <PageAssistant page="gold" layer="gold" runId={review?.run_id || generatedGold?.run_id || runIdParam} selectedTable={selectedSilverTable || targetTableName || tableParam || undefined} />
 
       <div className="px-6 py-6 border-b border-[#252637]">
         <div className="flex flex-wrap items-center gap-3">
@@ -577,23 +577,6 @@ export function GoldValidationPage() {
                 >
                   Generate and Review
                 </Button>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-[#252637] bg-[#0d0e14] p-5">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-[#f1f5f9]">
-                  <ClipboardCheck size={16} className="text-[#6366f1]" />
-                  Lifecycle
-                </h3>
-                <Badge variant={promotion ? 'pass' : review ? 'primary' : 'secondary'}>
-                  {workflowStatus}
-                </Badge>
-              </div>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-                {flowSteps.map((step) => (
-                  <FlowStep key={step.label} {...step} />
-                ))}
               </div>
             </div>
 
@@ -776,66 +759,6 @@ export function GoldValidationPage() {
 
           <aside className="space-y-5">
             <div className="rounded-xl border border-[#252637] bg-[#0d0e14] p-5">
-              <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#f1f5f9]">
-                <LockKeyhole size={16} className="text-[#22c55e]" />
-                Why should I trust this?
-              </h3>
-              <div className="space-y-2 text-xs leading-relaxed text-[#94a3b8]">
-                <div className="rounded-lg border border-[#252637] bg-[#0b0c12] p-3">
-                  Gemini interprets the requirement when the backend returns an interpretation.
-                </div>
-                <div className="rounded-lg border border-[#252637] bg-[#0b0c12] p-3">
-                  Aurum validates a structured proposal before review state is shown.
-                </div>
-                <div className="rounded-lg border border-[#252637] bg-[#0b0c12] p-3">
-                  Execution uses the controlled SQL returned in the review.
-                </div>
-                <div className="rounded-lg border border-[#252637] bg-[#0b0c12] p-3">
-                  Approval happens before execution, and promotion is a separate controlled stage.
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-[#252637] bg-[#0d0e14] p-5">
-              <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#f1f5f9]">
-                <Database size={16} className="text-[#6366f1]" />
-                Gold Result
-              </h3>
-              <div className="space-y-1 text-xs text-[#94a3b8]">
-                <DetailRow label="Source" value={plannedSource} mono />
-                <DetailRow
-                  label="Target"
-                  value={
-                    actualTarget
-                      ? `${String(actualTarget.schema)}.${String(actualTarget.table)}`
-                      : plannedTarget
-                  }
-                  mono
-                />
-                <DetailRow
-                  label="Discovery"
-                  value={
-                    promotion
-                      ? goldTables.includes(String(promotion.target.table))
-                        ? 'Discovered'
-                        : 'Not verified'
-                      : 'Not promoted'
-                  }
-                />
-                <DetailRow
-                  label="Rows"
-                  value={goldMetadata ? goldMetadata.row_count.toLocaleString() : undefined}
-                  mono
-                />
-                <DetailRow
-                  label="Columns"
-                  value={goldMetadata ? goldMetadata.column_count.toLocaleString() : undefined}
-                  mono
-                />
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-[#252637] bg-[#0d0e14] p-5">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <h3 className="text-sm font-semibold text-[#f1f5f9]">Live Preview</h3>
                 <Button
@@ -897,6 +820,45 @@ export function GoldValidationPage() {
                     : 'Promote the candidate to load live Gold rows.'}
                 </div>
               )}
+            </div>
+
+            <div className="rounded-xl border border-[#252637] bg-[#0d0e14] p-5">
+              <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#f1f5f9]">
+                <Database size={16} className="text-[#6366f1]" />
+                Gold Result
+              </h3>
+              <div className="space-y-1 text-xs text-[#94a3b8]">
+                <DetailRow label="Source" value={plannedSource} mono />
+                <DetailRow
+                  label="Target"
+                  value={
+                    actualTarget
+                      ? `${String(actualTarget.schema)}.${String(actualTarget.table)}`
+                      : plannedTarget
+                  }
+                  mono
+                />
+                <DetailRow
+                  label="Discovery"
+                  value={
+                    promotion
+                      ? goldTables.includes(String(promotion.target.table))
+                        ? 'Discovered'
+                        : 'Not verified'
+                      : 'Not promoted'
+                  }
+                />
+                <DetailRow
+                  label="Rows"
+                  value={goldMetadata ? goldMetadata.row_count.toLocaleString() : undefined}
+                  mono
+                />
+                <DetailRow
+                  label="Columns"
+                  value={goldMetadata ? goldMetadata.column_count.toLocaleString() : undefined}
+                  mono
+                />
+              </div>
             </div>
           </aside>
         </div>
