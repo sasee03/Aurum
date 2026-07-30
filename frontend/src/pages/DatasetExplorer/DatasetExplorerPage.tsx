@@ -23,6 +23,7 @@ import {
   previewPostgresTable,
   type PostgresTableEntry,
 } from '@/lib/aurumApi';
+import { classifyTable, formatFriendlyName } from './datasetExplorerUtils';
 
 interface DbTable {
   id: string;
@@ -159,13 +160,16 @@ function TableRowCard({
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-mono text-[#06b6d4]">{table.schema}.</span>
           <p className={cn('text-sm font-semibold truncate', selected ? 'text-[#3b82f6]' : 'text-[#f8fafc]')}>
-            {table.name}
+            {formatFriendlyName(table.name)}
           </p>
         </div>
         <p className="text-[11px] text-[#64748b] mt-0.5">
-          {table.owner} · {table.lastUpdated}
+          <span className="font-mono text-[#06b6d4]">{table.schema}.{table.name}</span>
+          {' · '}
+          {table.owner !== 'postgresql' ? table.owner : ''}
+          {table.owner !== 'postgresql' ? ' · ' : ''}
+          {table.lastUpdated}
         </p>
       </div>
 
@@ -219,6 +223,7 @@ export function DatasetExplorerPage() {
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<TablePreview | null>(null);
   const [previewingTableId, setPreviewingTableId] = useState<string | null>(null);
+  const [showInternal, setShowInternal] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -325,10 +330,15 @@ export function DatasetExplorerPage() {
     return allTables.filter(
       (t) =>
         t.name.toLowerCase().includes(q) ||
+        formatFriendlyName(t.name).toLowerCase().includes(q) ||
         t.owner.toLowerCase().includes(q) ||
         t.schema.toLowerCase().includes(q)
     );
   }, [search, allTables]);
+
+  const sourceTables = useMemo(() => filteredTables.filter((t) => classifyTable(t.schema, t.name, t.owner) === 'source'), [filteredTables]);
+  const pipelineTables = useMemo(() => filteredTables.filter((t) => classifyTable(t.schema, t.name, t.owner) === 'pipeline'), [filteredTables]);
+  const internalTables = useMemo(() => filteredTables.filter((t) => classifyTable(t.schema, t.name, t.owner) === 'internal'), [filteredTables]);
 
   function persistSingleSelection(nextSelection: Set<string>) {
     const nextParams = new URLSearchParams(searchParams);
@@ -521,16 +531,67 @@ export function DatasetExplorerPage() {
                 </div>
               </div>
             ) : hasResults ? (
-              filteredTables.map((table) => (
-                <TableRowCard
-                  key={table.id}
-                  table={table}
-                  selected={selectedIds.has(table.id)}
-                  previewing={previewingTableId === table.id}
-                  onToggle={() => toggleTable(table.id)}
-                  onPreview={() => handlePreview(table)}
-                />
-              ))
+              <div className="pb-10">
+                {sourceTables.length > 0 && (
+                  <div className="mb-6">
+                    <div className="bg-[#111827] px-5 py-2 border-b border-t border-[#1e293b] sticky top-0 z-10 shadow-sm">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-[#94a3b8]">Source Data</h3>
+                    </div>
+                    {sourceTables.map((table) => (
+                      <TableRowCard
+                        key={table.id}
+                        table={table}
+                        selected={selectedIds.has(table.id)}
+                        previewing={previewingTableId === table.id}
+                        onToggle={() => toggleTable(table.id)}
+                        onPreview={() => handlePreview(table)}
+                      />
+                    ))}
+                  </div>
+                )}
+                
+                {pipelineTables.length > 0 && (
+                  <div className="mb-6">
+                    <div className="bg-[#111827] px-5 py-2 border-b border-t border-[#1e293b] sticky top-0 z-10 shadow-sm">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-[#94a3b8]">Pipeline Outputs</h3>
+                    </div>
+                    {pipelineTables.map((table) => (
+                      <TableRowCard
+                        key={table.id}
+                        table={table}
+                        selected={selectedIds.has(table.id)}
+                        previewing={previewingTableId === table.id}
+                        onToggle={() => toggleTable(table.id)}
+                        onPreview={() => handlePreview(table)}
+                      />
+                    ))}
+                  </div>
+                )}
+                
+                {internalTables.length > 0 && (
+                  <div>
+                    <div className="bg-[#111827] px-5 py-2 border-b border-t border-[#1e293b] sticky top-0 z-10 shadow-sm flex items-center justify-between">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-[#94a3b8]">Internal / Advanced</h3>
+                      <button
+                        onClick={() => setShowInternal(!showInternal)}
+                        className="text-xs text-[#3b82f6] hover:text-[#60a5fa] focus:outline-none transition-colors font-medium cursor-pointer"
+                      >
+                        {showInternal ? 'Hide internal relations' : 'Show internal relations'}
+                      </button>
+                    </div>
+                    {showInternal && internalTables.map((table) => (
+                      <TableRowCard
+                        key={table.id}
+                        table={table}
+                        selected={selectedIds.has(table.id)}
+                        previewing={previewingTableId === table.id}
+                        onToggle={() => toggleTable(table.id)}
+                        onPreview={() => handlePreview(table)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
             ) : !hasAnyTables ? (
               <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
                 <div className="max-w-xl rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm">
