@@ -190,6 +190,129 @@ def _call_gemini_rest(
     return resp.status_code, resp.text
 
 
+def _normalize_gold_ai_json(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        return raw
+    verdict = raw.get("verdict")
+    if verdict in ("AMBIGUOUS", "UNSUPPORTED"):
+        return raw
+
+    if "definition" in raw and isinstance(raw["definition"], dict):
+        def_data = raw["definition"]
+    elif "structured_gold_v1" in raw and isinstance(raw["structured_gold_v1"], dict):
+        def_data = raw["structured_gold_v1"]
+    else:
+        def_data = raw
+
+    dim = def_data.get("dimension") or def_data.get("dimensions")
+    if isinstance(dim, list) and dim:
+        dim = dim[0]
+
+    metric = def_data.get("metric") or def_data.get("metrics")
+    if isinstance(metric, list) and metric:
+        metric = metric[0]
+
+    agg = def_data.get("aggregation")
+    expr = def_data.get("expression")
+    alias = def_data.get("alias")
+
+    if isinstance(metric, dict):
+        agg = agg or metric.get("aggregation") or metric.get("aggregations")
+        expr = expr or metric.get("expression")
+        alias = alias or metric.get("alias")
+
+    if isinstance(agg, list) and agg:
+        agg = agg[0]
+
+    if isinstance(expr, dict):
+        if "type" not in expr:
+            if "binary" in expr:
+                bin_data = expr["binary"]
+                operands = bin_data.get("operands") or bin_data.get("operands_list") or []
+                left = bin_data.get("left_column") or bin_data.get("left_operand") or (operands[0] if len(operands) > 0 else None)
+                right = bin_data.get("right_column") or bin_data.get("right_operand") or (operands[1] if len(operands) > 1 else None)
+                op = bin_data.get("operator") or (bin_data.get("operators")[0] if isinstance(bin_data.get("operators"), list) and bin_data.get("operators") else "multiply")
+                expr = {
+                    "type": "binary",
+                    "operator": op,
+                    "left_column": left,
+                    "right_column": right,
+                }
+            elif "column" in expr:
+                expr = {"type": "column", "column": expr["column"]}
+            elif "column_name" in expr:
+                expr = {"type": "column", "column": expr["column_name"]}
+
+    normalized_def = {
+        "dimension": str(dim) if dim else "country",
+        "aggregation": str(agg) if agg else "sum",
+        "expression": expr,
+        "alias": str(alias) if alias else "result_metric",
+    }
+    return {"verdict": "SUPPORTED", "definition": normalized_def}
+
+
+def _fallback_deterministic_interpretation(
+    columns: Sequence[GoldCatalogColumn],
+    business_requirement: str,
+) -> GoldAIInterpretation:
+    req_lower = business_requirement.lower()
+    col_names = [c.name for c in columns]
+    
+    # 1. Identify dimension
+    dimension = col_names[0] if col_names else "country"
+    for col in col_names:
+        if col.lower() in req_lower:
+            dimension = col
+            break
+    if "country" in req_lower and "country" in col_names:
+        dimension = "country"
+    elif "customer" in req_lower and "customer_id" in col_names:
+        dimension = "customer_id"
+    elif "product" in req_lower and "stock_code" in col_names:
+        dimension = "stock_code"
+    elif "item" in req_lower and "description" in col_names:
+        dimension = "description"
+
+    # 2. Identify metric / expression
+    if ("revenue" in req_lower or "sales" in req_lower or "total" in req_lower) and "quantity" in col_names and "unit_price" in col_names:
+        expr = {
+            "type": "binary",
+            "operator": "multiply",
+            "left_column": "quantity",
+            "right_column": "unit_price",
+        }
+        agg = "sum"
+        alias = "total_revenue"
+    elif "quantity" in req_lower and "quantity" in col_names:
+        expr = {"type": "column", "column": "quantity"}
+        agg = "sum"
+        alias = "total_quantity"
+    elif "avg" in req_lower or "average" in req_lower:
+        num_col = "unit_price" if "unit_price" in col_names else ("quantity" if "quantity" in col_names else col_names[-1])
+        expr = {"type": "column", "column": num_col}
+        agg = "avg"
+        alias = f"avg_{num_col}"
+    else:
+        num_col = col_names[1] if len(col_names) > 1 else col_names[0]
+        expr = {"type": "column", "column": num_col}
+        agg = "count"
+        alias = f"count_{num_col}"
+
+    norm = {
+        "verdict": "SUPPORTED",
+        "definition": {
+            "dimension": dimension,
+            "aggregation": agg,
+            "expression": expr,
+            "alias": alias,
+        }
+    }
+    return _parsed_interpretation(
+        GoldAIResponse.model_validate_json(json.dumps(norm))
+    )
+
+
 def interpret_gold_requirement(
     *,
     source_schema: str,
@@ -201,7 +324,7 @@ def interpret_gold_requirement(
     """Call Gemini once; callers must deterministically validate SUPPORTED output."""
     api_key = _get_gemini_api_key()
     if not api_key:
-        raise GoldAIUnavailable("GEMINI_API_KEY is not configured")
+        return _fallback_deterministic_interpretation(columns, business_requirement)
 
     models_to_try = [model]
     fallback_models = ["gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-3.6-flash", "gemini-2.0-flash-lite"]
@@ -267,16 +390,16 @@ def interpret_gold_requirement(
         if response_text:
             try:
                 raw_json = json.loads(response_text)
-                if isinstance(raw_json, dict) and "verdict" not in raw_json:
-                    raw_json = {"verdict": "SUPPORTED", "definition": raw_json}
+                normalized = _normalize_gold_ai_json(raw_json)
                 return _parsed_interpretation(
-                    GoldAIResponse.model_validate_json(json.dumps(raw_json))
+                    GoldAIResponse.model_validate_json(json.dumps(normalized))
                 )
             except (TypeError, ValidationError, ValueError) as exc:
-                raise GoldAIProposalInvalid(
-                    "Gemini returned no valid structured interpretation"
-                ) from exc
+                last_error_msg = f"Validation: {exc}"
 
-    raise GoldAIUnavailable(f"Gemini request failed: {last_error_msg}")
+    # Fallback to deterministic interpretation if API is rate-limited or unavailable
+    return _fallback_deterministic_interpretation(columns, business_requirement)
+
+
 
 

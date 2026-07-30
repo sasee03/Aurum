@@ -31,10 +31,11 @@ export function ProjectSubNav({ runId, isRunning }: ProjectSubNavProps = {}) {
   ];
 
   let activeLabel = '';
-  if (pathname.includes('/connect')) activeLabel = 'Connect';
-  else if (pathname.includes('/bronze')) activeLabel = 'Bronze';
+  if (pathname.includes('/gold')) activeLabel = 'Gold';
   else if (pathname.includes('/silver')) activeLabel = 'Silver';
-  else if (pathname.includes('/gold')) activeLabel = 'Gold';
+  else if (pathname.includes('/bronze')) activeLabel = 'Bronze';
+  else if (pathname.includes('/select') || pathname.includes('/metadata')) activeLabel = 'Discover';
+  else if (pathname.includes('/connect')) activeLabel = 'Connect';
 
   const isExecuting = isRunning ?? false;
   const back = getFlowBackTarget(pathname, id, activeRunId);

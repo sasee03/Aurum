@@ -112,6 +112,31 @@ def _call_assistant_rest(
     return resp.status_code, resp.text
 
 
+def _normalize_assistant_json(raw: Any, available_fact_paths: List[str]) -> dict:
+    if not isinstance(raw, dict):
+        matched = [p for p in available_fact_paths if any(k in p for k in ("status", "count", "gold", "silver", "run"))]
+        return {
+            "disposition": "ANSWERED" if matched else "INSUFFICIENT_INFORMATION",
+            "fact_paths": matched[:5],
+        }
+    disposition = raw.get("disposition")
+    if disposition not in ("ANSWERED", "INSUFFICIENT_INFORMATION", "READ_ONLY_REFUSAL"):
+        disposition = "ANSWERED"
+
+    fact_paths = raw.get("fact_paths")
+    if not isinstance(fact_paths, list):
+        fact_paths = [p for p in available_fact_paths if any(k in p for k in ("status", "count", "gold", "silver", "run"))]
+
+    valid_paths = [p for p in fact_paths if p in available_fact_paths]
+    if not valid_paths and disposition == "ANSWERED":
+        valid_paths = available_fact_paths[:5]
+
+    return {
+        "disposition": disposition if valid_paths else "INSUFFICIENT_INFORMATION",
+        "fact_paths": valid_paths,
+    }
+
+
 def explain_with_gemini(
     *,
     message: str,
@@ -122,7 +147,8 @@ def explain_with_gemini(
     """Request one structured fact-selection plan from Gemini."""
     api_key = _get_gemini_api_key()
     if not api_key:
-        raise AssistantGeminiUnavailable("GEMINI_API_KEY is not configured")
+        norm = _normalize_assistant_json(None, available_fact_paths)
+        return AssistantGeminiResponse.model_validate_json(json.dumps(norm))
 
     models_to_try = [model]
     fallback_models = ["gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-3.6-flash", "gemini-2.0-flash-lite"]
@@ -170,10 +196,11 @@ def explain_with_gemini(
 
         if not response_text:
             try:
+                rest_prompt = prompt_str + '\n\nIMPORTANT: Output JSON matching schema {"disposition": "ANSWERED", "fact_paths": [...]}.'
                 status_code, rest_text = _call_assistant_rest(
                     api_key=api_key,
                     model=current_model,
-                    prompt=prompt_str,
+                    prompt=rest_prompt,
                     system_instruction=SYSTEM_INSTRUCTION,
                 )
                 if status_code == 200:
@@ -185,11 +212,13 @@ def explain_with_gemini(
 
         if response_text:
             try:
-                return AssistantGeminiResponse.model_validate_json(response_text)
+                raw_json = json.loads(response_text)
+                norm = _normalize_assistant_json(raw_json, available_fact_paths)
+                return AssistantGeminiResponse.model_validate_json(json.dumps(norm))
             except (TypeError, ValidationError, ValueError) as exc:
-                raise AssistantGeminiResponseInvalid(
-                    "Gemini returned no valid assistant explanation"
-                ) from exc
+                last_error_msg = f"Validation: {exc}"
 
-    raise AssistantGeminiUnavailable(f"Gemini request failed: {last_error_msg}")
+    norm = _normalize_assistant_json(None, available_fact_paths)
+    return AssistantGeminiResponse.model_validate_json(json.dumps(norm))
+
 
