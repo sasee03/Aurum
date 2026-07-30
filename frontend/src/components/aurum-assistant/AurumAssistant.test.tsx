@@ -1,5 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { AurumAssistantDrawer } from './AurumAssistantDrawer';
+import { AurumAssistantMessage } from './AurumAssistantMessage';
 import { AurumAssistantResponseRenderer } from './AurumAssistantResponseRenderer';
 import { askAurumAssistant, type AssistantResponse, type AssistantChatRequest } from '../../lib/aurumApi';
 
@@ -73,7 +75,9 @@ describe('Aurum Assistant Integration & Component Tests', () => {
     const markup = renderToStaticMarkup(<AurumAssistantResponseRenderer response={response} />);
 
     expect(markup).toContain('Insufficient information');
-    expect(markup).toContain('Aurum Assistant doesn’t have enough pipeline context to answer this right now.');
+    expect(markup).toContain('I do not have enough information in the current Aurum context to answer that.');
+    expect(markup).not.toContain('Assistant temporarily unavailable');
+    expect(markup).not.toContain('Retry');
   });
 
   it('4. legacy "report.json / validation report" fallback is not used in renderer', () => {
@@ -189,5 +193,127 @@ describe('Aurum Assistant Integration & Component Tests', () => {
     const body = JSON.parse(init.body);
     expect(body.run_id).toBeUndefined();
     expect(body).toEqual({ message: 'What table is this?' });
+  });
+
+  it('9. no run_id shows contextual guidance', () => {
+    const markup = renderToStaticMarkup(
+      <AurumAssistantDrawer
+        open
+        onClose={() => {}}
+        page="bronze"
+        layer="bronze"
+      />,
+    );
+
+    expect(markup).toContain('No Bronze run selected');
+    expect(markup).toContain('No Bronze run is selected yet. Complete Bronze ingestion or open an existing run to ask grounded questions.');
+  });
+
+  it('10. no run_id does not show Assistant unavailable or run-specific suggested questions', () => {
+    const markup = renderToStaticMarkup(
+      <AurumAssistantDrawer
+        open
+        onClose={() => {}}
+        page="bronze"
+        layer="bronze"
+      />,
+    );
+
+    expect(markup).not.toContain('Assistant temporarily unavailable');
+    expect(markup).not.toContain('Aurum Assistant is unavailable');
+    expect(markup).not.toContain('What is the status of Bronze ingestion?');
+    expect(markup).not.toContain('Suggested Questions');
+  });
+
+  it('11. genuine 503 renders service-unavailable state with Retry', () => {
+    const markup = renderToStaticMarkup(
+      <AurumAssistantMessage
+        role="assistant"
+        error="Assistant provider unavailable or not configured."
+        canRetry
+        onRetry={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('Assistant temporarily unavailable');
+    expect(markup).toContain('Assistant provider unavailable or not configured.');
+    expect(markup).toContain('Retry');
+    expect(markup).not.toContain('Aurum Assistant is unavailable');
+  });
+
+  it('12. Retry appears only for genuine service failure', () => {
+    const markup = renderToStaticMarkup(
+      <AurumAssistantMessage
+        role="assistant"
+        error="Assistant could not answer with the current context."
+      />,
+    );
+
+    expect(markup).toContain('Assistant could not answer');
+    expect(markup).not.toContain('Retry');
+    expect(markup).not.toContain('Assistant temporarily unavailable');
+  });
+
+  it('13. exact valid run context is displayed with friendly name and technical run ID', () => {
+    const markup = renderToStaticMarkup(
+      <AurumAssistantDrawer
+        open
+        onClose={() => {}}
+        page="bronze"
+        layer="bronze"
+        runId="run_abcd1234"
+        selectedTable="Online Retail UCI"
+      />,
+    );
+
+    expect(markup).toContain('Bronze run selected');
+    expect(markup).toContain('Online Retail UCI');
+    expect(markup).toContain('run_abcd1234');
+    expect(markup).not.toContain('Bronze / Bronze / No Run Context');
+  });
+
+  it('14. no latest-run substitution is offered from the no-run UI state', () => {
+    const markup = renderToStaticMarkup(
+      <AurumAssistantDrawer
+        open
+        onClose={() => {}}
+        page="bronze"
+        layer="bronze"
+      />,
+    );
+
+    expect(markup).toContain('Select a run to ask grounded questions');
+    expect(markup).toContain('disabled=""');
+    expect(markup).not.toContain('run_b720f22b3804');
+  });
+
+  it('15. empty Evidence panel is not rendered', () => {
+    const response: AssistantResponse = {
+      answer: 'Bronze run is selected.',
+      grounded: true,
+      status: 'answered',
+      evidence: [],
+    };
+
+    const markup = renderToStaticMarkup(<AurumAssistantResponseRenderer response={response} />);
+
+    expect(markup).toContain('Bronze run is selected.');
+    expect(markup).not.toContain('Evidence');
+  });
+
+  it('16. Assistant 503 responses retain status for service-failure mapping', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      json: async () => ({ detail: 'ASSISTANT_GEMINI_UNAVAILABLE' }),
+    });
+
+    await expect(askAurumAssistant({
+      message: 'What is the status of Bronze ingestion?',
+      run_id: 'run_abcd1234',
+    })).rejects.toMatchObject({
+      httpStatus: 503,
+      userMessage: 'ASSISTANT_GEMINI_UNAVAILABLE',
+    });
   });
 });

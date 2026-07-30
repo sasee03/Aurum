@@ -44,6 +44,7 @@
   flex-direction: column;
   box-shadow: -10px 0 36px rgba(0, 0, 0, 0.5);
   border-left: 1px solid #1e293b;
+  overflow: hidden;
 }
 
 .aa-drawer-header {
@@ -54,6 +55,11 @@
   padding: 20px 22px;
   border-bottom: 1px solid #1e293b;
   background: #111827;
+}
+
+.aa-drawer-header > div {
+  min-width: 0;
+  flex: 1;
 }
 
 .aa-drawer-header h2 {
@@ -88,6 +94,22 @@
   font-size: 0.8rem;
   color: #06b6d4;
   font-weight: 500;
+}
+
+.aa-context-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.aa-context-banner strong {
+  color: #06b6d4;
+}
+
+.aa-context-banner span {
+  color: #94a3b8;
 }
 
 .aa-helper {
@@ -335,6 +357,9 @@
   border-radius: 8px;
   background: #131a29;
   padding: 12px;
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .aa-state-card strong,

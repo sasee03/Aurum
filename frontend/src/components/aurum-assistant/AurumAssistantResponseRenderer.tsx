@@ -45,11 +45,11 @@ export function AurumAssistantResponseRenderer({ response }: Props) {
       {isInsufficient && (
         <div className="aa-state-card">
           <strong>Insufficient information</strong>
-          <p>Aurum Assistant doesn’t have enough pipeline context to answer this right now. Try selecting a run first.</p>
+          <p>{answer || "Aurum Assistant doesn't have enough pipeline context to answer this right now."}</p>
         </div>
       )}
 
-      {!isReadOnlyRefusal && <p className="aa-answer">{answer}</p>}
+      {!isReadOnlyRefusal && !isInsufficient && <p className="aa-answer">{answer}</p>}
       {evidence.length > 0 && (
         <details className="aa-evidence-card">
           <summary>Evidence</summary>
