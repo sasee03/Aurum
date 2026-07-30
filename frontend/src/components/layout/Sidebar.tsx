@@ -43,22 +43,22 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        'relative flex flex-col border-r border-[#252637] bg-[#0d0e14] transition-all duration-300 ease-in-out',
+        'relative flex flex-col border-r border-[#1e293b] bg-[#0b0f19] transition-all duration-300 ease-in-out select-none',
         collapsed ? 'w-14' : 'w-52'
       )}
       aria-label="Main navigation"
     >
       <div
         className={cn(
-          'flex h-14 items-center border-b border-[#252637] px-3 gap-2.5 overflow-hidden',
+          'flex h-14 items-center border-b border-[#1e293b] px-3.5 gap-2.5 overflow-hidden',
           collapsed && 'justify-center px-0'
         )}
       >
-        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-[#6366f1]">
+        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-[#2563eb] to-[#06b6d4] shadow-[0_0_12px_rgba(37,99,235,0.4)]">
           <Zap size={16} className="text-white" />
         </div>
         {!collapsed && (
-          <span className="text-sm font-bold tracking-wider text-[#f1f5f9] whitespace-nowrap">
+          <span className="text-sm font-bold tracking-wider text-[#f8fafc] whitespace-nowrap">
             AURUM
           </span>
         )}
@@ -72,11 +72,11 @@ export function Sidebar() {
             end={to === '/'}
             className={({ isActive }) =>
               cn(
-                'group flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6366f1]',
+                'group flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3b82f6]',
                 isActive
-                  ? 'bg-[#6366f1]/10 text-[#6366f1] shadow-[inset_2px_0_0_#6366f1]'
-                  : 'text-[#6b7280] hover:bg-[#1a1b28] hover:text-[#94a3b8]',
-                collapsed && 'justify-center px-0 w-10 mx-auto',
+                  ? 'bg-[#2563eb]/15 text-[#3b82f6] font-semibold border-l-2 border-[#3b82f6]'
+                  : 'text-[#94a3b8] hover:bg-[#131a29] hover:text-[#f8fafc]',
+                collapsed && 'justify-center px-0 w-10 mx-auto border-l-0',
                 planned && !isActive && 'opacity-70',
               )
             }
@@ -88,7 +88,7 @@ export function Sidebar() {
               <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
                 <span className="truncate">{label}</span>
                 {planned && (
-                  <span className="shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#6b7280] bg-[#1a1b28] border border-[#252637]">
+                  <span className="shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#64748b] bg-[#131a29] border border-[#273549]">
                     Soon
                   </span>
                 )}
@@ -99,22 +99,22 @@ export function Sidebar() {
       </nav>
 
       {!collapsed && (
-        <div className="p-2 border-t border-[#252637]">
-          <div className="flex items-center gap-2 px-2.5 py-2 rounded-lg">
+        <div className="p-2 border-t border-[#1e293b]">
+          <div className="flex items-center gap-2 px-2.5 py-2 rounded-lg bg-[#111827]/60 border border-[#1e293b]">
             <Activity
               size={14}
               className={cn(
-                statusHealthy ? 'text-[#22c55e] animate-pulse' : 'text-[#f59e0b]',
+                statusHealthy ? 'text-[#10b981] animate-pulse' : 'text-[#f59e0b]',
               )}
             />
-            <span className="text-xs text-[#6b7280]">{statusLabel}</span>
+            <span className="text-xs text-[#94a3b8] font-medium">{statusLabel}</span>
           </div>
         </div>
       )}
 
       <button
         onClick={() => setCollapsed((c) => !c)}
-        className="absolute -right-3 top-16 z-10 flex h-6 w-6 items-center justify-center rounded-full border border-[#252637] bg-[#13141e] text-[#6b7280] hover:text-[#f1f5f9] hover:bg-[#1a1b28] transition-all focus:outline-none focus:ring-2 focus:ring-[#6366f1]"
+        className="absolute -right-3 top-16 z-10 flex h-6 w-6 items-center justify-center rounded-full border border-[#273549] bg-[#111827] text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[#1f293d] transition-all focus:outline-none focus:ring-2 focus:ring-[#3b82f6] cursor-pointer shadow-md"
         aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
       >
         <ChevronRight

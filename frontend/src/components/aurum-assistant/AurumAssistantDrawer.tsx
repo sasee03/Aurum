@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { Loader2, LockKeyhole, Send, ShieldCheck, X } from "lucide-react";
+import { Loader2, LockKeyhole, Send, ShieldCheck, Sparkles, X } from "lucide-react";
 import type { AssistantLayer, AssistantPage, AssistantResponse } from "../../lib/aurumAssistantApi";
 import { postAssistantChat } from "../../lib/aurumAssistantApi";
 import { AurumAssistantMessage } from "./AurumAssistantMessage";
@@ -22,10 +22,39 @@ interface ChatEntry {
 }
 
 function contextLabel(page: AssistantPage, layer?: AssistantLayer, runId?: string) {
-  const pageLabel = page.replace("_", " ");
+  const pageLabel = page.replace(/_/g, " ");
   const layerLabel = layer ? ` / ${layer.charAt(0).toUpperCase()}${layer.slice(1)}` : "";
-  const runLabel = runId ? ` / ${runId}` : " / Latest Run";
+  const runLabel = runId ? ` / Run: ${runId}` : " / No Run Context";
   return `Context: ${pageLabel}${layerLabel}${runLabel}`;
+}
+
+function getSuggestedPrompts(layer?: AssistantLayer, page?: AssistantPage): string[] {
+  if (layer === 'silver' || page === 'silver') {
+    return [
+      "What changed in this Silver run?",
+      "What rules were applied?",
+      "How many rows were retained?",
+    ];
+  }
+  if (layer === 'gold' || page === 'gold') {
+    return [
+      "What KPI did Aurum create?",
+      "How was this Gold result calculated?",
+      "What does this Gold result show?",
+    ];
+  }
+  if (layer === 'bronze' || page === 'bronze') {
+    return [
+      "What is the status of Bronze ingestion?",
+      "What source relation was ingested?",
+      "Are source rows matched 1-to-1?",
+    ];
+  }
+  return [
+    "What PostgreSQL tables were discovered?",
+    "What is the status of this dataset pipeline?",
+    "How does the Medallion transformation work?",
+  ];
 }
 
 export function AurumAssistantDrawer({
@@ -34,12 +63,12 @@ export function AurumAssistantDrawer({
   page,
   runId,
   layer,
-  selectedCheckId,
-  selectedTable,
 }: AurumAssistantButtonProps & { open: boolean; onClose: () => void }) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState<ChatEntry[]>([]);
+
+  const suggestedPrompts = getSuggestedPrompts(layer, page);
 
   const sendQuestion = useCallback(
     async (question: string) => {
@@ -49,12 +78,10 @@ export function AurumAssistantDrawer({
       setInput("");
       setLoading(true);
       try {
-        let response = await postAssistantChat({
+        const response = await postAssistantChat({
           message: question,
           run_id: runId || undefined,
         });
-
-
 
         setMessages((prev) => [
           ...prev,
@@ -74,7 +101,7 @@ export function AurumAssistantDrawer({
         setLoading(false);
       }
     },
-    [loading, runId, selectedTable],
+    [loading, runId],
   );
 
   if (!open) return null;
@@ -101,10 +128,28 @@ export function AurumAssistantDrawer({
 
         <div className="aa-chat-area">
           {messages.length === 0 && (
-            <p className="aa-empty">
-              Aurum Assistant explains current pipeline facts returned by the backend. It cannot approve,
-              execute, promote, or modify pipeline state from chat.
-            </p>
+            <div>
+              <p className="aa-empty">
+                Aurum Assistant explains current pipeline facts returned by the backend. It cannot approve,
+                execute, promote, or modify pipeline state from chat.
+              </p>
+              <div className="aa-suggested-prompts">
+                <span className="aa-suggested-title flex items-center gap-1.5">
+                  <Sparkles size={12} className="text-[#06b6d4]" />
+                  Suggested Questions
+                </span>
+                {suggestedPrompts.map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    className="aa-suggested-chip"
+                    onClick={() => sendQuestion(prompt)}
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
           {messages.map((m) => (
             <AurumAssistantMessage

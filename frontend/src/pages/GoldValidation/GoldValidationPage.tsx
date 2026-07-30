@@ -1,17 +1,12 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowRight,
   BrainCircuit,
   CheckCircle2,
-  Circle,
-  ClipboardCheck,
-  Code2,
   Database,
   FileCheck2,
-  Layers,
-  LockKeyhole,
   RefreshCw,
   Sparkles,
   Target,
@@ -58,7 +53,7 @@ function plannedPurpose(review: ReviewGoldResponse | null): string {
 }
 
 function displayValue(value: unknown): string {
-  if (value === null || value === undefined || value === '') return 'Not returned';
+  if (value === null || value === undefined || value === '') return '—';
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   return JSON.stringify(value, null, 2);
@@ -79,7 +74,7 @@ function relationLabel(value: unknown, fallback?: string): string {
     if (schema && table) return `${schema}.${table}`;
     if (table) return table;
   }
-  return fallback || 'Not returned';
+  return fallback || '—';
 }
 
 function expressionLabel(value: unknown): string {
@@ -124,12 +119,12 @@ function DetailRow({
   mono?: boolean;
 }) {
   return (
-    <div className="flex items-start justify-between gap-3 border-b border-[#252637] py-2 last:border-b-0">
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-[#6b7280]">
+    <div className="flex items-start justify-between gap-3 border-b border-[#1e293b] py-2.5 last:border-b-0">
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-[#64748b]">
         {label}
       </span>
       <span
-        className={`max-w-[68%] text-right text-xs text-[#e5e7eb] ${
+        className={`max-w-[68%] text-right text-xs text-[#f8fafc] ${
           mono ? 'font-mono whitespace-pre-wrap break-words' : ''
         }`}
       >
@@ -139,43 +134,8 @@ function DetailRow({
   );
 }
 
-function FlowStep({
-  label,
-  detail,
-  complete,
-  active,
-}: {
-  label: string;
-  detail: string;
-  complete: boolean;
-  active?: boolean;
-}) {
-  return (
-    <div
-      className={`rounded-lg border p-3 ${
-        complete
-          ? 'border-[#22c55e]/30 bg-[#22c55e]/10'
-          : active
-            ? 'border-[#6366f1]/35 bg-[#6366f1]/10'
-            : 'border-[#252637] bg-[#0b0c12]'
-      }`}
-    >
-      <div className="flex items-center gap-2">
-        {complete ? (
-          <CheckCircle2 size={15} className="text-[#22c55e]" />
-        ) : (
-          <Circle size={15} className={active ? 'text-[#6366f1]' : 'text-[#4b5563]'} />
-        )}
-        <span className="text-xs font-semibold text-[#f1f5f9]">{label}</span>
-      </div>
-      <p className="mt-1 text-[11px] leading-relaxed text-[#6b7280]">{detail}</p>
-    </div>
-  );
-}
-
 export function GoldValidationPage() {
-  const navigate = useNavigate();
-  const { id } = useParams<{ id: string }>();
+  const { id: _id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const runIdParam = searchParams.get('runId') ?? undefined;
   const tableParam = searchParams.get('table') ?? '';
@@ -415,86 +375,45 @@ export function GoldValidationPage() {
         review.planned_changes.target,
         `${actualTarget?.schema ?? 'gold'}.${review.table_name}`,
       )
-    : targetTableName || 'Not returned';
-  const generatorFamily = generatedFamily(generatedGold, review);
+    : targetTableName || '—';
+  const _generatorFamily = generatedFamily(generatedGold, review);
   const generatorModel = generatedModel(generatedGold, review);
-  const flowSteps = [
-    {
-      label: 'Business requirement',
-      detail: review ? 'Accepted into the backend proposal.' : 'Enter the requirement before generation.',
-      complete: Boolean(review),
-      active: !review,
-    },
-    {
-      label: 'Gemini interpretation',
-      detail: interpretation ? 'Backend returned interpretation fields.' : 'Shown only when backend returns it.',
-      complete: Boolean(interpretation),
-      active: generating,
-    },
-    {
-      label: 'Aurum deterministic plan',
-      detail: review ? 'Structured plan and SQL are loaded for review.' : 'Waiting for reviewed plan.',
-      complete: Boolean(review),
-    },
-    {
-      label: 'Review',
-      detail: review ? review.status : 'No reviewed run yet.',
-      complete: Boolean(review),
-    },
-    {
-      label: 'Approve',
-      detail: approval ? approval.status : 'Requires the reviewed revision.',
-      complete: Boolean(approval),
-    },
-    {
-      label: 'Execute',
-      detail: execution ? execution.status : 'Requires approval.',
-      complete: Boolean(execution),
-    },
-    {
-      label: 'Promote',
-      detail: promotion ? promotion.status : 'Requires executed candidate.',
-      complete: Boolean(promotion),
-    },
-    {
-      label: 'Result',
-      detail: liveVerified ? 'Live Gold discovery and preview loaded.' : 'Live result not verified yet.',
-      complete: liveVerified,
-    },
-  ];
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
       <ProjectSubNav runId={runIdParam} />
       <PageAssistant page="gold" layer="gold" runId={review?.run_id || generatedGold?.run_id || runIdParam} selectedTable={selectedSilverTable || targetTableName || tableParam || undefined} />
 
-      <div className="px-6 py-6 border-b border-[#252637]">
+      {/* Header */}
+      <div className="px-6 py-5 border-b border-[#1e293b] bg-[#0b0f19]">
         <div className="flex flex-wrap items-center gap-3">
-          <h2 className="text-xl font-bold text-[#f1f5f9]">Gold Layer</h2>
+          <h2 className="text-2xl font-bold text-[#f8fafc] tracking-tight">Gold Business Layer</h2>
           {liveVerified ? (
             <DataSourceBadge mode="live" />
           ) : (
-            <Badge variant="secondary">Ready</Badge>
+            <Badge variant="secondary">Curation Engine</Badge>
           )}
           <Badge variant={promotion ? 'pass' : 'secondary'}>{workflowStatus}</Badge>
         </div>
-        <p className="mt-1 text-sm text-[#6b7280]">
-          Turn an approved Silver relation into a reviewed, approved, executed, and promoted Gold result.
+        <p className="mt-1 text-sm text-[#94a3b8]">
+          Turn an approved Silver relation into a reviewed, approved, executed, and promoted Gold business asset.
         </p>
       </div>
 
-      <div className="flex-1 overflow-y-auto bg-[#090a10] p-6 scrollbar-thin">
+      {/* Content Body */}
+      <div className="flex-1 overflow-y-auto bg-[#0b0f19] p-6 scrollbar-thin">
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
           <div className="space-y-5">
-            <div className="rounded-xl border border-[#252637] bg-[#0d0e14] p-5">
+            {/* 1. Business Question / Request */}
+            <div className="rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm">
               <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <h3 className="flex items-center gap-2 text-sm font-semibold text-[#f1f5f9]">
-                    <Layers size={16} className="text-[#6366f1]" />
-                    Gold Request
+                  <h3 className="flex items-center gap-2.5 text-base font-semibold text-[#f8fafc]">
+                    <Target size={18} className="text-[#3b82f6]" />
+                    Business Requirement
                   </h3>
-                  <p className="mt-1 text-xs text-[#6b7280]">
-                    Select the approved Silver input, name the Gold target, and describe the result.
+                  <p className="mt-1 text-xs text-[#94a3b8]">
+                    Select the approved Silver input, name the Gold target, and describe the desired output.
                   </p>
                 </div>
                 <Badge variant={review ? 'pass' : 'secondary'} dot={Boolean(review)}>
@@ -503,7 +422,7 @@ export function GoldValidationPage() {
               </div>
 
               {sourceError && (
-                <div className="mb-4 rounded border border-[#ef4444]/30 bg-[#450a0a]/30 p-3 text-xs text-[#fca5a5]">
+                <div className="mb-4 rounded-xl border border-[#ef4444]/30 bg-[#ef4444]/10 p-4 text-xs text-[#ef4444]">
                   {sourceError}
                 </div>
               )}
@@ -512,7 +431,7 @@ export function GoldValidationPage() {
                 <label className="block text-xs font-semibold text-[#94a3b8]">
                   Source Silver Relation
                   <select
-                    className="mt-1.5 w-full rounded-lg border border-[#252637] bg-[#0b0c12] p-2.5 font-mono text-[#e5e7eb] focus:border-[#6366f1] focus:outline-none"
+                    className="mt-1.5 w-full rounded-lg border border-[#273549] bg-[#131a29] p-2.5 font-mono text-xs text-[#f8fafc] focus:border-[#3b82f6] focus:outline-none"
                     value={selectedSilverTable}
                     disabled={loadingSources || silverTables.length === 0}
                     onChange={(event) => {
@@ -535,9 +454,9 @@ export function GoldValidationPage() {
                 </label>
 
                 <label className="block text-xs font-semibold text-[#94a3b8]">
-                  Target Gold Relation
+                  Target Gold Relation Name
                   <input
-                    className="mt-1.5 w-full rounded-lg border border-[#252637] bg-[#0b0c12] p-2.5 font-mono text-[#e5e7eb] focus:border-[#6366f1] focus:outline-none"
+                    className="mt-1.5 w-full rounded-lg border border-[#273549] bg-[#131a29] p-2.5 font-mono text-xs text-[#f8fafc] focus:border-[#3b82f6] focus:outline-none"
                     value={targetTableName}
                     placeholder="curated_output"
                     onChange={(event) => {
@@ -549,9 +468,9 @@ export function GoldValidationPage() {
               </div>
 
               <label className="mt-4 block text-xs font-semibold text-[#94a3b8]">
-                Business Requirement
+                Business Intent &amp; Rules
                 <textarea
-                  className="mt-1.5 min-h-28 w-full resize-y rounded-lg border border-[#252637] bg-[#0b0c12] p-3 text-sm leading-relaxed text-[#e5e7eb] focus:border-[#6366f1] focus:outline-none"
+                  className="mt-1.5 min-h-24 w-full resize-y rounded-lg border border-[#273549] bg-[#131a29] p-3 text-xs leading-relaxed text-[#f8fafc] focus:border-[#3b82f6] focus:outline-none"
                   value={businessRequirement}
                   onChange={(event) => {
                     setBusinessRequirement(event.target.value);
@@ -559,12 +478,13 @@ export function GoldValidationPage() {
                   }}
                 />
               </label>
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                <span className="text-xs text-[#6b7280]">
-                  {businessRequirement.trim().length.toLocaleString()} characters sent to the backend.
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-[#1e293b]">
+                <span className="text-xs text-[#64748b]">
+                  {businessRequirement.trim().length.toLocaleString()} characters sent to backend engine.
                 </span>
                 <Button
                   variant="primary"
+                  size="md"
                   isLoading={generating}
                   rightIcon={<ArrowRight size={15} />}
                   disabled={
@@ -580,28 +500,29 @@ export function GoldValidationPage() {
               </div>
             </div>
 
-            <div className="rounded-xl border border-[#252637] bg-[#0d0e14] p-5">
+            {/* 2. What Aurum Understood */}
+            <div className="rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h3 className="flex items-center gap-2 text-sm font-semibold text-[#f1f5f9]">
-                    <BrainCircuit size={16} className="text-[#a78bfa]" />
+                  <h3 className="flex items-center gap-2.5 text-base font-semibold text-[#f8fafc]">
+                    <BrainCircuit size={18} className="text-[#06b6d4]" />
                     What Aurum Understood
                   </h3>
-                  <p className="mt-1 text-xs text-[#6b7280]">
-                    Gemini interpretation is shown separately from the deterministic execution plan.
+                  <p className="mt-1 text-xs text-[#94a3b8]">
+                    Gemini interpretation vs. Aurum&apos;s deterministic execution plan.
                   </p>
                 </div>
-                <Badge variant={interpretation ? 'primary' : 'secondary'}>
-                  {interpretation ? 'Interpretation returned' : 'Interpretation pending'}
+                <Badge variant={interpretation ? 'accent' : 'secondary'}>
+                  {interpretation ? 'AI Interpretation Returned' : 'Pending Generation'}
                 </Badge>
               </div>
 
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <div className="rounded-lg border border-[#312e81]/45 bg-[#141224] p-4">
+                <div className="rounded-xl border border-[#06b6d4]/30 bg-[#06b6d4]/5 p-4">
                   <div className="mb-3 flex items-center gap-2">
-                    <Sparkles size={15} className="text-[#a78bfa]" />
-                    <h4 className="text-xs font-semibold uppercase tracking-wide text-[#c4b5fd]">
-                      Gemini interpretation
+                    <Sparkles size={15} className="text-[#06b6d4]" />
+                    <h4 className="text-xs font-semibold uppercase tracking-wide text-[#06b6d4]">
+                      AI Interpretation
                     </h4>
                   </div>
                   {interpretation ? (
@@ -613,17 +534,17 @@ export function GoldValidationPage() {
                       <DetailRow label="Verdict" value={generatedGold?.verdict} mono />
                     </div>
                   ) : (
-                    <div className="rounded-lg border border-[#252637] bg-[#0b0c12] p-4 text-xs leading-relaxed text-[#94a3b8]">
-                      No Gemini interpretation fields were returned by the current backend response.
+                    <div className="rounded-lg border border-[#1e293b] bg-[#131a29] p-4 text-xs leading-relaxed text-[#94a3b8]">
+                      No AI interpretation returned yet. Click &quot;Generate and Review&quot; above.
                     </div>
                   )}
                 </div>
 
-                <div className="rounded-lg border border-[#252637] bg-[#0b0c12] p-4">
+                <div className="rounded-xl border border-[#1e293b] bg-[#131a29] p-4">
                   <div className="mb-3 flex items-center gap-2">
-                    <Target size={15} className="text-[#6366f1]" />
-                    <h4 className="text-xs font-semibold uppercase tracking-wide text-[#94a3b8]">
-                      Aurum deterministic execution plan
+                    <Target size={15} className="text-[#3b82f6]" />
+                    <h4 className="text-xs font-semibold uppercase tracking-wide text-[#3b82f6]">
+                      Deterministic Plan
                     </h4>
                   </div>
                   <DetailRow label="Source" value={plannedSource} mono />
@@ -632,58 +553,58 @@ export function GoldValidationPage() {
                   <DetailRow label="Expression" value={expressionLabel(plannedMetric?.expression)} mono />
                   <DetailRow label="Alias" value={plannedMetric?.alias} mono />
                   <DetailRow label="Target" value={plannedTarget} mono />
-                  <DetailRow label="Generator family" value={generatorFamily} mono />
-                  <DetailRow label="Generator model" value={generatorModel} mono />
-                  <DetailRow label="Provenance" value={review?.generator_provenance} mono />
+                  <DetailRow label="Generator Model" value={generatorModel} mono />
                 </div>
               </div>
             </div>
 
+            {/* 3. Review and Approval */}
             {review && (
-              <div className="rounded-xl border border-[#252637] bg-[#0d0e14] p-5">
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h3 className="flex items-center gap-2 text-sm font-semibold text-[#f1f5f9]">
-                      <FileCheck2 size={16} className="text-[#6366f1]" />
-                      Review and Approval
+                    <h3 className="flex items-center gap-2.5 text-base font-semibold text-[#f8fafc]">
+                      <FileCheck2 size={18} className="text-[#3b82f6]" />
+                      Review &amp; Approval Gate
                     </h3>
-                    <p className="mt-1 text-xs text-[#6b7280]">
-                      Review revision and SQL are backend-returned. Approval binds this exact revision.
+                    <p className="mt-1 text-xs text-[#94a3b8]">
+                      Review SQL proposal before authorizing candidate creation.
                     </p>
                   </div>
                   <Badge variant={approval ? 'pass' : 'warning'}>
-                    {approval ? 'Approved' : 'Review loaded'}
+                    {approval ? 'Approved' : 'Review Pending'}
                   </Badge>
                 </div>
 
-                <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-                  <div className="rounded-lg border border-[#252637] bg-[#0b0c12] p-3">
-                    <DetailRow label="Run" value={review.run_id} mono />
-                    <DetailRow label="Review status" value={review.status} mono />
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div className="rounded-lg border border-[#1e293b] bg-[#131a29] p-3.5">
+                    <DetailRow label="Run ID" value={review.run_id} mono />
+                    <DetailRow label="Review Status" value={review.status} mono />
                     <DetailRow label="Executable" value={review.executable ? 'Yes' : 'No'} mono />
                   </div>
-                  <div className="rounded-lg border border-[#252637] bg-[#0b0c12] p-3">
+                  <div className="rounded-lg border border-[#1e293b] bg-[#131a29] p-3.5">
                     <DetailRow label="Revision" value={review.review_revision} mono />
                     <DetailRow
-                      label="Target mode"
-                      value={targetExists ? 'Existing target overwrite requested' : 'Create new target'}
+                      label="Target Mode"
+                      value={targetExists ? 'Overwrite existing table' : 'Create new table'}
                     />
                     <DetailRow label="Purpose" value={plannedPurpose(review)} />
                   </div>
                 </div>
 
-                <div className="h-[360px] overflow-hidden rounded-xl border border-[#252637]">
+                <div className="h-[320px] overflow-hidden rounded-xl border border-[#1e293b]">
                   <SQLViewer title="CONTROLLED GOLD SQL" code={review.sql_text} />
                 </div>
 
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-[#252637] pt-4">
+                <div className="flex flex-wrap items-center justify-between gap-4 border-t border-[#1e293b] pt-4">
                   <p className="max-w-xl text-xs leading-relaxed text-[#94a3b8]">
                     {targetExists
-                      ? 'The target exists; approval authorizes overwrite only for the reviewed run.'
-                      : 'The target was absent when checked; approval authorizes create-only execution.'}
+                      ? 'Target relation exists; approval authorizes overwrite only for this reviewed run.'
+                      : 'Target relation is clear; approval authorizes create execution.'}
                   </p>
                   <Button
                     variant="primary"
+                    size="md"
                     isLoading={approving}
                     disabled={approving || Boolean(approval)}
                     onClick={() => void handleApprove()}
@@ -694,33 +615,35 @@ export function GoldValidationPage() {
               </div>
             )}
 
+            {/* 4. Controlled Build & Publish */}
             {approval && review && (
-              <div className="rounded-xl border border-[#252637] bg-[#0d0e14] p-5">
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h3 className="flex items-center gap-2 text-sm font-semibold text-[#f1f5f9]">
-                      <Code2 size={16} className="text-[#6366f1]" />
-                      Execute and Promote
+                    <h3 className="flex items-center gap-2.5 text-base font-semibold text-[#f8fafc]">
+                      <Database size={18} className="text-[#10b981]" />
+                      Controlled Build &amp; Publish
                     </h3>
-                    <p className="mt-1 text-xs text-[#6b7280]">
-                      Execution creates the candidate. Promotion is the separate controlled final stage.
+                    <p className="mt-1 text-xs text-[#94a3b8]">
+                      Execution creates candidate; promotion publishes live Gold dataset.
                     </p>
                   </div>
-                  <Badge variant={promotion ? 'pass' : execution ? 'primary' : 'secondary'}>
+                  <Badge variant={promotion ? 'pass' : execution ? 'accent' : 'secondary'}>
                     {workflowStatus}
                   </Badge>
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  <div className="rounded-lg border border-[#252637] bg-[#0b0c12] p-4">
-                    <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#94a3b8]">
-                      Candidate execution
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="rounded-xl border border-[#1e293b] bg-[#131a29] p-4 space-y-3">
+                    <h4 className="text-xs font-semibold uppercase tracking-wider text-[#94a3b8]">
+                      1. Candidate Execution
                     </h4>
                     <DetailRow label="Status" value={execution?.status} mono />
-                    <DetailRow label="Claim" value={execution?.execution_claim_id} mono />
+                    <DetailRow label="Claim ID" value={execution?.execution_claim_id} mono />
                     <Button
-                      className="mt-3 w-full"
+                      className="w-full mt-2"
                       variant="secondary"
+                      size="sm"
                       isLoading={executing}
                       disabled={executing || Boolean(execution)}
                       onClick={() => void handleExecute()}
@@ -729,15 +652,16 @@ export function GoldValidationPage() {
                     </Button>
                   </div>
 
-                  <div className="rounded-lg border border-[#252637] bg-[#0b0c12] p-4">
-                    <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#94a3b8]">
-                      Gold promotion
+                  <div className="rounded-xl border border-[#1e293b] bg-[#131a29] p-4 space-y-3">
+                    <h4 className="text-xs font-semibold uppercase tracking-wider text-[#94a3b8]">
+                      2. Gold Promotion
                     </h4>
                     <DetailRow label="Status" value={promotion?.status} mono />
-                    <DetailRow label="Claim" value={promotion?.promotion_claim_id} mono />
+                    <DetailRow label="Claim ID" value={promotion?.promotion_claim_id} mono />
                     <Button
-                      className="mt-3 w-full"
+                      className="w-full mt-2"
                       variant="primary"
+                      size="sm"
                       isLoading={promoting}
                       disabled={!execution || promoting || Boolean(promotion)}
                       onClick={() => void handlePromote()}
@@ -750,57 +674,58 @@ export function GoldValidationPage() {
             )}
 
             {workflowError && (
-              <div className="flex items-start gap-2 rounded-xl border border-[#ef4444]/30 bg-[#450a0a]/30 p-4 text-xs text-[#fca5a5]">
-                <AlertCircle size={15} className="mt-0.5 flex-shrink-0" />
+              <div className="flex items-start gap-2.5 rounded-xl border border-[#ef4444]/30 bg-[#ef4444]/10 p-4 text-xs text-[#ef4444]">
+                <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
                 <span>{workflowError}</span>
               </div>
             )}
           </div>
 
+          {/* Right Column: Live Result Preview & Metadata */}
           <aside className="space-y-5">
-            <div className="rounded-xl border border-[#252637] bg-[#0d0e14] p-5">
+            <div className="rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm">
               <div className="mb-3 flex items-center justify-between gap-3">
-                <h3 className="text-sm font-semibold text-[#f1f5f9]">Live Preview</h3>
-                <Button
-                  variant="ghost"
-                  size="sm"
+                <h3 className="text-base font-semibold text-[#f8fafc]">Live Gold Preview</h3>
+                <button
+                  type="button"
                   disabled={!promotion || loadingLiveData}
                   onClick={() => promotion && void loadLiveGoldData(promotion)}
-                  aria-label="Refresh live Gold preview"
+                  className="p-1 text-[#64748b] hover:text-[#f8fafc] transition-colors disabled:opacity-40 cursor-pointer"
+                  title="Refresh live Gold preview"
                 >
                   <RefreshCw size={14} className={loadingLiveData ? 'animate-spin' : ''} />
-                </Button>
+                </button>
               </div>
 
               {liveDataError && (
-                <div className="mb-3 rounded border border-[#ef4444]/30 bg-[#450a0a]/30 p-3 text-xs text-[#fca5a5]">
+                <div className="mb-3 rounded-lg border border-[#ef4444]/30 bg-[#ef4444]/10 p-3 text-xs text-[#ef4444]">
                   {liveDataError}
                 </div>
               )}
 
               {goldPreview ? (
                 <div className="space-y-3">
-                  <div className="text-xs text-[#94a3b8]">
-                    {goldPreview.column_count} columns · {goldPreview.row_count.toLocaleString()} rows
+                  <div className="text-xs text-[#94a3b8] font-mono">
+                    {goldPreview.column_count} cols · {goldPreview.row_count.toLocaleString()} rows
                   </div>
-                  <div className="max-h-[360px] overflow-auto rounded-lg border border-[#252637] bg-[#0b0c12]">
-                    <table className="w-full text-left text-xs text-[#e5e7eb]">
-                      <thead className="sticky top-0 border-b border-[#252637] bg-[#13141e] text-[#94a3b8]">
+                  <div className="max-h-[320px] overflow-auto rounded-lg border border-[#1e293b] bg-[#0b0f19] scrollbar-thin">
+                    <table className="w-full text-left text-xs whitespace-nowrap">
+                      <thead className="sticky top-0 border-b border-[#1e293b] bg-[#131a29] text-[#94a3b8]">
                         <tr>
                           {goldPreview.columns.map((column) => (
-                            <th key={column.name} className="px-2.5 py-2 font-mono font-semibold">
+                            <th key={column.name} className="px-3 py-2 font-mono font-semibold border-r border-[#1e293b] last:border-r-0">
                               {column.name}
                             </th>
                           ))}
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-[#252637]">
+                      <tbody className="divide-y divide-[#1e293b]">
                         {goldPreview.rows.map((row, rowIndex) => (
-                          <tr key={rowIndex}>
+                          <tr key={rowIndex} className="hover:bg-[#131a29] transition-colors">
                             {goldPreview.columns.map((column) => (
-                              <td key={column.name} className="px-2.5 py-2 font-mono text-[#cbd5e1]">
+                              <td key={column.name} className="px-3 py-2 font-mono text-[#f8fafc] text-[12px] border-r border-[#1e293b] last:border-r-0">
                                 {row[column.name] === null || row[column.name] === undefined
-                                  ? '-'
+                                  ? <span className="text-[#64748b] italic">NULL</span>
                                   : String(row[column.name])}
                               </td>
                             ))}
@@ -810,22 +735,22 @@ export function GoldValidationPage() {
                     </table>
                   </div>
                   {goldPreview.rows.length === 0 && (
-                    <p className="text-xs text-[#6b7280]">The promoted relation contains no rows.</p>
+                    <p className="text-xs text-[#94a3b8] italic">The promoted relation contains 0 rows.</p>
                   )}
                 </div>
               ) : (
-                <div className="rounded-lg border border-[#252637] bg-[#13141e] p-6 text-center text-xs text-[#6b7280]">
+                <div className="rounded-xl border border-[#1e293b] bg-[#131a29] p-6 text-center text-xs text-[#94a3b8]">
                   {loadingLiveData
                     ? 'Loading live discovery, metadata, and rows...'
-                    : 'Promote the candidate to load live Gold rows.'}
+                    : 'Promote candidate to view live Gold data.'}
                 </div>
               )}
             </div>
 
-            <div className="rounded-xl border border-[#252637] bg-[#0d0e14] p-5">
-              <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#f1f5f9]">
-                <Database size={16} className="text-[#6366f1]" />
-                Gold Result
+            <div className="rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm">
+              <h3 className="mb-3 flex items-center gap-2 text-base font-semibold text-[#f8fafc]">
+                <Database size={18} className="text-[#3b82f6]" />
+                Gold Dataset Summary
               </h3>
               <div className="space-y-1 text-xs text-[#94a3b8]">
                 <DetailRow label="Source" value={plannedSource} mono />
@@ -864,21 +789,16 @@ export function GoldValidationPage() {
         </div>
       </div>
 
-      <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-4 flex items-center justify-between">
-        <Button
-          variant="ghost"
-          onClick={() =>
-            navigate(
-              `/projects/${encodeURIComponent(id || '')}/silver?table=${encodeURIComponent(selectedSilverTable)}`,
-            )
-          }
-        >
-          Back to Silver
-        </Button>
-        {liveVerified && promotion && (
-          <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1.5">
+      {/* Footer Navigation Bar */}
+      <div className="border-t border-[#1e293b] bg-[#0b0f19] px-6 py-4 flex items-center justify-end shadow-lg">
+        {liveVerified && promotion ? (
+          <span className="text-xs text-[#10b981] font-semibold flex items-center gap-1.5">
             <CheckCircle2 size={16} />
-            Live promotion verified: {sources[0]} → {String(promotion.target.schema)}.{String(promotion.target.table)}
+            Live Gold promotion verified: {sources[0]} → {String(promotion.target.schema)}.{String(promotion.target.table)}
+          </span>
+        ) : (
+          <span className="text-xs text-[#94a3b8]">
+            Gold curation pipeline complete
           </span>
         )}
       </div>

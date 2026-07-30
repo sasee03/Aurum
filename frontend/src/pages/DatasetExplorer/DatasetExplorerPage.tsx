@@ -87,34 +87,34 @@ function SchemaTree({
         <div key={schema.name}>
           <button
             onClick={() => toggleSchema(schema.name)}
-            className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-semibold text-[#6b7280] hover:bg-[#1a1b28] hover:text-[#94a3b8] transition-colors focus:outline-none focus:ring-1 focus:ring-[#6366f1]"
+            className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-semibold text-[#94a3b8] hover:bg-[#131a29] hover:text-[#f8fafc] transition-colors focus:outline-none focus:ring-1 focus:ring-[#3b82f6] cursor-pointer"
             aria-expanded={expandedSchemas.has(schema.name)}
           >
             {expandedSchemas.has(schema.name) ? (
-              <ChevronDown size={12} />
+              <ChevronDown size={12} className="text-[#3b82f6]" />
             ) : (
-              <ChevronRight size={12} />
+              <ChevronRight size={12} className="text-[#64748b]" />
             )}
-            {schema.name}
+            <span className="truncate">{schema.name}</span>
           </button>
           {expandedSchemas.has(schema.name) && (
-            <div className="ml-3 space-y-0.5 border-l border-[#252637] pl-3">
+            <div className="ml-3 space-y-0.5 border-l border-[#1e293b] pl-2.5">
               {schema.tables.length === 0 ? (
-                <p className="px-2 py-1 text-[11px] text-[#4b5563]">No tables</p>
+                <p className="px-2 py-1 text-[11px] text-[#64748b]">No tables</p>
               ) : (
                 schema.tables.map((table) => (
                   <button
                     key={table.id}
                     onClick={() => onToggle(table.id)}
                     className={cn(
-                      'flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors focus:outline-none focus:ring-1 focus:ring-[#6366f1]',
+                      'flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors focus:outline-none focus:ring-1 focus:ring-[#3b82f6] cursor-pointer',
                       selectedIds.has(table.id)
-                        ? 'text-[#6366f1] bg-[#6366f1]/10'
-                        : 'text-[#6b7280] hover:bg-[#1a1b28] hover:text-[#94a3b8]'
+                        ? 'text-[#3b82f6] bg-[#2563eb]/15 font-semibold'
+                        : 'text-[#94a3b8] hover:bg-[#131a29] hover:text-[#f8fafc]'
                     )}
                   >
-                    <ChevronRight size={10} className="opacity-50" />
-                    {table.name}
+                    <ChevronRight size={10} className="opacity-50 shrink-0" />
+                    <span className="truncate">{table.name}</span>
                   </button>
                 ))
               )}
@@ -142,8 +142,8 @@ function TableRowCard({
   return (
     <div
       className={cn(
-        'flex items-center gap-4 border-b border-[#252637] px-4 py-3 transition-all duration-150 cursor-pointer group',
-        selected ? 'bg-[#6366f1]/5' : 'hover:bg-[#1a1b28]'
+        'flex items-center gap-4 border-b border-[#1e293b] px-5 py-3.5 transition-all duration-150 cursor-pointer group select-none',
+        selected ? 'bg-[#2563eb]/10' : 'hover:bg-[#131a29]'
       )}
       onClick={onToggle}
       role="row"
@@ -151,33 +151,36 @@ function TableRowCard({
     >
       <div className="flex-shrink-0">
         {selected ? (
-          <CheckSquare size={16} className="text-[#6366f1]" />
+          <CheckSquare size={18} className="text-[#3b82f6]" />
         ) : (
-          <Square size={16} className="text-[#4b5563] group-hover:text-[#6b7280]" />
+          <Square size={18} className="text-[#64748b] group-hover:text-[#94a3b8]" />
         )}
       </div>
 
       <div className="flex-1 min-w-0">
-        <p className={cn('text-sm font-semibold truncate', selected ? 'text-[#6366f1]' : 'text-[#f1f5f9]')}>
-          {table.name}
-        </p>
-        <p className="text-[11px] text-[#4b5563]">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-mono text-[#06b6d4]">{table.schema}.</span>
+          <p className={cn('text-sm font-semibold truncate', selected ? 'text-[#3b82f6]' : 'text-[#f8fafc]')}>
+            {table.name}
+          </p>
+        </div>
+        <p className="text-[11px] text-[#64748b] mt-0.5">
           {table.owner} · {table.lastUpdated}
         </p>
       </div>
 
       <div className="hidden sm:flex items-center gap-6 text-right flex-shrink-0">
         <div>
-          <p className="text-xs font-semibold text-[#f1f5f9]">{table.rows}</p>
-          <p className="text-[10px] text-[#4b5563]">rows</p>
+          <p className="text-xs font-semibold text-[#f8fafc]">{table.rows}</p>
+          <p className="text-[10px] text-[#64748b]">rows</p>
         </div>
         <div>
-          <p className="text-xs font-semibold text-[#f1f5f9]">{table.columns}</p>
-          <p className="text-[10px] text-[#4b5563]">cols</p>
+          <p className="text-xs font-semibold text-[#f8fafc]">{table.columns > 0 ? table.columns : '—'}</p>
+          <p className="text-[10px] text-[#64748b]">cols</p>
         </div>
         <div>
-          <p className="text-xs font-semibold text-[#f1f5f9]">{table.size}</p>
-          <p className="text-[10px] text-[#4b5563]">size</p>
+          <p className="text-xs font-semibold text-[#f8fafc]">{table.size}</p>
+          <p className="text-[10px] text-[#64748b]">size</p>
         </div>
       </div>
 
@@ -234,9 +237,9 @@ export function DatasetExplorerPage() {
           schema: table.schema,
           name: table.table,
           owner: table.layer === 'unknown' ? 'postgresql' : table.layer,
-          rows: '???',
+          rows: '—',
           columns: 0,
-          size: '???',
+          size: '—',
           lastUpdated: 'live',
         }));
         const tablesBySchema = new Map<string, DbTable[]>();
@@ -260,9 +263,9 @@ export function DatasetExplorerPage() {
           schema: t.schema,
           name: t.table,
           owner: t.layer ?? 'postgresql',
-          rows: t.row_count?.toString() || '0',
+          rows: t.row_count != null ? t.row_count.toLocaleString() : '—',
           columns: t.column_count || 0,
-          size: '-',
+          size: '—',
           lastUpdated: '—',
         };
         formattedTables.push(dbT);
@@ -433,10 +436,10 @@ export function DatasetExplorerPage() {
 
       <div className="flex flex-1 overflow-hidden">
         <aside
-          className="w-48 flex-shrink-0 border-r border-[#252637] bg-[#0d0e14] overflow-y-auto scrollbar-thin p-3"
+          className="w-52 flex-shrink-0 border-r border-[#1e293b] bg-[#0b0f19] overflow-y-auto scrollbar-thin p-3 select-none"
           aria-label="Database schema tree"
         >
-          <p className="mb-2 px-2 text-[10px] font-bold uppercase tracking-widest text-[#4b5563]">
+          <p className="mb-2.5 px-2 text-[10px] font-bold uppercase tracking-wider text-[#64748b]">
             {connectionId && databaseName
               ? `${databaseName} / schemas`
               : 'LIVE SCHEMAS'}
@@ -444,12 +447,12 @@ export function DatasetExplorerPage() {
           <SchemaTree schemas={allSchemas} selectedIds={selectedIds} onToggle={toggleTable} />
         </aside>
 
-        <div className="flex flex-1 flex-col overflow-hidden">
-          <div className="border-b border-[#252637] px-6 py-4">
-            <h2 className="text-lg font-bold text-[#f1f5f9]">Dataset Explorer</h2>
-            <p className="text-xs text-[#6b7280]">Select a relation for AURUM to inspect in this run.</p>
+        <div className="flex flex-1 flex-col overflow-hidden bg-[#0b0f19]">
+          <div className="border-b border-[#1e293b] bg-[#111827] px-6 py-4">
+            <h2 className="text-xl font-bold text-[#f8fafc] tracking-tight">Dataset Explorer</h2>
+            <p className="text-xs text-[#94a3b8]">Select a relation to inspect and process through the Medallion pipeline.</p>
             {requestedRelationMissing && (
-              <p className="mt-2 text-xs text-[#f59e0b]">
+              <p className="mt-2 text-xs text-[#f59e0b] bg-[#f59e0b]/10 border border-[#f59e0b]/20 p-2 rounded-md">
                 Previously selected relation{' '}
                 <span className="font-mono">
                   {requestedRelation?.schema}.{requestedRelation?.table}
@@ -459,23 +462,23 @@ export function DatasetExplorerPage() {
             )}
           </div>
 
-          <div className="flex items-center gap-3 px-6 py-3 border-b border-[#252637]">
+          <div className="flex items-center gap-3 px-6 py-3 border-b border-[#1e293b] bg-[#111827]/50">
             <SearchBar
               value={search}
               onChange={setSearch}
-              placeholder="Search tables..."
+              placeholder="Search tables by name or schema..."
               className="flex-1"
             />
             <button
               onClick={selectAll}
-              className="text-xs text-[#6366f1] hover:text-[#4f46e5] transition-colors whitespace-nowrap focus:outline-none focus:underline"
+              className="text-xs font-semibold text-[#3b82f6] hover:text-[#60a5fa] transition-colors whitespace-nowrap focus:outline-none cursor-pointer"
               aria-label="Select all tables"
             >
               Select All
             </button>
             <button
               onClick={deselectAll}
-              className="text-xs text-[#6b7280] hover:text-[#94a3b8] transition-colors whitespace-nowrap focus:outline-none focus:underline"
+              className="text-xs font-semibold text-[#64748b] hover:text-[#94a3b8] transition-colors whitespace-nowrap focus:outline-none cursor-pointer"
               aria-label="Deselect all tables"
             >
               Deselect All
@@ -488,28 +491,23 @@ export function DatasetExplorerPage() {
             aria-label="Available tables"
           >
             {loading ? (
-              <div className="flex items-center justify-center h-full text-[#6b7280]">
-                Loading live tables...
+              <div className="flex items-center justify-center h-full text-[#94a3b8]">
+                Discovering schemas and tables...
               </div>
             ) : error ? (
-              <div className="flex flex-col items-center justify-center h-full">
-                <p className="text-sm font-semibold text-red-500 mb-2">{error}</p>
-                <p className="text-xs text-[#6b7280] mb-4">
+              <div className="flex flex-col items-center justify-center h-full p-6 text-center">
+                <p className="text-sm font-semibold text-[#ef4444] mb-2">{error}</p>
+                <p className="text-xs text-[#64748b] mb-4">
                   Attempted:{' '}
-                  <code className="font-mono bg-[#1a1b28] px-1 py-0.5 rounded">
+                  <code className="font-mono bg-[#131a29] px-1.5 py-0.5 rounded text-[#94a3b8]">
                     {connectionId
                       ? 'GET /connectors/postgres/schemas and /tables'
                       : 'GET /metadata/tables'}
                   </code>
                 </p>
-                <p className="text-xs text-[#6b7280] mb-4 text-center">
-                  {connectionId
-                    ? 'Connection passwords are not stored, so an expired session must be tested again.'
-                    : 'Check that the backend and PostgreSQL are running.'}
-                </p>
                 <div className="flex gap-3">
                   <Button variant="secondary" size="sm" onClick={loadData}>
-                    Retry
+                    Retry Discovery
                   </Button>
                   {connectionId && (
                     <Button
@@ -535,17 +533,17 @@ export function DatasetExplorerPage() {
               ))
             ) : !hasAnyTables ? (
               <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
-                <div className="max-w-xl rounded-xl border border-[#252637] bg-[#13141e] p-6">
+                <div className="max-w-xl rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm">
                   <AlertTriangle size={28} className="mx-auto mb-4 text-[#f59e0b]" />
-                  <h3 className="text-base font-semibold text-[#f1f5f9]">
+                  <h3 className="text-base font-semibold text-[#f8fafc]">
                     {connectionId
                       ? 'No tables found in this PostgreSQL connection'
-                      : 'No tables found in the public schema'}
+                      : 'No tables found in public schema'}
                   </h3>
                   <p className="mt-3 text-sm leading-relaxed text-[#94a3b8]">
                     {connectionId
                       ? 'This connection is live, but Aurum could not find visible tables in the schemas it can access.'
-                      : "If you've uploaded a CSV or validated a connected table, that data lives in a temporary session and won't appear here. Check Run History for those results. To explore a live table, connect to your database via Connectors and ensure it has permanent tables in a visible schema."}
+                      : 'To explore a live table, connect to your database via Connectors or select a database with active tables.'}
                   </p>
                   <div className="mt-5 flex flex-wrap justify-center gap-3">
                     <Button
@@ -563,10 +561,10 @@ export function DatasetExplorerPage() {
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center py-16 text-center">
-                <p className="text-sm text-[#6b7280]">No tables match "{search}"</p>
+                <p className="text-sm text-[#64748b]">No tables match "{search}"</p>
                 <button
                   onClick={() => setSearch('')}
-                  className="mt-2 text-xs text-[#6366f1] hover:underline focus:outline-none"
+                  className="mt-2 text-xs font-semibold text-[#3b82f6] hover:underline focus:outline-none cursor-pointer"
                 >
                   Clear search
                 </button>
@@ -575,23 +573,23 @@ export function DatasetExplorerPage() {
           </div>
 
           {selectedIds.size > 0 && (
-            <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-3 flex items-center justify-between gap-4 animate-slide-up">
-              <div className="flex items-center gap-2 flex-wrap min-w-0">
-                <span className="text-sm font-semibold text-[#f1f5f9] whitespace-nowrap">
+            <div className="border-t border-[#1e293b] bg-[#111827] px-6 py-3.5 flex items-center justify-between gap-4 animate-slide-up shadow-lg">
+              <div className="flex items-center gap-2.5 flex-wrap min-w-0">
+                <span className="text-sm font-semibold text-[#f8fafc] whitespace-nowrap">
                   {selectedIds.size} table{selectedIds.size !== 1 ? 's' : ''} selected
                 </span>
-                <span className="text-[#4b5563]">·</span>
+                <span className="text-[#64748b]">·</span>
                 <div className="flex flex-wrap gap-1.5">
                   {selectedTables.slice(0, 4).map((t) => (
                     <span
                       key={t.id}
-                      className="text-xs text-[#6366f1] font-medium"
+                      className="text-xs text-[#3b82f6] font-mono font-medium bg-[#2563eb]/10 px-2 py-0.5 rounded border border-[#3b82f6]/20"
                     >
                       {t.schema}.{t.name}
                     </span>
                   ))}
                   {selectedTables.length > 4 && (
-                    <span className="text-xs text-[#6b7280]">
+                    <span className="text-xs text-[#64748b]">
                       +{selectedTables.length - 4} more
                     </span>
                   )}
@@ -599,8 +597,8 @@ export function DatasetExplorerPage() {
               </div>
               <Button
                 variant="primary"
-                size="sm"
-                rightIcon={<ArrowRight size={14} />}
+                size="md"
+                rightIcon={<ArrowRight size={16} />}
                 onClick={() => {
                   if (!selectedRelation) return;
                   const metadataPath = withRunIdQuery(`/projects/${id}/metadata`, runId);
@@ -617,7 +615,7 @@ export function DatasetExplorerPage() {
                 }}
                 className="flex-shrink-0"
               >
-                Continue with {selectedRelation?.schema}.{selectedRelation?.name}
+                Use Dataset: {selectedRelation?.schema}.{selectedRelation?.name}
               </Button>
             </div>
           )}
@@ -630,7 +628,7 @@ export function DatasetExplorerPage() {
         title={preview ? `${preview.schema}.${preview.table}` : 'Table preview'}
         description={
           preview
-            ? `${preview.rowCount?.toLocaleString() ?? 'Unknown'} rows, ${preview.columnCount?.toLocaleString() ?? preview.columns.length} columns`
+            ? `${preview.rowCount != null ? preview.rowCount.toLocaleString() : '—'} rows, ${preview.columnCount != null ? preview.columnCount.toLocaleString() : preview.columns.length} columns`
             : undefined
         }
         className="max-h-[85vh] max-w-5xl overflow-hidden"
@@ -638,52 +636,52 @@ export function DatasetExplorerPage() {
         {preview && (
           <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-lg border border-[#252637] bg-[#0d0e14] px-3 py-2">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-[#6b7280]">Rows</p>
-                <p className="mt-1 text-sm font-semibold text-[#f1f5f9]">
-                  {preview.rowCount?.toLocaleString() ?? 'Unknown'}
+              <div className="rounded-lg border border-[#1e293b] bg-[#0b0f19] px-3.5 py-2.5">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-[#64748b]">Total Rows</p>
+                <p className="mt-1 text-sm font-semibold text-[#f8fafc]">
+                  {preview.rowCount != null ? preview.rowCount.toLocaleString() : '—'}
                 </p>
               </div>
-              <div className="rounded-lg border border-[#252637] bg-[#0d0e14] px-3 py-2">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-[#6b7280]">Columns</p>
-                <p className="mt-1 text-sm font-semibold text-[#f1f5f9]">
-                  {preview.columnCount?.toLocaleString() ?? preview.columns.length}
+              <div className="rounded-lg border border-[#1e293b] bg-[#0b0f19] px-3.5 py-2.5">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-[#64748b]">Columns</p>
+                <p className="mt-1 text-sm font-semibold text-[#f8fafc]">
+                  {preview.columnCount != null ? preview.columnCount.toLocaleString() : preview.columns.length}
                 </p>
               </div>
-              <div className="rounded-lg border border-[#252637] bg-[#0d0e14] px-3 py-2">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-[#6b7280]">Sample</p>
-                <p className="mt-1 text-sm font-semibold text-[#f1f5f9]">
-                  {preview.rows.length.toLocaleString()} row{preview.rows.length === 1 ? '' : 's'}
+              <div className="rounded-lg border border-[#1e293b] bg-[#0b0f19] px-3.5 py-2.5">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-[#64748b]">Preview Sample</p>
+                <p className="mt-1 text-sm font-semibold text-[#f8fafc]">
+                  Showing {preview.rows.length.toLocaleString()} rows
                 </p>
               </div>
             </div>
 
-            <div className="max-h-[46vh] overflow-auto rounded-lg border border-[#252637] scrollbar-thin">
+            <div className="max-h-[46vh] overflow-auto rounded-lg border border-[#1e293b] scrollbar-thin">
               {preview.columns.length > 0 && preview.rows.length > 0 ? (
                 <table className="w-full min-w-max text-left text-xs">
-                  <thead className="sticky top-0 bg-[#13141e] text-[#94a3b8]">
+                  <thead className="sticky top-0 bg-[#111827] text-[#94a3b8] z-10">
                     <tr>
                       {preview.columns.map((column) => (
-                        <th key={column.name} className="border-b border-r border-[#252637] px-3 py-2 align-top last:border-r-0">
-                          <span className="block font-semibold text-[#f1f5f9]">{column.name}</span>
-                          <span className="mt-0.5 block text-[10px] font-normal text-[#6b7280]">
+                        <th key={column.name} className="border-b border-r border-[#1e293b] px-3.5 py-2.5 align-top last:border-r-0">
+                          <span className="block font-semibold text-[#f8fafc]">{column.name}</span>
+                          <span className="mt-0.5 block text-[10px] font-mono font-normal text-[#06b6d4]">
                             {column.data_type}
                           </span>
                         </th>
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#252637]">
+                  <tbody className="divide-y divide-[#1e293b] bg-[#0b0f19]">
                     {preview.rows.map((row, rowIndex) => (
-                      <tr key={rowIndex} className="hover:bg-[#252637]/30">
+                      <tr key={rowIndex} className="hover:bg-[#131a29] transition-colors">
                         {preview.columns.map((column) => {
                           const value = row[column.name];
                           return (
-                            <td key={column.name} className="max-w-64 border-r border-[#252637] px-3 py-2 text-[#d1d5db] last:border-r-0">
+                            <td key={column.name} className="max-w-64 border-r border-[#1e293b] px-3.5 py-2 text-[#f8fafc] last:border-r-0">
                               {value === null || value === undefined ? (
-                                <span className="italic text-[#6b7280]">NULL</span>
+                                <span className="italic text-[#64748b] font-mono">NULL</span>
                               ) : (
-                                <span className="block truncate" title={String(value)}>
+                                <span className="block truncate font-mono text-[12px]" title={String(value)}>
                                   {String(value)}
                                 </span>
                               )}
@@ -696,27 +694,27 @@ export function DatasetExplorerPage() {
                 </table>
               ) : preview.columns.length > 0 ? (
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-[#13141e] text-[#94a3b8]">
+                  <thead className="bg-[#111827] text-[#94a3b8]">
                     <tr>
-                      <th className="border-b border-[#252637] px-3 py-2">Column</th>
-                      <th className="border-b border-[#252637] px-3 py-2">Type</th>
-                      <th className="border-b border-[#252637] px-3 py-2">Nullable</th>
+                      <th className="border-b border-[#1e293b] px-3.5 py-2.5 font-semibold">Column</th>
+                      <th className="border-b border-[#1e293b] px-3.5 py-2.5 font-semibold">Type</th>
+                      <th className="border-b border-[#1e293b] px-3.5 py-2.5 font-semibold">Nullable</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#252637]">
+                  <tbody className="divide-y divide-[#1e293b] bg-[#0b0f19]">
                     {preview.columns.map((column) => (
                       <tr key={column.name}>
-                        <td className="px-3 py-2 font-medium text-[#f1f5f9]">{column.name}</td>
-                        <td className="px-3 py-2 text-[#94a3b8]">{column.data_type}</td>
-                        <td className="px-3 py-2 text-[#94a3b8]">
-                          {column.nullable === undefined ? '-' : column.nullable ? 'Yes' : 'No'}
+                        <td className="px-3.5 py-2 font-medium text-[#f8fafc] font-mono">{column.name}</td>
+                        <td className="px-3.5 py-2 text-[#06b6d4] font-mono">{column.data_type}</td>
+                        <td className="px-3.5 py-2 text-[#94a3b8]">
+                          {column.nullable === undefined ? '—' : column.nullable ? 'Yes' : 'No'}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               ) : (
-                <div className="px-4 py-8 text-center text-sm text-[#6b7280]">
+                <div className="px-4 py-8 text-center text-sm text-[#64748b]">
                   No preview rows or column metadata returned.
                 </div>
               )}

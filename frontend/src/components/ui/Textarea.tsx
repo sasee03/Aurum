@@ -14,7 +14,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
         {label && (
           <label
             htmlFor={textareaId}
-            className="text-xs font-semibold uppercase tracking-widest text-[#6b7280]"
+            className="text-xs font-medium text-[#94a3b8] tracking-wide"
           >
             {label}
           </label>
@@ -23,8 +23,8 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
           ref={ref}
           id={textareaId}
           className={cn(
-            'w-full rounded-lg border border-[#252637] bg-[#1a1b28] px-3 py-2.5 text-sm text-[#f1f5f9] placeholder:text-[#4b5563] transition-colors focus:border-[#6366f1] focus:ring-1 focus:ring-[#6366f1] focus:outline-none resize-none disabled:opacity-50',
-            error && 'border-[#ef4444] focus:border-[#ef4444] focus:ring-[#ef4444]',
+            'w-full rounded-lg border border-[#273549] bg-[#131a29] px-3.5 py-2.5 text-sm text-[#f8fafc] placeholder:text-[#64748b] transition-colors focus:border-[#3b82f6] focus:ring-2 focus:ring-[#3b82f6]/20 focus:outline-none resize-none disabled:opacity-50',
+            error && 'border-[#ef4444] focus:border-[#ef4444] focus:ring-[#ef4444]/20',
             className
           )}
           aria-invalid={!!error}

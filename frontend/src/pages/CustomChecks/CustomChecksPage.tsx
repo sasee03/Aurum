@@ -21,10 +21,10 @@ import { CUSTOM_CHECKS_UNAVAILABLE } from '@/utils/apiErrors';
 import { formatRunOptionLabel, getRunDisplayName } from '@/utils/runLabels';
 import { cn } from '@/utils/cn';
 
-function layerBadgeVariant(layer: string): 'warning' | 'secondary' | 'primary' | 'default' {
+function layerBadgeVariant(layer: string): 'warning' | 'secondary' | 'primary' | 'accent' | 'default' {
   const l = layer.toLowerCase();
   if (l === 'bronze') return 'warning';
-  if (l === 'silver') return 'secondary';
+  if (l === 'silver') return 'accent';
   if (l === 'gold') return 'primary';
   return 'default';
 }
@@ -89,9 +89,6 @@ export function CustomChecksPage() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Reserved for future inline auth — today re-auth is via Connectors page + paste connection_id.
-  // const [connectorPassword, setConnectorPassword] = useState('');
-  // const authenticateConnector = async (...) => { ... };
   const [connectorSessionId, setConnectorSessionId] = useState<string | null>(null);
 
   const selectedRun: ValidationRunSummary | undefined = runs.find(
@@ -217,179 +214,180 @@ export function CustomChecksPage() {
   const sqlSelected = form.rule_type === 'custom_sql_demo';
 
   return (
-    <div className="min-h-full p-6 space-y-6 animate-fade-in relative">
+    <div className="min-h-full p-6 space-y-6 animate-fade-in relative bg-[#0b0f19]">
       <PageAssistant page="custom_checks" layer="silver" />
 
-      <div>
+      <div className="border-b border-[#1e293b] pb-4">
         <div className="flex flex-wrap items-center gap-3">
-          <h2 className="text-xl font-bold text-[#f1f5f9]">Custom Checks</h2>
+          <h2 className="text-2xl font-bold text-[#f8fafc] tracking-tight">Custom Validation Checks</h2>
           <DataSourceBadge mode={displayMode} />
         </div>
-        <p className="text-sm text-[#6b7280] mt-1">
+        <p className="text-sm text-[#94a3b8] mt-1">
           Define domain-specific rules and test them against real validation data. Results are
-          additive and do not change the engine trust score or verdict.
+          additive and do not alter the underlying system verdict.
         </p>
       </div>
 
       {!backendReachable && (
-        <p className="text-sm text-[#94a3b8] rounded-lg border border-[#252637] bg-[#13141e] px-4 py-3">
-          Custom checks require the API to be running. Start the backend and refresh.
+        <p className="text-xs text-[#94a3b8] rounded-xl border border-[#1e293b] bg-[#111827] px-4 py-3">
+          Custom checks require active backend API server connection.
         </p>
       )}
 
       {serviceUnavailable && backendReachable && (
-        <p className="text-sm text-[#94a3b8] rounded-lg border border-[#252637] bg-[#13141e] px-4 py-3">
+        <p className="text-xs text-[#ef4444] rounded-xl border border-[#ef4444]/30 bg-[#ef4444]/10 px-4 py-3">
           {CUSTOM_CHECKS_UNAVAILABLE}
         </p>
       )}
 
       {/* ── Define check form ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl">
-        <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
-          Layer
-          <select
-            className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
-            value={form.layer}
-            onChange={(e) => setForm({ ...form, layer: e.target.value as CustomCheck['layer'] })}
-            disabled={serviceUnavailable}
-          >
-            <option value="bronze">bronze</option>
-            <option value="silver">silver</option>
-            <option value="gold">gold</option>
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
-          Check name
-          <input
-            className={cn(
-              'rounded-lg border bg-[#13141e] px-3 py-2 text-[#f1f5f9]',
-              formErrors.check_name ? 'border-[#ef4444]' : 'border-[#252637]',
+      <div className="rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm max-w-4xl space-y-4">
+        <h3 className="text-base font-semibold text-[#f8fafc]">Create New Check</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
+            Layer
+            <select
+              className="rounded-lg border border-[#273549] bg-[#131a29] px-3 py-2 text-[#f8fafc] focus:outline-none focus:border-[#3b82f6]"
+              value={form.layer}
+              onChange={(e) => setForm({ ...form, layer: e.target.value as CustomCheck['layer'] })}
+              disabled={serviceUnavailable}
+            >
+              <option value="bronze">Bronze</option>
+              <option value="silver">Silver</option>
+              <option value="gold">Gold</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
+            Check Name
+            <input
+              className={cn(
+                'rounded-lg border bg-[#131a29] px-3 py-2 text-[#f8fafc] focus:outline-none focus:border-[#3b82f6]',
+                formErrors.check_name ? 'border-[#ef4444]' : 'border-[#273549]',
+              )}
+              value={form.check_name}
+              onChange={(e) => {
+                setForm({ ...form, check_name: e.target.value });
+                if (formErrors.check_name) {
+                  setFormErrors((prev) => ({ ...prev, check_name: undefined }));
+                }
+              }}
+              disabled={serviceUnavailable}
+              aria-invalid={Boolean(formErrors.check_name)}
+            />
+            {formErrors.check_name && (
+              <span className="text-[#ef4444]">{formErrors.check_name}</span>
             )}
-            value={form.check_name}
-            onChange={(e) => {
-              setForm({ ...form, check_name: e.target.value });
-              if (formErrors.check_name) {
-                setFormErrors((prev) => ({ ...prev, check_name: undefined }));
-              }
-            }}
-            disabled={serviceUnavailable}
-            aria-invalid={Boolean(formErrors.check_name)}
-          />
-          {formErrors.check_name && (
-            <span className="text-[#f87171]">{formErrors.check_name}</span>
-          )}
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
-          Rule type
-          <select
-            className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
-            value={form.rule_type}
-            onChange={(e) => {
-              const next = e.target.value;
-              setForm({ ...form, rule_type: next });
-              if (next === 'row_count_condition' && formErrors.column) {
-                setFormErrors((prev) => ({ ...prev, column: undefined }));
-              }
-            }}
-            disabled={serviceUnavailable}
-          >
-            {RULE_TYPES.map((rt) => (
-              <option key={rt} value={rt}>
-                {rt}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
-          Severity
-          <select
-            className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
-            value={form.severity}
-            onChange={(e) => setForm({ ...form, severity: e.target.value })}
-            disabled={serviceUnavailable}
-          >
-            <option value="low">low</option>
-            <option value="medium">medium</option>
-            <option value="high">high</option>
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
-          Column
-          <input
-            className={cn(
-              'rounded-lg border bg-[#13141e] px-3 py-2 text-[#f1f5f9]',
-              formErrors.column ? 'border-[#ef4444]' : 'border-[#252637]',
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
+            Rule Type
+            <select
+              className="rounded-lg border border-[#273549] bg-[#131a29] px-3 py-2 text-[#f8fafc] focus:outline-none focus:border-[#3b82f6]"
+              value={form.rule_type}
+              onChange={(e) => {
+                const next = e.target.value;
+                setForm({ ...form, rule_type: next });
+                if (next === 'row_count_condition' && formErrors.column) {
+                  setFormErrors((prev) => ({ ...prev, column: undefined }));
+                }
+              }}
+              disabled={serviceUnavailable}
+            >
+              {RULE_TYPES.map((rt) => (
+                <option key={rt} value={rt}>
+                  {rt}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
+            Severity
+            <select
+              className="rounded-lg border border-[#273549] bg-[#131a29] px-3 py-2 text-[#f8fafc] focus:outline-none focus:border-[#3b82f6]"
+              value={form.severity}
+              onChange={(e) => setForm({ ...form, severity: e.target.value })}
+              disabled={serviceUnavailable}
+            >
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
+            Target Column
+            <input
+              className={cn(
+                'rounded-lg border bg-[#131a29] px-3 py-2 text-[#f8fafc] focus:outline-none focus:border-[#3b82f6]',
+                formErrors.column ? 'border-[#ef4444]' : 'border-[#273549]',
+              )}
+              value={form.column}
+              onChange={(e) => {
+                setForm({ ...form, column: e.target.value });
+                if (formErrors.column) {
+                  setFormErrors((prev) => ({ ...prev, column: undefined }));
+                }
+              }}
+              placeholder="e.g. customer_id"
+              disabled={serviceUnavailable || form.rule_type === 'row_count_condition'}
+              aria-invalid={Boolean(formErrors.column)}
+            />
+            {formErrors.column && (
+              <span className="text-[#ef4444]">{formErrors.column}</span>
             )}
-            value={form.column}
-            onChange={(e) => {
-              setForm({ ...form, column: e.target.value });
-              if (formErrors.column) {
-                setFormErrors((prev) => ({ ...prev, column: undefined }));
-              }
-            }}
-            placeholder="e.g. customer_id (unused for row_count_condition)"
-            disabled={serviceUnavailable || form.rule_type === 'row_count_condition'}
-            aria-invalid={Boolean(formErrors.column)}
-          />
-          {formErrors.column && (
-            <span className="text-[#f87171]">{formErrors.column}</span>
-          )}
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
-          Operator
-          <input
-            className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
-            value={form.operator}
-            onChange={(e) => setForm({ ...form, operator: e.target.value })}
-            placeholder=">, >=, <, <=, ==, or between"
-            disabled={serviceUnavailable}
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-[#94a3b8] md:col-span-2">
-          Value
-          <input
-            className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
-            value={form.value}
-            onChange={(e) => setForm({ ...form, value: e.target.value })}
-            placeholder="e.g. 0 | 1,100 | UK,France,Germany"
-            disabled={serviceUnavailable}
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-[#94a3b8] md:col-span-2">
-          Description
-          <textarea
-            className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
-            rows={2}
-            value={form.description}
-            onChange={(e) => setForm({ ...form, description: e.target.value })}
-            disabled={serviceUnavailable}
-          />
-        </label>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
+            Operator
+            <input
+              className="rounded-lg border border-[#273549] bg-[#131a29] px-3 py-2 text-[#f8fafc] focus:outline-none focus:border-[#3b82f6]"
+              value={form.operator}
+              onChange={(e) => setForm({ ...form, operator: e.target.value })}
+              placeholder=">, >=, <, <=, ==, or between"
+              disabled={serviceUnavailable}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-[#94a3b8] md:col-span-2">
+            Expected Value
+            <input
+              className="rounded-lg border border-[#273549] bg-[#131a29] px-3 py-2 text-[#f8fafc] focus:outline-none focus:border-[#3b82f6]"
+              value={form.value}
+              onChange={(e) => setForm({ ...form, value: e.target.value })}
+              placeholder="e.g. 0 | 1,100 | UK,France,Germany"
+              disabled={serviceUnavailable}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-[#94a3b8] md:col-span-2">
+            Description
+            <textarea
+              className="rounded-lg border border-[#273549] bg-[#131a29] px-3 py-2 text-[#f8fafc] focus:outline-none focus:border-[#3b82f6]"
+              rows={2}
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              disabled={serviceUnavailable}
+            />
+          </label>
+        </div>
+
+        {sqlSelected && (
+          <p className="text-xs text-[#f59e0b] rounded-lg border border-[#f59e0b]/30 bg-[#f59e0b]/10 p-3">
+            SQL-based checks (custom_sql_demo) are not yet supported.
+          </p>
+        )}
+
+        <div className="pt-2 flex items-center justify-between">
+          <Button variant="primary" size="md" onClick={save} disabled={serviceUnavailable}>
+            Save Custom Check
+          </Button>
+          {message && <p className="text-xs text-[#10b981] font-semibold">{message}</p>}
+        </div>
       </div>
-
-      {sqlSelected && (
-        <p className="text-sm text-[#f59e0b] rounded-lg border border-[#3f3a1f] bg-[#1a1810] px-4 py-3 max-w-4xl">
-          SQL-based checks (custom_sql_demo) are not yet supported — Test Check will return
-          SKIPPED and will not execute arbitrary SQL.
-        </p>
-      )}
-
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-        <Button variant="primary" onClick={save} disabled={serviceUnavailable}>
-          Save Check
-        </Button>
-      </div>
-
-      {message && <p className="text-sm text-[#22c55e]">{message}</p>}
 
       {/* ── Run scope selector ── */}
       {checks.length > 0 && (
-        <div className="space-y-4 max-w-4xl">
-          <h3 className="text-sm font-semibold text-[#f1f5f9]">Test data source</h3>
+        <div className="rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm space-y-4 max-w-4xl">
+          <h3 className="text-base font-semibold text-[#f8fafc]">Test Data Source</h3>
           <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
-            Run to test against
+            Target Validation Run
             <select
-              className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9]"
+              className="rounded-lg border border-[#273549] bg-[#131a29] px-3 py-2 text-[#f8fafc] focus:outline-none focus:border-[#3b82f6]"
               value={selectedRunId}
               onChange={(e) => {
                 setSelectedRunId(e.target.value);
@@ -410,12 +408,9 @@ export function CustomChecksPage() {
 
           {/* Upload run: re-attach file */}
           {scope.type === 'upload' && (
-            <div className="rounded-lg border border-[#252637] bg-[#0f172a] px-4 py-3 space-y-2">
-              <p className="text-xs leading-relaxed text-[#bfdbfe]">
-                <strong>This run requires your original file.</strong> Choose it below to test
-                against real upload data before you click <span className="font-semibold">Test Check</span>.
-                The file is processed in-memory and not saved again. File identity is not verified —
-                attach the same file used in the original run.
+            <div className="rounded-xl border border-[#1e293b] bg-[#131a29] p-4 space-y-2">
+              <p className="text-xs leading-relaxed text-[#94a3b8]">
+                Choose file below to test against upload data before clicking <span className="font-semibold text-[#f8fafc]">Test Check</span>.
               </p>
               <input
                 ref={fileInputRef}
@@ -425,42 +420,39 @@ export function CustomChecksPage() {
                 onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
               />
               {uploadFile && (
-                <p className="text-xs text-[#22c55e]">Selected: {uploadFile.name}</p>
+                <p className="text-xs text-[#10b981]">Selected: {uploadFile.name}</p>
               )}
             </div>
           )}
 
           {/* Connector run: session ID input */}
           {scope.type === 'connector' && (
-            <div className="rounded-lg border border-[#252637] bg-[#0f172a] px-4 py-3 space-y-2">
-              <p className="text-xs leading-relaxed text-[#bfdbfe]">
-                <strong>This run requires an active database session.</strong> Test the connection
-                on the Connectors page, then paste the session ID here before you click{' '}
-                <span className="font-semibold">Test Check</span>. Passwords are never stored.
+            <div className="rounded-xl border border-[#1e293b] bg-[#131a29] p-4 space-y-3">
+              <p className="text-xs leading-relaxed text-[#94a3b8]">
+                Active PostgreSQL session required. Paste session connection ID below.
               </p>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() =>
-                  navigate(
-                    `/projects/${scope.run.project_id ?? OLIST_DEMO_PROJECT_ID}/connect?source=postgresql`,
-                  )
-                }
-              >
-                Open Connectors
-              </Button>
-              <label className="flex flex-col gap-1 text-xs text-[#94a3b8]">
-                Connection ID (from Connectors page)
+              <div className="flex gap-3">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() =>
+                    navigate(
+                      `/projects/${scope.run.project_id ?? OLIST_DEMO_PROJECT_ID}/connect?source=postgresql`,
+                    )
+                  }
+                >
+                  Open Connectors
+                </Button>
                 <input
                   type="text"
-                  className="rounded-lg border border-[#252637] bg-[#13141e] px-3 py-2 text-[#f1f5f9] font-mono text-xs"
+                  className="flex-1 rounded-lg border border-[#273549] bg-[#0b0f19] px-3 py-1.5 text-[#f8fafc] font-mono text-xs focus:outline-none"
                   value={connectorSessionId ?? ''}
                   onChange={(e) => {
                     setConnectorSessionId(e.target.value || null);
                   }}
-                  placeholder="Paste connection ID from Connectors"
+                  placeholder="Paste Connection ID from Connectors"
                 />
-              </label>
+              </div>
             </div>
           )}
         </div>
@@ -469,24 +461,24 @@ export function CustomChecksPage() {
       {/* ── Saved checks list ── */}
       {checks.length > 0 && (
         <div className="space-y-4 max-w-4xl">
-          <h3 className="text-sm font-semibold text-[#f1f5f9]">Saved checks</h3>
-          <div className="flex flex-col gap-4">
+          <h3 className="text-base font-semibold text-[#f8fafc]">Saved Custom Checks</h3>
+          <div className="flex flex-col gap-3">
             {checks.map((c) => (
-              <Card key={c.check_id} className="p-0 overflow-hidden">
-                <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex min-w-0 flex-col gap-2">
+              <Card key={c.check_id} className="p-4 bg-[#111827] border-[#1e293b]">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 flex-col gap-1.5">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h4 className="text-sm font-semibold text-[#f1f5f9]">
+                      <h4 className="text-sm font-semibold text-[#f8fafc]">
                         {checkDisplayName(c)}
                       </h4>
                       <Badge variant={layerBadgeVariant(c.layer)}>{c.layer}</Badge>
                     </div>
-                    <p className="text-xs text-[#6b7280]">
+                    <p className="text-xs text-[#94a3b8] font-mono">
                       {c.rule_type.replace(/_/g, ' ')}
                       {c.check_id ? (
                         <>
-                          <span className="mx-1.5 text-[#4b5563]">·</span>
-                          <span className="font-mono text-[#94a3b8]">{c.check_id}</span>
+                          <span className="mx-1.5 text-[#64748b]">·</span>
+                          <span className="text-[#06b6d4]">{c.check_id}</span>
                         </>
                       ) : null}
                     </p>
@@ -512,48 +504,44 @@ export function CustomChecksPage() {
 
       {/* ── Result panel ── */}
       {result && (
-        <Card className="max-w-4xl space-y-4">
-          <p className="text-[11px] font-semibold uppercase tracking-widest text-[#6b7280]">
+        <Card className="max-w-4xl space-y-4 bg-[#111827] border-[#1e293b] p-6 shadow-sm">
+          <p className="text-[11px] font-semibold uppercase tracking-widest text-[#64748b]">
             Latest Test Check Result
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <Badge variant={resultStatusVariant(result.status)} className="text-xs">
               {result.status}
             </Badge>
-            <p className="text-sm font-medium text-[#f1f5f9]">{result.message}</p>
+            <p className="text-sm font-semibold text-[#f8fafc]">{result.message}</p>
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-[#6b7280]">
-                Observed
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 font-mono">
+            <div className="flex flex-col gap-1 p-3 rounded-lg border border-[#1e293b] bg-[#131a29]">
+              <span className="text-[11px] font-semibold uppercase text-[#64748b]">
+                Observed Value
               </span>
-              <span className="break-all text-sm text-[#f1f5f9]">
+              <span className="break-all text-xs text-[#f8fafc]">
                 {String(result.observed_value)}
               </span>
             </div>
-            <div className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-[#6b7280]">
-                Expected
+            <div className="flex flex-col gap-1 p-3 rounded-lg border border-[#1e293b] bg-[#131a29]">
+              <span className="text-[11px] font-semibold uppercase text-[#64748b]">
+                Expected Condition
               </span>
-              <span className="break-all text-sm text-[#f1f5f9]">
+              <span className="break-all text-xs text-[#f8fafc]">
                 {result.expected_condition}
               </span>
             </div>
           </div>
           {(result.data_source || result.scope_note) && (
-            <div className="space-y-2 border-t border-[#252637] pt-4">
+            <div className="space-y-2 border-t border-[#1e293b] pt-4 text-xs text-[#94a3b8]">
               {result.data_source && (
-                <p className="text-xs leading-relaxed text-[#94a3b8]">
-                  <span className="font-semibold text-[#bfdbfe]">Data source</span>
-                  <span className="mx-1.5 text-[#4b5563]">·</span>
-                  {result.data_source}
+                <p>
+                  <span className="font-semibold text-[#3b82f6]">Data Source:</span> {result.data_source}
                 </p>
               )}
               {result.scope_note && (
-                <p className="text-xs leading-relaxed text-[#94a3b8]">
-                  <span className="font-semibold text-[#fbbf24]">Scope note</span>
-                  <span className="mx-1.5 text-[#4b5563]">·</span>
-                  {result.scope_note}
+                <p>
+                  <span className="font-semibold text-[#f59e0b]">Scope Note:</span> {result.scope_note}
                 </p>
               )}
             </div>

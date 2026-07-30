@@ -11,6 +11,10 @@ import {
   AlertCircle,
   RefreshCw,
   Layers,
+  ChevronDown,
+  ChevronUp,
+  Filter,
+  Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -81,6 +85,7 @@ export function SilverValidationPage() {
   const [loadingReview, setLoadingReview] = useState<boolean>(false);
   const [reviewData, setReviewData] = useState<TransformReviewResponse | null>(null);
   const [reviewedRuleRevision, setReviewedRuleRevision] = useState<string | null>(null);
+  const [showSqlDetails, setShowSqlDetails] = useState<boolean>(false);
 
   // Execution state
   const [executing, setExecuting] = useState<boolean>(false);
@@ -192,8 +197,8 @@ export function SilverValidationPage() {
     resetRunState();
   }
 
-  function handleAddRule() {
-    setRules((prev) => [...prev, '']);
+  function handleAddRule(presetText = '') {
+    setRules((prev) => [...prev, presetText]);
     markRulesChanged();
   }
 
@@ -515,39 +520,39 @@ export function SilverValidationPage() {
       <PageAssistant page="silver" layer="silver" runId={runId || runIdParam} selectedTable={selectedTableParam || sourceTable || undefined} />
 
       {/* Header */}
-      <div className="px-6 py-6 border-b border-[#252637]">
+      <div className="px-6 py-5 border-b border-[#1e293b] bg-[#0b0f19]">
         <div className="flex flex-wrap items-center gap-3">
-          <h2 className="text-xl font-bold text-[#f1f5f9]">Silver Layer</h2>
+          <h2 className="text-2xl font-bold text-[#f8fafc] tracking-tight">Silver Transformation</h2>
           {silverComplete ? (
             <DataSourceBadge mode="live" />
           ) : (
-            <Badge variant="secondary">Ready</Badge>
+            <Badge variant="secondary">Rule Engine</Badge>
           )}
           {executeResult ? (
             <Badge variant="pass">Promoted to Silver</Badge>
           ) : reviewData && reviewData.executable ? (
             <Badge variant="warning">Review Pending Approval</Badge>
           ) : reviewData ? (
-            <Badge variant="secondary">Untrusted Review</Badge>
+            <Badge variant="secondary">Review Pending</Badge>
           ) : savedRules && savedRules.length > 0 ? (
             <Badge variant="secondary">{savedRules.length} Rules Saved</Badge>
           ) : (
-            <Badge variant="secondary">Rule Configuration</Badge>
+            <Badge variant="secondary">Cleaning Rules</Badge>
           )}
         </div>
-        <p className="mt-1 text-sm text-[#6b7280]">
-          Clean and transform Bronze table data using user-defined ordered rules.
+        <p className="mt-1 text-sm text-[#94a3b8]">
+          Clean and transform raw Bronze tables into structured Silver data using deterministic rules.
         </p>
       </div>
 
       {/* Content Body */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-[#090a10] scrollbar-thin">
+      <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-[#0b0f19] scrollbar-thin">
         {!selectedTableParam ? (
-          /* Honest Empty State when ?table= query parameter is missing */
-          <div className="max-w-xl mx-auto my-12 rounded-xl border border-[#f59e0b]/30 bg-[#451a03]/30 p-6 space-y-4 text-center">
-            <AlertCircle size={28} className="mx-auto text-[#f59e0b]" />
-            <h3 className="text-base font-semibold text-[#fef3c7]">No Bronze Table Selected</h3>
-            <p className="text-xs text-[#fcd34d] leading-relaxed">
+          /* Empty State when ?table= query parameter is missing */
+          <div className="max-w-xl mx-auto my-12 rounded-xl border border-[#3b82f6]/30 bg-[#111827] p-8 space-y-4 text-center shadow-lg">
+            <AlertCircle size={32} className="mx-auto text-[#3b82f6]" />
+            <h3 className="text-lg font-bold text-[#f8fafc]">No Bronze Table Selected</h3>
+            <p className="text-xs text-[#94a3b8] leading-relaxed">
               Please return to the Bronze layer, discover source tables, ingest, and verify a table before configuring Silver cleaning rules.
             </p>
             <div className="pt-2">
@@ -564,71 +569,100 @@ export function SilverValidationPage() {
             {/* Left Column: Table Context, Rule Editor, & Action Bar */}
             <div className="lg:col-span-2 space-y-5">
               {/* Selected Bronze Table Banner */}
-              <div className="rounded-xl border border-[#252637] p-5 bg-[#0d0e14]">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-xs font-semibold uppercase tracking-widest text-[#6b7280]">
-                      Selected Bronze Table
-                    </h3>
-                    <div className="mt-1 text-base font-bold font-mono text-[#f1f5f9]">
-                      {selectedTableParam}
-                    </div>
+              <div className="rounded-xl border border-[#1e293b] p-5 bg-[#111827] shadow-sm flex items-center justify-between">
+                <div>
+                  <h3 className="text-xs font-semibold uppercase tracking-widest text-[#64748b]">
+                    Target Bronze Relation
+                  </h3>
+                  <div className="mt-1 text-base font-bold font-mono text-[#f8fafc]">
+                    {selectedTableParam}
                   </div>
-                  <Badge variant="secondary">Source Context</Badge>
                 </div>
+                <Badge variant="accent">Bronze Source</Badge>
               </div>
 
               {/* Rule Editor Panel */}
-              <div className="rounded-xl border border-[#252637] p-5 bg-[#0d0e14] space-y-4">
+              <div className="rounded-xl border border-[#1e293b] p-6 bg-[#111827] space-y-5 shadow-sm">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Layers size={17} className="text-[#6366f1]" />
-                    <h3 className="text-sm font-semibold text-[#f1f5f9]">Transformation Rules (Ordered)</h3>
+                  <div className="flex items-center gap-2.5">
+                    <Layers size={18} className="text-[#3b82f6]" />
+                    <h3 className="text-base font-semibold text-[#f8fafc]">Transformation Rules (Ordered)</h3>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => handleAddRule()}
+                      disabled={isBusy}
+                      className="flex items-center gap-1.5 text-xs text-[#3b82f6] hover:text-[#60a5fa] font-semibold transition-colors disabled:opacity-40 cursor-pointer"
+                    >
+                      <Plus size={14} /> Add Rule
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleManualReload()}
+                      disabled={isBusy}
+                      className="p-1 text-[#64748b] hover:text-[#f8fafc] transition-colors disabled:opacity-40 cursor-pointer"
+                      title="Reload saved rules"
+                    >
+                      <RefreshCw size={14} className={loadingRules ? 'animate-spin' : ''} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Human-Readable Rule Presets / Hints */}
+                <div className="flex flex-wrap items-center gap-2 text-xs text-[#94a3b8] pt-1">
+                  <span className="text-[#64748b] font-medium flex items-center gap-1">
+                    <Sparkles size={13} className="text-[#06b6d4]" /> Preset examples:
+                  </span>
                   <button
                     type="button"
-                    onClick={handleAddRule}
+                    onClick={() => handleAddRule('is not null')}
                     disabled={isBusy}
-                    className="flex items-center gap-1 text-xs text-[#6366f1] hover:text-[#818cf8] font-medium transition-colors disabled:opacity-40"
+                    className="px-2.5 py-1 rounded-md border border-[#1e293b] bg-[#131a29] text-[#06b6d4] hover:border-[#3b82f6]/40 transition-colors font-mono text-[11px] cursor-pointer"
                   >
-                    <Plus size={14} /> Add Rule
+                    Filter NULLs ([col] is not null)
                   </button>
                   <button
                     type="button"
-                    onClick={() => void handleManualReload()}
+                    onClick={() => handleAddRule('> 0')}
                     disabled={isBusy}
-                    className="p-1 text-[#6b7280] hover:text-[#f1f5f9] transition-colors disabled:opacity-40"
-                    title="Reload saved rules"
+                    className="px-2.5 py-1 rounded-md border border-[#1e293b] bg-[#131a29] text-[#06b6d4] hover:border-[#3b82f6]/40 transition-colors font-mono text-[11px] cursor-pointer"
                   >
-                    <RefreshCw size={14} className={loadingRules ? 'animate-spin' : ''} />
+                    Comparison ([col] &gt; 0)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddRule('distinct')}
+                    disabled={isBusy}
+                    className="px-2.5 py-1 rounded-md border border-[#1e293b] bg-[#131a29] text-[#06b6d4] hover:border-[#3b82f6]/40 transition-colors font-mono text-[11px] cursor-pointer"
+                  >
+                    Deduplicate (distinct)
                   </button>
                 </div>
-              </div>
 
                 {loadingRules ? (
                   <LoadingSkeleton count={3} className="h-14" />
                 ) : rulesError ? (
-                  <div className="rounded-lg border border-[#ef4444]/30 bg-[#450a0a]/30 p-4 text-xs text-[#fca5a5] space-y-2">
-                    <div className="flex items-center gap-2 font-semibold text-[#ef4444]">
+                  <div className="rounded-xl border border-[#ef4444]/30 bg-[#ef4444]/10 p-4 text-xs text-[#ef4444] space-y-2">
+                    <div className="flex items-center gap-2 font-semibold">
                       <AlertCircle size={16} />
                       Rules Validation Error
                     </div>
                     <p>{rulesError}</p>
                   </div>
                 ) : rules.length === 0 ? (
-                  <div className="rounded-lg border border-[#252637] bg-[#13141e] p-6 text-center text-xs text-[#94a3b8] space-y-2">
-                    <p>No transformation rules defined yet for <span className="font-mono text-[#f1f5f9]">{selectedTableParam}</span>.</p>
-                    <p className="text-[#6b7280]">Click &quot;Add Rule&quot; above to specify cleanings such as removing nulls or filtering rows.</p>
+                  <div className="rounded-xl border border-[#1e293b] bg-[#131a29] p-6 text-center text-xs text-[#94a3b8] space-y-2">
+                    <p>No transformation rules defined yet for <span className="font-mono text-[#f8fafc] font-semibold">{selectedTableParam}</span>.</p>
+                    <p className="text-[#64748b]">Click &quot;Add Rule&quot; above or use preset examples to define filter criteria.</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
                     {rules.map((ruleText, idx) => (
                       <div
                         key={idx}
-                        className="flex items-center gap-3 p-3 rounded-lg border border-[#252637] bg-[#13141e] group"
+                        className="flex items-center gap-3 p-3.5 rounded-xl border border-[#1e293b] bg-[#131a29] group transition-colors focus-within:border-[#3b82f6]"
                       >
-                        <span className="text-xs font-bold text-[#6366f1] w-6 shrink-0">
+                        <span className="text-xs font-bold text-[#3b82f6] font-mono w-6 shrink-0">
                           #{idx + 1}
                         </span>
                         <input
@@ -637,14 +671,14 @@ export function SilverValidationPage() {
                           placeholder="Enter cleaning rule (e.g. record_id is not null)"
                           disabled={isBusy}
                           onChange={(e) => handleUpdateRule(idx, e.target.value)}
-                          className="flex-1 bg-transparent text-xs text-[#f1f5f9] focus:outline-none focus:border-b border-[#6366f1] py-1 disabled:opacity-50"
+                          className="flex-1 bg-transparent text-xs text-[#f8fafc] font-mono focus:outline-none py-1 disabled:opacity-50"
                         />
                         <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
                           <button
                             type="button"
                             onClick={() => handleMoveRule(idx, 'up')}
                             disabled={idx === 0 || isBusy}
-                            className="p-1 text-[#6b7280] hover:text-[#f1f5f9] disabled:opacity-30"
+                            className="p-1 text-[#64748b] hover:text-[#f8fafc] disabled:opacity-30 cursor-pointer"
                             title="Move up"
                           >
                             <ArrowUp size={13} />
@@ -653,7 +687,7 @@ export function SilverValidationPage() {
                             type="button"
                             onClick={() => handleMoveRule(idx, 'down')}
                             disabled={idx === rules.length - 1 || isBusy}
-                            className="p-1 text-[#6b7280] hover:text-[#f1f5f9] disabled:opacity-30"
+                            className="p-1 text-[#64748b] hover:text-[#f8fafc] disabled:opacity-30 cursor-pointer"
                             title="Move down"
                           >
                             <ArrowDown size={13} />
@@ -662,7 +696,7 @@ export function SilverValidationPage() {
                             type="button"
                             onClick={() => handleDeleteRule(idx)}
                             disabled={isBusy}
-                            className="p-1 text-[#6b7280] hover:text-[#ef4444] disabled:opacity-30"
+                            className="p-1 text-[#64748b] hover:text-[#ef4444] disabled:opacity-30 cursor-pointer"
                             title="Delete rule"
                           >
                             <Trash2 size={13} />
@@ -674,12 +708,12 @@ export function SilverValidationPage() {
                 )}
 
                 {/* Rules Action Bar */}
-                <div className="flex items-center justify-between pt-3 border-t border-[#252637]">
+                <div className="flex items-center justify-between pt-4 border-t border-[#1e293b]">
                   <div className="text-xs text-[#94a3b8]">
                     {rulesDirty ? (
-                      <span className="text-[#f59e0b]">Unsaved rule edits</span>
+                      <span className="text-[#f59e0b] font-medium">Unsaved rule edits</span>
                     ) : savedRules && savedRules.length > 0 ? (
-                      <span className="text-[#22c55e]">Rules saved to backend</span>
+                      <span className="text-[#10b981] font-medium">Rules saved to backend</span>
                     ) : null}
                   </div>
                   <div className="flex items-center gap-3">
@@ -707,10 +741,10 @@ export function SilverValidationPage() {
                 </div>
               </div>
 
-              {/* Generation / Validation Errors / Generator Unavailable State */}
+              {/* Generation / Validation Errors */}
               {generateError && (
-                <div className={`rounded-xl border p-4 text-xs space-y-2 ${generatorUnavailable ? 'border-[#3b82f6]/30 bg-[#1e3a8a]/20 text-[#93c5fd]' : 'border-[#ef4444]/30 bg-[#450a0a]/30 text-[#fca5a5]'}`}>
-                  <div className={`flex items-center gap-2 font-semibold ${generatorUnavailable ? 'text-[#60a5fa]' : 'text-[#ef4444]'}`}>
+                <div className={`rounded-xl border p-4 text-xs space-y-2 ${generatorUnavailable ? 'border-[#3b82f6]/30 bg-[#2563eb]/10 text-[#93c5fd]' : 'border-[#ef4444]/30 bg-[#ef4444]/10 text-[#ef4444]'}`}>
+                  <div className={`flex items-center gap-2 font-semibold ${generatorUnavailable ? 'text-[#3b82f6]' : 'text-[#ef4444]'}`}>
                     <AlertCircle size={16} />
                     {generatorUnavailable ? 'SQL Generator Status' : 'SQL Generation Failed'}
                   </div>
@@ -720,18 +754,18 @@ export function SilverValidationPage() {
 
               {/* Review Panel: Generated Transformation SQL & Planned Steps */}
               {reviewData && (
-                <div className="rounded-xl border border-[#252637] p-5 bg-[#0d0e14] space-y-4 animate-slide-up">
+                <div className="rounded-xl border border-[#1e293b] p-6 bg-[#111827] space-y-5 animate-slide-up shadow-sm">
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Code size={17} className="text-[#6366f1]" />
-                      <h3 className="text-sm font-semibold text-[#f1f5f9]">Generated Transformation SQL</h3>
+                    <div className="flex items-center gap-2.5">
+                      <Code size={18} className="text-[#3b82f6]" />
+                      <h3 className="text-base font-semibold text-[#f8fafc]">Transformation Summary</h3>
                     </div>
                     {executeResult || reviewData.executed ? (
-                      <Badge variant="pass">Executed</Badge>
+                      <Badge variant="pass">Executed &amp; Promoted</Badge>
                     ) : reviewData.executable ? (
                       <Badge variant="warning">Review Pending</Badge>
                     ) : (
-                      <Badge variant="secondary">Untrusted / Legacy Run</Badge>
+                      <Badge variant="secondary">Untrusted Review</Badge>
                     )}
                   </div>
 
@@ -740,38 +774,55 @@ export function SilverValidationPage() {
                       'Deterministic Silver transformation proposal.'}
                   </p>
 
-                  <div className="rounded-lg border border-[#252637] bg-[#090a10] p-4 overflow-x-auto font-mono text-xs text-[#a5b4fc] scrollbar-thin">
-                    <pre className="whitespace-pre">{reviewData.sql_text}</pre>
-                  </div>
-
                   {/* Planned Steps List */}
                   {reviewData.planned_changes.rules && reviewData.planned_changes.rules.length > 0 && (
-                    <div className="space-y-2 pt-2 border-t border-[#252637]">
-                      <h4 className="text-xs font-semibold text-[#f1f5f9]">Planned Sequential Steps</h4>
-                      <ul className="space-y-1.5 text-xs text-[#94a3b8]">
+                    <div className="space-y-2 pt-3 border-t border-[#1e293b]">
+                      <h4 className="text-xs font-semibold text-[#f8fafc]">Planned Sequential Filter Rules</h4>
+                      <ul className="space-y-2 text-xs text-[#94a3b8]">
                         {reviewData.planned_changes.rules.map((step, idx) => (
-                          <li key={idx} className="flex items-center gap-2">
-                            <span className="h-1.5 w-1.5 rounded-full bg-[#6366f1]" />
-                            <span>{formatSilverRule(step)}</span>
+                          <li key={idx} className="flex items-center gap-2 font-mono bg-[#131a29] px-3 py-2 rounded-lg border border-[#1e293b]">
+                            <Filter size={13} className="text-[#3b82f6]" />
+                            <span className="text-[#f8fafc]">{formatSilverRule(step)}</span>
                           </li>
                         ))}
                       </ul>
                     </div>
                   )}
 
+                  {/* Expandable Generated SQL Details Section */}
+                  <div className="border border-[#1e293b] rounded-xl overflow-hidden bg-[#131a29]">
+                    <button
+                      type="button"
+                      onClick={() => setShowSqlDetails(!showSqlDetails)}
+                      className="w-full px-4 py-3 flex items-center justify-between text-xs font-semibold text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[#1f293d] transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2 font-mono">
+                        <Code size={14} className="text-[#06b6d4]" />
+                        {showSqlDetails ? 'Hide Generated Transformation SQL' : 'View Generated Transformation SQL (CTE)'}
+                      </span>
+                      {showSqlDetails ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    </button>
+                    {showSqlDetails && (
+                      <div className="p-4 border-t border-[#1e293b] bg-[#0b0f19] overflow-x-auto font-mono text-xs text-[#06b6d4] scrollbar-thin">
+                        <pre className="whitespace-pre">{reviewData.sql_text}</pre>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Human Approval Gate Action Bar */}
-                  <div className="pt-4 border-t border-[#252637] flex items-center justify-between">
-                    <span className="text-xs text-[#cbd5e1]">
+                  <div className="pt-4 border-t border-[#1e293b] flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <span className="text-xs text-[#94a3b8]">
                       {rulesDirty
                         ? 'Rule edits pending — re-generate SQL before approval.'
                         : executeResult || reviewData.executed
-                          ? 'Transformation has already been executed and promoted.'
+                          ? 'Transformation has been executed and promoted to Silver.'
                           : !reviewData.executable
                             ? 'Run is non-executable (untrusted provenance or generator unavailable).'
-                            : 'Review the generated CTE SQL above before executing promotion.'}
+                            : 'Review the transformation plan above before approving promotion.'}
                     </span>
                     <Button
                       variant="primary"
+                      size="md"
                       isLoading={executing}
                       disabled={!canExecute}
                       rightIcon={<ArrowRight size={16} />}
@@ -791,90 +842,90 @@ export function SilverValidationPage() {
             {/* Right Column: Execution Attribution & Silver Data Status */}
             <div className="space-y-5">
               {/* Execution Attribution Results */}
-              <div className="rounded-xl border border-[#252637] p-5 bg-[#0d0e14] space-y-4">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 size={17} className="text-[#22c55e]" />
-                  <h3 className="text-sm font-semibold text-[#f1f5f9]">Execution Attribution Log</h3>
+              <div className="rounded-xl border border-[#1e293b] p-6 bg-[#111827] space-y-4 shadow-sm">
+                <div className="flex items-center gap-2.5">
+                  <CheckCircle2 size={18} className="text-[#10b981]" />
+                  <h3 className="text-base font-semibold text-[#f8fafc]">Transformation Results</h3>
                 </div>
 
                 {executeError && (
-                  <div className="rounded-lg border border-[#ef4444]/30 bg-[#450a0a]/30 p-3 text-xs text-[#fca5a5] space-y-1">
-                    <p className="font-semibold text-[#ef4444]">Execution Error</p>
+                  <div className="rounded-xl border border-[#ef4444]/30 bg-[#ef4444]/10 p-4 text-xs text-[#ef4444] space-y-1">
+                    <p className="font-semibold">Execution Error</p>
                     <p>{executeError}</p>
                   </div>
                 )}
 
                 {executeResult ? (
-                  <div className="space-y-3">
-                    <div className="rounded-lg border border-[#22c55e]/30 bg-[#22c55e]/10 p-3 text-xs text-[#4ade80] space-y-1">
-                      <div className="font-semibold flex items-center gap-1.5">
-                        <CheckCircle2 size={15} />
-                        Execution Successful
+                  <div className="space-y-4">
+                    <div className="rounded-xl border border-[#10b981]/30 bg-[#10b981]/10 p-4 text-xs text-[#10b981] space-y-1">
+                      <div className="font-semibold flex items-center gap-2">
+                        <CheckCircle2 size={16} />
+                        Promotion Successful
                       </div>
-                      <p className="text-[#cbd5e1]">{executeResult.message}</p>
+                      <p className="text-[#94a3b8]">{executeResult.message}</p>
                     </div>
 
-                    <div className="space-y-2 pt-2 border-t border-[#252637]">
-                      <h4 className="text-xs font-semibold text-[#6b7280] uppercase tracking-wider">
-                        Attribution Breakdown
+                    <div className="space-y-2 pt-3 border-t border-[#1e293b]">
+                      <h4 className="text-xs font-semibold text-[#64748b] uppercase tracking-wider">
+                        Row &amp; Transformation Attribution
                       </h4>
                       {executeResult.attribution_available && executeResult.attribution_log ? (
                         executeResult.attribution_log.map((logLine, idx) => (
                           <div
                             key={idx}
-                            className="p-2.5 rounded border border-[#252637] bg-[#13141e] text-xs font-mono text-[#cbd5e1]"
+                            className="p-3 rounded-lg border border-[#1e293b] bg-[#131a29] text-xs font-mono text-[#f8fafc]"
                           >
                             {logLine}
                           </div>
                         ))
                       ) : (
-                        <div className="p-2.5 rounded border border-[#252637] bg-[#13141e] text-xs font-mono text-[#94a3b8]">
-                          Historical execution attribution is unavailable for this run.
+                        <div className="p-3 rounded-lg border border-[#1e293b] bg-[#131a29] text-xs font-mono text-[#94a3b8]">
+                          Transformation completed into schema <span className="text-[#f8fafc] font-semibold">{executeResult.target.schema}</span>.
                         </div>
                       )}
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-lg border border-[#252637] bg-[#13141e] p-6 text-center text-xs text-[#6b7280]">
+                  <div className="rounded-xl border border-[#1e293b] bg-[#131a29] p-6 text-center text-xs text-[#94a3b8]">
                     {executing
-                      ? 'Executing candidate SQL and computing attribution…'
+                      ? 'Executing candidate SQL and computing transformation attribution…'
                       : reviewData
-                        ? 'Click "Approve & Execute" to run transformation and compute attribution.'
-                        : 'Define rules and generate SQL to view execution attribution.'}
+                        ? 'Click "Approve & Execute" to run transformation and view result summary.'
+                        : 'Define rules and generate SQL to view transformation results.'}
                   </div>
                 )}
               </div>
 
               {/* Silver Row Preview — Live State */}
-              <div className="rounded-xl border border-[#252637] p-5 bg-[#0d0e14] space-y-3">
+              <div className="rounded-xl border border-[#1e293b] p-6 bg-[#111827] space-y-4 shadow-sm">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-[#f1f5f9]">Silver Data Preview</h3>
+                  <h3 className="text-base font-semibold text-[#f8fafc]">Silver Data Preview</h3>
                   {silverPreview && (
-                    <Badge variant="pass">{silverPreview.row_count} Rows Promoted to Silver</Badge>
+                    <Badge variant="pass">{silverPreview.row_count} Rows in Silver</Badge>
                   )}
                 </div>
                 {silverPreview ? (
                   <div className="space-y-3">
-                    <div className="text-xs text-[#94a3b8] flex gap-4">
-                      <span>Columns: {silverPreview.column_count}</span>
-                      <span>Table: {silverPreview.schema}.{selectedTableParam}</span>
+                    <div className="text-xs text-[#94a3b8] flex gap-4 font-mono">
+                      <span>Cols: {silverPreview.column_count}</span>
+                      <span>Target: {silverPreview.schema}.{selectedTableParam}</span>
                     </div>
-                    <div className="overflow-x-auto rounded border border-[#252637] bg-[#0b0c12]">
-                      <table className="w-full text-left text-xs text-[#e5e7eb]">
-                        <thead className="bg-[#13141e] text-[#94a3b8] border-b border-[#252637]">
+                    <div className="overflow-x-auto max-h-[320px] rounded-lg border border-[#1e293b] bg-[#0b0f19] scrollbar-thin">
+                      <table className="w-full text-left text-xs whitespace-nowrap">
+                        <thead className="bg-[#131a29] text-[#94a3b8] border-b border-[#1e293b] sticky top-0">
                           <tr>
                             {silverPreview.columns.map((col) => (
-                              <th key={col.name} className="px-3 py-2 font-semibold font-mono">{col.name}</th>
+                              <th key={col.name} className="px-3 py-2 font-semibold font-mono border-r border-[#1e293b] last:border-r-0">{col.name}</th>
                             ))}
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-[#252637]">
+                        <tbody className="divide-y divide-[#1e293b]">
                           {silverPreview.rows.map((row, rowIndex) => (
-                            <tr key={rowIndex}>
+                            <tr key={rowIndex} className="hover:bg-[#131a29] transition-colors">
                               {silverPreview.columns.map((col) => (
-                                <td key={col.name} className="px-3 py-2 font-mono text-[#cbd5e1]">
+                                <td key={col.name} className="px-3 py-2 font-mono text-[#f8fafc] text-[12px] border-r border-[#1e293b] last:border-r-0">
                                   {row[col.name] === null || row[col.name] === undefined
-                                    ? '—'
+                                    ? <span className="text-[#64748b] italic">NULL</span>
                                     : String(row[col.name])}
                                 </td>
                               ))}
@@ -884,15 +935,15 @@ export function SilverValidationPage() {
                       </table>
                     </div>
                     {silverPreview.rows.length === 0 && (
-                      <p className="text-xs text-[#6b7280]">The promoted relation contains no rows.</p>
+                      <p className="text-xs text-[#94a3b8] italic">The promoted relation contains 0 rows.</p>
                     )}
                   </div>
                 ) : previewError ? (
-                  <div className="rounded-lg border border-[#ef4444]/30 bg-[#450a0a]/30 p-4 text-xs text-[#fca5a5]">
+                  <div className="rounded-xl border border-[#ef4444]/30 bg-[#ef4444]/10 p-4 text-xs text-[#ef4444]">
                     {previewError}
                   </div>
                 ) : (
-                  <div className="rounded-lg border border-[#252637] bg-[#13141e] p-6 text-center text-xs text-[#6b7280] leading-relaxed">
+                  <div className="rounded-xl border border-[#1e293b] bg-[#131a29] p-6 text-center text-xs text-[#94a3b8] leading-relaxed">
                     {executeResult
                       ? `Silver transformation completed for ${executeResult.target.schema}.${selectedTableParam}; loading live preview.`
                       : 'Execute transformation to promote table to Silver.'}
@@ -905,15 +956,10 @@ export function SilverValidationPage() {
       </div>
 
       {/* Footer Navigation Bar */}
-      <div className="border-t border-[#252637] bg-[#0d0e14] px-6 py-4 flex items-center justify-between">
-        <Button
-          variant="ghost"
-          onClick={() => navigate(`/projects/${encodeURIComponent(id || '')}/bronze`)}
-        >
-          Back to Bronze
-        </Button>
+      <div className="border-t border-[#1e293b] bg-[#0b0f19] px-6 py-4 flex items-center justify-end shadow-lg">
         <Button
           variant="primary"
+          size="md"
           rightIcon={<ArrowRight size={16} />}
           disabled={!silverComplete}
           title={silverComplete ? undefined : 'Complete Silver promotion before continuing.'}

@@ -17,6 +17,9 @@ function getPageTitle(pathname: string): string {
   if (routeLabels[pathname]) return routeLabels[pathname];
   if (pathname.match(/^\/projects\/[^/]+\/connect$/)) return 'Data Connectors';
   if (pathname.match(/^\/projects\/[^/]+\/select$/)) return 'Dataset Explorer';
+  if (pathname.match(/^\/projects\/[^/]+\/bronze$/)) return 'Bronze Ingestion';
+  if (pathname.match(/^\/projects\/[^/]+\/silver$/)) return 'Silver Refinement';
+  if (pathname.match(/^\/projects\/[^/]+\/gold$/)) return 'Gold Data Product';
   return 'AURUM';
 }
 
@@ -26,11 +29,11 @@ export function Header() {
 
   return (
     <header
-      className="flex h-14 items-center justify-between border-b border-[#252637] bg-[#0d0e14] px-5"
+      className="flex h-14 items-center justify-between border-b border-[#1e293b] bg-[#0b0f19] px-6 select-none"
       role="banner"
     >
-      <h1 className="text-sm font-semibold text-[#f1f5f9]">{title}</h1>
-      <div className="flex items-center gap-2">
+      <h1 className="text-base font-semibold text-[#f8fafc] tracking-tight">{title}</h1>
+      <div className="flex items-center gap-3">
         <RecentRunsMenu />
         <StatusMenu />
       </div>

@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { CheckCircle2, ArrowRight, Upload, Eye, Database } from 'lucide-react';
+import { CheckCircle2, ArrowRight, Upload, Eye, Database, Server } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -44,18 +44,18 @@ function ConnectorCard({
       aria-pressed={selected}
       title={isPreview ? `${connector.name} — coming soon` : undefined}
       className={cn(
-        'relative w-full rounded-xl border transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[#6366f1]',
+        'relative w-full rounded-xl border transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[#3b82f6] cursor-pointer select-none',
         compact
           ? 'flex min-h-24 flex-col items-center justify-center gap-2 p-3 text-center'
-          : 'flex min-h-20 items-center gap-3 p-4 text-left',
+          : 'flex min-h-20 items-center gap-3.5 p-4 text-left',
         selected
-          ? 'border-[#6366f1] bg-[#6366f1]/10 shadow-[0_0_12px_rgba(99,102,241,0.15)]'
-          : 'border-[#252637] bg-[#13141e] hover:border-[#6366f1]/30 hover:bg-[#1a1b28]',
+          ? 'border-[#3b82f6] bg-[#2563eb]/15 shadow-[0_0_16px_rgba(37,99,235,0.2)]'
+          : 'border-[#1e293b] bg-[#111827] hover:border-[#3b82f6]/40 hover:bg-[#131a29]',
         isPreview && !selected && 'opacity-70',
       )}
     >
       {isPreview && (
-        <span className="absolute right-1.5 top-1.5 rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#6b7280] bg-[#1a1b28] border border-[#252637]">
+        <span className="absolute right-2 top-2 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#64748b] bg-[#131a29] border border-[#273549]">
           Soon
         </span>
       )}
@@ -64,8 +64,8 @@ function ConnectorCard({
           'flex shrink-0 items-center justify-center rounded-lg font-bold transition-colors',
           compact ? 'h-9 w-9 text-xs' : 'h-11 w-11 text-sm',
           selected
-            ? 'bg-[#6366f1] text-white'
-            : 'bg-[#1a1b28] text-[#6366f1] border border-[#252637]',
+            ? 'bg-[#2563eb] text-white shadow-[0_0_12px_rgba(37,99,235,0.4)]'
+            : 'bg-[#131a29] text-[#3b82f6] border border-[#273549]',
         )}
       >
         {connector.icon}
@@ -75,13 +75,13 @@ function ConnectorCard({
           className={cn(
             'block font-semibold',
             compact ? 'text-[11px]' : 'text-sm',
-            selected ? 'text-[#f1f5f9]' : 'text-[#94a3b8]',
+            selected ? 'text-[#f8fafc]' : 'text-[#94a3b8]',
           )}
         >
           {connector.name}
         </span>
         {!compact && (
-          <span className="mt-1 block text-xs leading-5 text-[#6b7280]">
+          <span className="mt-1 block text-xs leading-5 text-[#64748b]">
             {connector.description}
           </span>
         )}
@@ -142,24 +142,24 @@ function CsvPanel({ projectId }: { projectId: string }) {
 
       {/* File upload */}
       <div className="space-y-1.5">
-        <span className="text-xs font-semibold uppercase tracking-widest text-[#6b7280]">
+        <span className="text-xs font-medium text-[#94a3b8]">
           Upload CSV
         </span>
         <label
           htmlFor="csv-upload"
-          className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[#252637] bg-[#1a1b28] py-6 px-4 text-center transition-colors hover:border-[#6366f1]/50 hover:bg-[#252637]/40"
+          className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[#273549] bg-[#131a29] py-8 px-4 text-center transition-colors hover:border-[#3b82f6]/50 hover:bg-[#1f293d]"
         >
-          <Upload size={20} className="text-[#6b7280]" />
-          <span className="text-sm text-[#6b7280]">
+          <Upload size={24} className="text-[#3b82f6]" />
+          <span className="text-sm text-[#94a3b8]">
             {fileName ? (
-              <span className="text-[#6366f1] font-medium">{fileName}</span>
+              <span className="text-[#3b82f6] font-semibold">{fileName}</span>
             ) : (
               <>
-                <span className="text-[#f1f5f9]">Click to upload</span> or drag and drop
+                <span className="text-[#f8fafc] font-medium">Click to upload</span> or drag and drop
               </>
             )}
           </span>
-          <span className="text-[11px] text-[#4b5563]">CSV files only — unsupported layouts are rejected explicitly</span>
+          <span className="text-[11px] text-[#64748b]">CSV files only — unsupported layouts are rejected explicitly</span>
           <input
             ref={fileInputRef}
             id="csv-upload"
@@ -173,10 +173,10 @@ function CsvPanel({ projectId }: { projectId: string }) {
       </div>
 
       {mismatch && (
-        <div className="rounded-lg border border-[#ef4444]/40 bg-[#450a0a]/40 p-4 space-y-2">
-          <p className="text-sm font-semibold text-[#fca5a5]">{mismatch.error}</p>
+        <div className="rounded-xl border border-[#ef4444]/40 bg-[#ef4444]/10 p-4 space-y-2">
+          <p className="text-sm font-semibold text-[#ef4444]">{mismatch.error}</p>
           {mismatch.missing_columns.length > 0 && (
-            <p className="text-xs text-[#fecaca]">
+            <p className="text-xs text-[#fca5a5]">
               Missing columns: {mismatch.missing_columns.join(', ')}
             </p>
           )}
@@ -188,11 +188,11 @@ function CsvPanel({ projectId }: { projectId: string }) {
 
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
-          <label className="text-xs font-semibold uppercase tracking-widest text-[#6b7280]">
+          <label className="text-xs font-medium text-[#94a3b8]">
             Delimiter
           </label>
           <select
-            className="w-full rounded-lg border border-[#252637] bg-[#1a1b28] px-3 py-2.5 text-sm text-[#f1f5f9] focus:border-[#6366f1] focus:ring-1 focus:ring-[#6366f1] focus:outline-none"
+            className="w-full rounded-lg border border-[#273549] bg-[#131a29] px-3.5 py-2.5 text-sm text-[#f8fafc] focus:border-[#3b82f6] focus:outline-none"
             aria-label="Delimiter"
             disabled
           >
@@ -200,11 +200,11 @@ function CsvPanel({ projectId }: { projectId: string }) {
           </select>
         </div>
         <div className="space-y-1.5">
-          <label className="text-xs font-semibold uppercase tracking-widest text-[#6b7280]">
+          <label className="text-xs font-medium text-[#94a3b8]">
             Encoding
           </label>
           <select
-            className="w-full rounded-lg border border-[#252637] bg-[#1a1b28] px-3 py-2.5 text-sm text-[#f1f5f9] focus:border-[#6366f1] focus:ring-1 focus:ring-[#6366f1] focus:outline-none"
+            className="w-full rounded-lg border border-[#273549] bg-[#131a29] px-3.5 py-2.5 text-sm text-[#f8fafc] focus:border-[#3b82f6] focus:outline-none"
             aria-label="Encoding"
             disabled
           >
@@ -214,11 +214,11 @@ function CsvPanel({ projectId }: { projectId: string }) {
       </div>
 
       <label className="flex items-center gap-2.5 cursor-not-allowed opacity-60">
-        <input type="checkbox" defaultChecked disabled className="h-4 w-4 rounded border-[#252637] accent-[#6366f1]" />
+        <input type="checkbox" defaultChecked disabled className="h-4 w-4 rounded border-[#273549] accent-[#3b82f6]" />
         <span className="text-sm text-[#94a3b8]">First row is header</span>
       </label>
 
-      <div className="flex items-center gap-2 pt-2 border-t border-[#252637]">
+      <div className="flex items-center justify-between gap-3 pt-3 border-t border-[#1e293b]">
         <button
           type="button"
           title="Column preview coming soon"
@@ -228,22 +228,22 @@ function CsvPanel({ projectId }: { projectId: string }) {
               icon: 'ℹ️',
             })
           }
-          className="flex items-center gap-1.5 rounded-lg border border-[#252637] bg-[#13141e] px-3 py-1.5 text-xs font-semibold text-[#6b7280] opacity-50 cursor-not-allowed"
+          className="flex items-center gap-1.5 rounded-lg border border-[#273549] bg-[#131a29] px-3.5 py-2 text-xs font-semibold text-[#64748b] opacity-50 cursor-not-allowed"
         >
           <Eye size={14} /> Preview File
         </button>
         <Button
           variant="primary"
-          size="sm"
+          size="md"
           isLoading={uploading}
           disabled={!file || !canRunValidation}
           onClick={handleUpload}
         >
-          Validate &amp; Run
+          Validate &amp; Ingest CSV
         </Button>
       </div>
 
-      <p className="text-xs text-[#6b7280] italic">
+      <p className="text-xs text-[#64748b] italic">
         Your file must match the expected column layout. Mismatched files are rejected — your
         data is never swapped for a sample dataset.
       </p>
@@ -261,7 +261,7 @@ function CsvPanel({ projectId }: { projectId: string }) {
 }
 
 // ────────────────────────────────────────────
-// PostgreSQL Config Panel — user-supplied connection (not app DATABASE_URL)
+// PostgreSQL Config Panel — user-supplied connection
 // ────────────────────────────────────────────
 type ConnectStatus = 'idle' | 'testing' | 'connected' | 'failed';
 
@@ -330,102 +330,126 @@ function PostgresPanel({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-3">
-        <div className="col-span-2">
-          <Input
-            label="Host"
-            value={host}
-            onChange={(e) => setHost(e.target.value)}
-            placeholder="localhost"
-            autoComplete="off"
-          />
-        </div>
-        <Input
-          label="Port"
-          type="number"
-          value={port}
-          onChange={(e) => setPort(e.target.value)}
-          placeholder="e.g. 5432"
-          autoComplete="off"
-        />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <Input
-          label="Database"
-          value={database}
-          onChange={(e) => setDatabase(e.target.value)}
-          placeholder="your_database"
-          autoComplete="off"
-        />
-        <Input
-          label="Username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="postgres"
-          autoComplete="off"
-        />
-      </div>
-      <Input
-        label="Password"
-        type={showPassword ? 'text' : 'password'}
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        placeholder="Enter password"
-        autoComplete="new-password"
-        rightIcon={
-          <button
-            type="button"
-            onClick={() => setShowPassword((v) => !v)}
-            className="text-xs text-[#6b7280] hover:text-[#f1f5f9] transition-colors"
-            aria-label={showPassword ? 'Hide password' : 'Show password'}
-          >
-            {showPassword ? 'Hide' : 'Show'}
-          </button>
-        }
-      />
-
-      <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-[#252637]">
-        <Button variant="secondary" isLoading={status === 'testing'} onClick={handleTest} size="sm">
-          {status === 'connected' ? (
-            <>
-              <CheckCircle2 size={14} className="text-[#22c55e]" />
-              <span className="text-[#22c55e]">Connected</span>
-            </>
-          ) : status === 'testing' ? (
-            'Testing…'
-          ) : (
-            'Test Connection'
-          )}
-        </Button>
-        {status === 'failed' && error && (
-          <span className="text-xs text-[#ef4444]" role="alert">
-            Failed: {error}
-          </span>
-        )}
-      </div>
-
-      <p className="text-xs text-[#6b7280] italic">
-        Connects to YOUR Postgres (host/port you enter). Password is never stored or returned —
-        re-test after an API restart.
-      </p>
-
-      {status === 'connected' && (
-        <div className="rounded-xl border border-[#22c55e]/30 bg-[#22c55e]/10 p-4 space-y-3 mt-4">
-          <div className="flex items-center gap-2 text-sm font-semibold text-[#4ade80]">
-            <CheckCircle2 size={18} />
-            Connection verified.
+    <div className="space-y-5">
+      {status !== 'connected' && (
+        <>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2">
+              <Input
+                label="Host"
+                value={host}
+                onChange={(e) => setHost(e.target.value)}
+                placeholder="localhost"
+                autoComplete="off"
+              />
+            </div>
+            <Input
+              label="Port"
+              type="number"
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+              placeholder="e.g. 5432"
+              autoComplete="off"
+            />
           </div>
-          <p className="text-xs text-[#cbd5e1] leading-relaxed">
-            Continue with this live PostgreSQL session. Passwords are not persisted, so re-test after an API restart or session expiry.
-          </p>
-          <div className="pt-2 flex justify-end">
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              label="Database"
+              value={database}
+              onChange={(e) => setDatabase(e.target.value)}
+              placeholder="your_database"
+              autoComplete="off"
+            />
+            <Input
+              label="Username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="postgres"
+              autoComplete="off"
+            />
+          </div>
+          <Input
+            label="Password"
+            type={showPassword ? 'text' : 'password'}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Enter password"
+            autoComplete="new-password"
+            rightIcon={
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="text-xs font-semibold text-[#3b82f6] hover:text-[#60a5fa] transition-colors cursor-pointer"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </button>
+            }
+          />
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-[#1e293b]">
             <Button
               variant="primary"
+              isLoading={status === 'testing'}
+              onClick={handleTest}
+              size="md"
+            >
+              {status === 'testing' ? 'Testing Connection…' : 'Test & Connect PostgreSQL'}
+            </Button>
+            {status === 'failed' && error && (
+              <span className="text-xs text-[#ef4444]" role="alert">
+                Failed: {error}
+              </span>
+            )}
+          </div>
+
+          <p className="text-xs text-[#64748b] italic">
+            Connects to your target PostgreSQL database. Passwords are never stored or returned —
+            re-test after an API restart.
+          </p>
+        </>
+      )}
+
+      {status === 'connected' && connection && (
+        <div className="rounded-xl border border-[#10b981]/40 bg-[#10b981]/10 p-5 space-y-4 animate-fade-in">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5 text-base font-bold text-[#10b981]">
+              <CheckCircle2 size={20} />
+              Connected to PostgreSQL Database
+            </div>
+            <Badge variant="pass">Active Session</Badge>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 rounded-lg bg-[#0b0f19]/80 p-4 border border-[#1e293b]">
+            <div className="flex items-center gap-3">
+              <Server size={18} className="text-[#3b82f6]" />
+              <div>
+                <span className="block text-[11px] font-semibold text-[#64748b] uppercase tracking-wider">Host / Port</span>
+                <span className="text-sm font-medium text-[#f8fafc]">{host}:{port}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <Database size={18} className="text-[#06b6d4]" />
+              <div>
+                <span className="block text-[11px] font-semibold text-[#64748b] uppercase tracking-wider">Database</span>
+                <span className="text-sm font-medium text-[#f8fafc]">{connection.database}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setStatus('idle')}
+            >
+              Configure Different Connection
+            </Button>
+            <Button
+              variant="primary"
+              size="md"
               rightIcon={<ArrowRight size={16} />}
-              disabled={!connection}
               onClick={() => {
-                if (!connection) return;
                 const params = new URLSearchParams({
                   connectionId: connection.connection_id,
                   database: connection.database,
@@ -433,7 +457,7 @@ function PostgresPanel({ projectId }: { projectId: string }) {
                 navigate(`/projects/${projectId}/select?${params.toString()}`);
               }}
             >
-              Discover Tables
+              Explore Schemas &amp; Tables
             </Button>
           </div>
         </div>
@@ -450,10 +474,10 @@ function PreviewConnectorPanel({ connector }: { connector: Connector }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="secondary">Coming soon</Badge>
-        <span className="text-xs text-[#6b7280]">{connector.name}</span>
+        <span className="text-xs text-[#64748b]">{connector.name}</span>
       </div>
       <p className="text-sm text-[#94a3b8]">{connector.description}</p>
-      <p className="text-sm text-[#6b7280]">
+      <p className="text-sm text-[#64748b]">
         Connection setup for {connector.name} is not available yet. Use CSV upload or
         PostgreSQL for live validation in this build.
       </p>
@@ -471,7 +495,7 @@ export function ConnectorsPage() {
   const requestedSource = searchParams.get('source');
   const [selected, setSelected] = useState<string | null>(() => {
     if (requestedSource === 'csv' || requestedSource === 'postgresql') return requestedSource;
-    return null;
+    return 'postgresql';
   });
 
   const selectedConnector = connectors.find((c) => c.id === selected);
@@ -481,25 +505,25 @@ export function ConnectorsPage() {
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in">
       <ProjectSubNav />
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6 scrollbar-thin sm:px-6 lg:py-8">
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6 scrollbar-thin lg:py-8">
         <div className="mx-auto w-full max-w-6xl">
           <div className="mb-6">
             <div className="flex flex-wrap items-center gap-3">
-              <h2 className="text-xl font-bold text-[#f1f5f9]">Connect Data Sources</h2>
+              <h2 className="text-2xl font-bold text-[#f8fafc] tracking-tight">Connect Data Source</h2>
               <DataSourceBadge mode={displayMode} />
             </div>
-            <p className="mt-1 text-sm text-[#6b7280]">
-              Upload a CSV or connect a live database table for validation.
+            <p className="mt-1 text-sm text-[#94a3b8]">
+              Connect a PostgreSQL database or upload a CSV dataset to initiate Aurum Medallion processing.
             </p>
           </div>
 
           <div className="grid gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
-            <aside className="space-y-5">
+            <aside className="space-y-6">
               <div>
-                <div className="mb-2 flex items-center gap-2">
-                  <Database size={15} className="text-[#6366f1]" />
-                  <h3 className="text-xs font-semibold uppercase tracking-widest text-[#6b7280]">
-                    Available now
+                <div className="mb-3 flex items-center gap-2">
+                  <Database size={15} className="text-[#3b82f6]" />
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-[#64748b]">
+                    Supported Connectors
                   </h3>
                 </div>
                 <div className="space-y-3">
@@ -515,8 +539,8 @@ export function ConnectorsPage() {
               </div>
 
               <div>
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-widest text-[#6b7280]">
-                  Coming soon
+                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#64748b]">
+                  Coming Soon
                 </h3>
                 <div className="grid grid-cols-2 gap-3">
                   {plannedConnectors.map((connector) => (
@@ -532,18 +556,18 @@ export function ConnectorsPage() {
               </div>
             </aside>
 
-            <section className="min-w-0 animate-slide-up rounded-xl border border-[#252637] bg-[#13141e] p-6">
+            <section className="min-w-0 animate-slide-up rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm">
               {selectedConnector ? (
                 <>
-                  <div className="mb-6 flex items-center gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#6366f1] text-sm font-bold text-white">
+                  <div className="mb-6 flex items-center gap-3.5 pb-4 border-b border-[#1e293b]">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#2563eb] text-sm font-bold text-white shadow-[0_0_12px_rgba(37,99,235,0.3)]">
                       {selectedConnector.icon}
                     </div>
                     <div>
-                      <h3 className="text-base font-semibold text-[#f1f5f9]">
+                      <h3 className="text-base font-semibold text-[#f8fafc]">
                         {selectedConnector.name}
                       </h3>
-                      <p className="text-xs text-[#6b7280]">{selectedConnector.description}</p>
+                      <p className="text-xs text-[#94a3b8]">{selectedConnector.description}</p>
                     </div>
                   </div>
 
@@ -557,14 +581,14 @@ export function ConnectorsPage() {
                 </>
               ) : (
                 <div className="flex min-h-[420px] flex-col items-center justify-center text-center">
-                  <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-lg border border-[#252637] bg-[#1a1b28] text-[#6366f1]">
-                    <Database size={22} />
+                  <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl border border-[#273549] bg-[#131a29] text-[#3b82f6]">
+                    <Database size={24} />
                   </div>
-                  <h3 className="text-base font-semibold text-[#f1f5f9]">
-                    Choose a data source
+                  <h3 className="text-base font-semibold text-[#f8fafc]">
+                    Choose a Data Source
                   </h3>
-                  <p className="mt-2 max-w-sm text-sm leading-6 text-[#6b7280]">
-                    Select CSV for file upload or PostgreSQL to test a live database connection.
+                  <p className="mt-2 max-w-sm text-sm leading-6 text-[#94a3b8]">
+                    Select PostgreSQL to establish a live connection or CSV for direct dataset upload.
                   </p>
                 </div>
               )}
