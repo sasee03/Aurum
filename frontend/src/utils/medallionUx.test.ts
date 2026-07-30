@@ -12,6 +12,7 @@ import {
 } from './relationSelection';
 import { bronzeDiscoveryErrorMessage, withConnectorFlowQuery } from './connectorFlow';
 import { ApiError } from './apiErrors';
+import { medallionStepForPathname } from '@/utils/medallionStep';
 
 describe('Dataset relation selection propagation', () => {
   it('preserves schema and table independently in URL-backed state', () => {
@@ -50,6 +51,28 @@ describe('Dataset relation selection propagation', () => {
     expect(path).toBe(
       '/projects/demo/bronze?connectionId=conn_abc&database=aurum&schema=source&table=online_retail_uci',
     );
+  });
+
+  it('preserves project and exact-run context when moving through the workflow', () => {
+    const params = new URLSearchParams({
+      projectId: 'project_abc',
+      connectionId: 'conn_abc',
+      database: 'aurum',
+      schema: 'source',
+      table: 'online_retail_uci',
+      run_id: 'run_exact_123',
+    });
+
+    expect(withConnectorFlowQuery('/projects/demo/gold', params)).toBe(
+      '/projects/demo/gold?projectId=project_abc&connectionId=conn_abc&database=aurum&schema=source&table=online_retail_uci&run_id=run_exact_123',
+    );
+  });
+});
+
+describe('Medallion navigation state', () => {
+  it('identifies the active step from the pathname even with missing query context', () => {
+    expect(medallionStepForPathname('/projects/demo/gold')).toBe('/gold');
+    expect(medallionStepForPathname('/projects/demo/silver')).toBe('/silver');
   });
 });
 

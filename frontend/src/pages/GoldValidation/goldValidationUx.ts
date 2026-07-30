@@ -24,7 +24,7 @@ export function goldWorkflowError(error: unknown, fallback: string): { message: 
     }
     if (detail === 'GOLD_AI_UNAVAILABLE') {
       return {
-        message: 'Gold structured interpretation is unavailable in this local backend runtime.',
+        message: 'Gold interpretation is temporarily unavailable in the connected runtime.',
         detail,
       };
     }

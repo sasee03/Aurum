@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
@@ -38,7 +38,7 @@ import {
   toggleBronzeTable,
 } from '@/utils/bronzeSelection';
 import { readRelationSelection } from '@/utils/relationSelection';
-import { bronzeDiscoveryErrorMessage } from '@/utils/connectorFlow';
+import { bronzeDiscoveryErrorMessage, withConnectorFlowQuery } from '@/utils/connectorFlow';
 
 type BronzeResultItem = VerifyBronzeItemResult | ConnectorBronzeItemResult;
 
@@ -72,10 +72,17 @@ export function BronzeValidationPage() {
   const [searchParams] = useSearchParams();
   const runId = searchParams.get('runId') ?? undefined;
   const connectionId = searchParams.get('connectionId') ?? undefined;
+  const databaseName = searchParams.get('database') ?? undefined;
   const carriedRelation = readRelationSelection(searchParams);
   const carriedSchema = carriedRelation?.schema;
   const carriedTable = carriedRelation?.table;
   const connectorMode = Boolean(connectionId);
+  const sourceDiscoveryContext = [
+    connectionId ?? '',
+    databaseName ?? '',
+    carriedSchema ?? '',
+    carriedTable ?? '',
+  ].join('\u0000');
 
   // Source tables state
   const [loadingTables, setLoadingTables] = useState(true);
@@ -97,6 +104,9 @@ export function BronzeValidationPage() {
   const [activePreviewKey, setActivePreviewKey] = useState<string | null>(null);
   const [bronzePreview, setBronzePreview] = useState<LiveTablePreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const sourceDiscoveryTokenRef = useRef(0);
+  const sourceDiscoveryContextRef = useRef(sourceDiscoveryContext);
+  sourceDiscoveryContextRef.current = sourceDiscoveryContext;
 
   const isBusy = ingesting || verifying;
   const canIngest = canIngestBronzeSelection(
@@ -114,29 +124,46 @@ export function BronzeValidationPage() {
   }, []);
 
   const loadSourceTables = useCallback(async () => {
+    const discoveryToken = ++sourceDiscoveryTokenRef.current;
+    const requestContext = sourceDiscoveryContext;
     setLoadingTables(true);
     setTablesError(null);
     resetStaleResults();
     try {
       if (connectionId) {
         const res = await listPostgresTables(connectionId, carriedSchema);
+        if (
+          discoveryToken !== sourceDiscoveryTokenRef.current ||
+          sourceDiscoveryContextRef.current !== requestContext
+        ) return;
         setSchema(res.schema || carriedSchema || 'public');
         setSourceTables(res.tables || []);
         setSelectedRelations(carriedSchema && carriedTable ? [{ schema: carriedSchema, table: carriedTable }] : []);
       } else {
         const res = await fetchSourceTables();
+        if (
+          discoveryToken !== sourceDiscoveryTokenRef.current ||
+          sourceDiscoveryContextRef.current !== requestContext
+        ) return;
         setSchema(res.schema || 'public');
         setSourceTables(res.tables || []);
         setSelectedRelations(initialBronzeSelection().map((table) => ({ schema: res.schema || 'public', table })));
       }
     } catch (err: any) {
+      if (
+        discoveryToken !== sourceDiscoveryTokenRef.current ||
+        sourceDiscoveryContextRef.current !== requestContext
+      ) return;
       setTablesError(bronzeDiscoveryErrorMessage(err, connectorMode));
       setSourceTables([]);
       setSelectedRelations([]);
     } finally {
-      setLoadingTables(false);
+      if (
+        discoveryToken === sourceDiscoveryTokenRef.current &&
+        sourceDiscoveryContextRef.current === requestContext
+      ) setLoadingTables(false);
     }
-  }, [connectionId, connectorMode, carriedSchema, carriedTable, resetStaleResults]);
+  }, [connectionId, connectorMode, carriedSchema, carriedTable, resetStaleResults, sourceDiscoveryContext]);
 
   useEffect(() => {
     void loadSourceTables();
@@ -677,7 +704,10 @@ export function BronzeValidationPage() {
       </div>
 
       {/* Footer Navigation Bar */}
-      <div className="border-t border-[#1e293b] bg-[#0b0f19] px-6 py-4 flex items-center justify-end shadow-lg">
+      <div
+        data-assistant-safe-zone="bottom-action"
+        className="border-t border-[#1e293b] bg-[#0b0f19] px-6 py-4 flex items-center justify-end shadow-lg"
+      >
         <Button
           variant="primary"
           size="md"
@@ -694,7 +724,10 @@ export function BronzeValidationPage() {
                 sourceTable: source.table,
               });
               if (connectionId) params.set('connectionId', connectionId);
-              navigate(`/projects/${encodeURIComponent(id || '')}/silver?${params.toString()}`);
+              navigate(withConnectorFlowQuery(
+                `/projects/${encodeURIComponent(id || '')}/silver?${params.toString()}`,
+                searchParams,
+              ));
             }
           }}
         >

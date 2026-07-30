@@ -1,6 +1,14 @@
 import { ApiError, calmApiMessage } from './apiErrors';
 
-const CONNECTOR_FLOW_KEYS = ['connectionId', 'database', 'schema', 'table'] as const;
+const CONNECTOR_FLOW_KEYS = [
+  'projectId',
+  'connectionId',
+  'database',
+  'schema',
+  'table',
+  'run_id',
+  'runId',
+] as const;
 
 export function withConnectorFlowQuery(path: string, searchParams: URLSearchParams): string {
   const [basePath, rawQuery = ''] = path.split('?');

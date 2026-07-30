@@ -5,6 +5,7 @@ import { FlowBackButton } from '@/components/common/FlowBackButton';
 import { isPersistedUserRunId, withRunIdQuery } from '@/hooks/useReport';
 import { getFlowBackTarget } from '@/utils/flowNavigation';
 import { withConnectorFlowQuery } from '@/utils/connectorFlow';
+import { medallionStepForPathname } from '@/utils/medallionStep';
 
 interface ProjectSubNavProps {
   runId?: string;
@@ -32,12 +33,7 @@ export function ProjectSubNav({ runId, isRunning }: ProjectSubNavProps = {}) {
     { num: '5', label: 'Gold', path: stepPath(`/projects/${id}/gold`), key: '/gold' },
   ];
 
-  let activeKey = '';
-  if (pathname.includes('/connect')) activeKey = '/connect';
-  else if (pathname.includes('/select') || pathname.includes('/metadata')) activeKey = '/select';
-  else if (pathname.includes('/bronze')) activeKey = '/bronze';
-  else if (pathname.includes('/silver')) activeKey = '/silver';
-  else if (pathname.includes('/gold')) activeKey = '/gold';
+  const activeKey = medallionStepForPathname(pathname);
 
   const isExecuting = isRunning ?? false;
   const back = getFlowBackTarget(pathname, id, activeRunId);

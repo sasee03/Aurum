@@ -38,6 +38,7 @@ import {
   formatSilverRule,
   parseSilverRuleInput,
 } from '@/utils/silverRules';
+import { withConnectorFlowQuery } from '@/utils/connectorFlow';
 
 export function SilverValidationPage() {
   const navigate = useNavigate();
@@ -52,6 +53,12 @@ export function SilverValidationPage() {
       ? { connectionId, source: { schema: sourceSchema, table: sourceTable } }
       : undefined;
   const connectorContextIncomplete = Boolean(connectionId) && !connectorContext;
+  const sourceContextKey = [
+    selectedTableParam ?? '',
+    connectionId ?? '',
+    sourceSchema ?? '',
+    sourceTable ?? '',
+  ].join('\u0000');
 
   // Per-operation async ownership and stale-response protection refs
   const activeTableRef = useRef<string | null>(selectedTableParam);
@@ -156,13 +163,14 @@ export function SilverValidationPage() {
 
     const reqTable = selectedTableParam;
 
+    resetRunState();
+
     async function loadRules() {
       if (!reqTable) return;
       setLoadingRules(true);
       setRulesError(null);
       setSavedRules(null);
       setSavedRuleRevision(null);
-      resetRunState();
 
       try {
         const res = await transformGetRules(reqTable);
@@ -189,7 +197,7 @@ export function SilverValidationPage() {
     return () => {
       mountedRef.current = false;
     };
-  }, [selectedTableParam]);
+  }, [selectedTableParam, sourceContextKey]);
 
   function markRulesChanged() {
     ruleVersionRef.current += 1;
@@ -966,7 +974,10 @@ export function SilverValidationPage() {
           rightIcon={<ArrowRight size={16} />}
           disabled={!silverComplete}
           title={silverComplete ? undefined : 'Complete Silver promotion before continuing.'}
-          onClick={() => navigate(`/projects/${encodeURIComponent(id || '')}/gold?table=${encodeURIComponent(selectedTableParam || '')}`)}
+          onClick={() => navigate(withConnectorFlowQuery(
+            `/projects/${encodeURIComponent(id || '')}/gold?table=${encodeURIComponent(selectedTableParam || '')}`,
+            searchParams,
+          ))}
         >
           Continue to Gold
         </Button>

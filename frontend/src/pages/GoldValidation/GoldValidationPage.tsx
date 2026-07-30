@@ -143,6 +143,13 @@ export function GoldValidationPage() {
   const [searchParams] = useSearchParams();
   const runIdParam = searchParams.get('runId') ?? undefined;
   const tableParam = searchParams.get('table') ?? '';
+  const workflowContextKey = [
+    searchParams.get('connectionId') ?? '',
+    searchParams.get('database') ?? '',
+    searchParams.get('schema') ?? '',
+    tableParam,
+    runIdParam ?? '',
+  ].join('\u0000');
 
   const [silverTables, setSilverTables] = useState<GoldTableItem[]>([]);
   const [selectedSilverTable, setSelectedSilverTable] = useState('');
@@ -167,6 +174,8 @@ export function GoldValidationPage() {
   const [workflowError, setWorkflowError] = useState<string | null>(null);
   const [workflowErrorDetail, setWorkflowErrorDetail] = useState<string | null>(null);
   const reviewSectionRef = useRef<HTMLDivElement | null>(null);
+  const workflowRevisionRef = useRef(0);
+  const workflowContextRef = useRef(workflowContextKey);
 
   const [goldTables, setGoldTables] = useState<string[]>([]);
   const [goldMetadata, setGoldMetadata] = useState<TableMetadata | null>(null);
@@ -209,6 +218,7 @@ export function GoldValidationPage() {
   }, [tableParam]);
 
   function resetGeneratedState() {
+    workflowRevisionRef.current += 1;
     setGeneratedGold(null);
     setReview(null);
     setApproval(null);
@@ -222,7 +232,18 @@ export function GoldValidationPage() {
     setGoldMetadata(null);
     setGoldPreview(null);
     setLiveDataError(null);
+    setGenerating(false);
+    setApproving(false);
+    setExecuting(false);
+    setPromoting(false);
+    setLoadingLiveData(false);
   }
+
+  useEffect(() => {
+    if (workflowContextRef.current === workflowContextKey) return;
+    workflowContextRef.current = workflowContextKey;
+    resetGeneratedState();
+  }, [workflowContextKey]);
 
   useEffect(() => {
     if (!review || !reviewSectionRef.current) return;
@@ -236,10 +257,12 @@ export function GoldValidationPage() {
     if (!selectedSilverTable || !target || !purpose || generating) return;
 
     resetGeneratedState();
+    const workflowRevision = workflowRevisionRef.current;
     setGenerating(true);
     setGenerationPhase('Checking Gold target name...');
     try {
       const nameCheck = await checkGoldName(target);
+      if (workflowRevisionRef.current !== workflowRevision) return;
       if (!nameCheck.is_valid_identifier) {
         setWorkflowError(nameCheck.message);
         setWorkflowErrorDetail(null);
@@ -257,9 +280,11 @@ export function GoldValidationPage() {
         },
         business_requirement: purpose,
       });
+      if (workflowRevisionRef.current !== workflowRevision) return;
       setGeneratedGold(generated);
       setGenerationPhase('Preparing review...');
       const reviewed = await reviewGoldSql(generated.run_id);
+      if (workflowRevisionRef.current !== workflowRevision) return;
       if (
         reviewed.run_id !== generated.run_id ||
         reviewed.review_revision !== generated.review_revision ||
@@ -269,6 +294,7 @@ export function GoldValidationPage() {
       }
       setReview(reviewed);
     } catch (error: unknown) {
+      if (workflowRevisionRef.current !== workflowRevision) return;
       const described = goldWorkflowError(
         error,
         'Failed to generate and review the controlled Gold proposal.',
@@ -276,13 +302,16 @@ export function GoldValidationPage() {
       setWorkflowError(described.message);
       setWorkflowErrorDetail(described.detail ?? null);
     } finally {
-      setGenerating(false);
-      setGenerationPhase(null);
+      if (workflowRevisionRef.current === workflowRevision) {
+        setGenerating(false);
+        setGenerationPhase(null);
+      }
     }
   }
 
   async function handleApprove() {
     if (!review || approval || approving) return;
+    const workflowRevision = workflowRevisionRef.current;
     setApproving(true);
     setWorkflowError(null);
     setWorkflowErrorDetail(null);
@@ -291,18 +320,21 @@ export function GoldValidationPage() {
         review_revision: review.review_revision,
         overwrite: targetExists,
       });
+      if (workflowRevisionRef.current !== workflowRevision) return;
       setApproval(response);
     } catch (error: unknown) {
+      if (workflowRevisionRef.current !== workflowRevision) return;
       const described = goldWorkflowError(error, 'Failed to approve the reviewed Gold proposal.');
       setWorkflowError(described.message);
       setWorkflowErrorDetail(described.detail ?? null);
     } finally {
-      setApproving(false);
+      if (workflowRevisionRef.current === workflowRevision) setApproving(false);
     }
   }
 
   async function handleExecute() {
     if (!review || !approval || execution || executing) return;
+    const workflowRevision = workflowRevisionRef.current;
     setExecuting(true);
     setWorkflowError(null);
     setWorkflowErrorDetail(null);
@@ -310,17 +342,22 @@ export function GoldValidationPage() {
       const response = await executeGoldSql(review.run_id, {
         overwrite: approval.overwrite_authorized,
       });
+      if (workflowRevisionRef.current !== workflowRevision) return;
       setExecution(response);
     } catch (error: unknown) {
+      if (workflowRevisionRef.current !== workflowRevision) return;
       const described = goldWorkflowError(error, 'Failed to execute the approved Gold candidate.');
       setWorkflowError(described.message);
       setWorkflowErrorDetail(described.detail ?? null);
     } finally {
-      setExecuting(false);
+      if (workflowRevisionRef.current === workflowRevision) setExecuting(false);
     }
   }
 
-  async function loadLiveGoldData(promoted: PromoteGoldResponse) {
+  async function loadLiveGoldData(
+    promoted: PromoteGoldResponse,
+    workflowRevision = workflowRevisionRef.current,
+  ) {
     setLoadingLiveData(true);
     setLiveDataError(null);
     try {
@@ -336,6 +373,7 @@ export function GoldValidationPage() {
           promotedRelation.schema,
         ),
       ]);
+      if (workflowRevisionRef.current !== workflowRevision) return;
       const discoveredNames = discovery.tables.map((table) => table.name);
       if (!discoveredNames.includes(promotedRelation.table)) {
         throw new Error('Promoted Gold relation was not present in live discovery.');
@@ -351,6 +389,7 @@ export function GoldValidationPage() {
       setGoldMetadata(metadataTable);
       setGoldPreview(preview);
     } catch (error: unknown) {
+      if (workflowRevisionRef.current !== workflowRevision) return;
       setLiveDataError(
         calmApiMessage(
           error,
@@ -358,25 +397,28 @@ export function GoldValidationPage() {
         ),
       );
     } finally {
-      setLoadingLiveData(false);
+      if (workflowRevisionRef.current === workflowRevision) setLoadingLiveData(false);
     }
   }
 
   async function handlePromote() {
     if (!review || !execution || promotion || promoting) return;
+    const workflowRevision = workflowRevisionRef.current;
     setPromoting(true);
     setWorkflowError(null);
     setWorkflowErrorDetail(null);
     try {
       const response = await promoteGoldSql(review.run_id);
+      if (workflowRevisionRef.current !== workflowRevision) return;
       setPromotion(response);
-      await loadLiveGoldData(response);
+      await loadLiveGoldData(response, workflowRevision);
     } catch (error: unknown) {
+      if (workflowRevisionRef.current !== workflowRevision) return;
       const described = goldWorkflowError(error, 'Failed to promote the executed Gold candidate.');
       setWorkflowError(described.message);
       setWorkflowErrorDetail(described.detail ?? null);
     } finally {
-      setPromoting(false);
+      if (workflowRevisionRef.current === workflowRevision) setPromoting(false);
     }
   }
 
@@ -866,7 +908,11 @@ export function GoldValidationPage() {
                   <summary className="cursor-pointer font-semibold text-[#f8fafc]">Technical and Governance Details</summary>
                   <div className="mt-3 space-y-1">
                     <DetailRow label="Run ID" value={review?.run_id} mono />
+                    <DetailRow label="Review Revision" value={review?.review_revision} mono />
+                    <DetailRow label="Approval Revision" value={approval?.approved_revision} mono />
                     <DetailRow label="Candidate" value={execution?.candidate} mono />
+                    <DetailRow label="Generator / Model" value={generatorModel} mono />
+                    <DetailRow label="Provenance" value={review?.generator_provenance ?? generatedGold?.generator_provenance} mono />
                     <DetailRow label="Final Relation" value={promotion?.target} mono />
                     <DetailRow label="Preview Relation" value={goldPreview ? `${goldPreview.schema}.${goldPreview.table}` : undefined} mono />
                     <DetailRow label="SQL" value={review?.sql_text} mono />

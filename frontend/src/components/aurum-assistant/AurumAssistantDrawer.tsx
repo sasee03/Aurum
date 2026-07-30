@@ -3,6 +3,7 @@ import { Loader2, LockKeyhole, Send, ShieldCheck, Sparkles, X } from "lucide-rea
 import type { AssistantLayer, AssistantPage, AssistantResponse } from "../../lib/aurumAssistantApi";
 import { postAssistantChat } from "../../lib/aurumAssistantApi";
 import { ApiError, API_UNAVAILABLE } from "../../utils/apiErrors";
+import { formatRelationName } from "../../utils/relationPresentation";
 import { AurumAssistantMessage } from "./AurumAssistantMessage";
 import "./aurum-assistant.css";
 
@@ -35,7 +36,10 @@ function formatPageName(page: AssistantPage): string {
 function ContextLabel({ page, layer, runId, selectedTable }: { page: AssistantPage; layer?: AssistantLayer; runId?: string; selectedTable?: string }) {
   if (runId) {
     const layerName = formatLayerName(layer);
-    const displayName = selectedTable || `${formatPageName(page)} context`;
+    const selectedNameParts = selectedTable?.split('.') ?? [];
+    const displayName = selectedTable
+      ? formatRelationName(selectedNameParts[selectedNameParts.length - 1] ?? selectedTable)
+      : `${formatPageName(page)} context`;
     return (
       <div className="flex flex-col gap-1 mt-1">
         <span className="font-semibold text-white">{layerName} run selected</span>

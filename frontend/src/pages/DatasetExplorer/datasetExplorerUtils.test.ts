@@ -18,6 +18,11 @@ describe('datasetExplorerUtils', () => {
       expect(classifyTable('public', 'my_table', 'silver')).toBe('pipeline');
       expect(classifyTable('public', 'my_table', 'gold_candidates')).toBe('pipeline');
     });
+
+    it('keeps session candidate relations out of normal source selection', () => {
+      expect(classifyTable('gold_candidates', 'candidate_1', 'postgresql')).toBe('internal');
+      expect(classifyTable('source', 'orders_candidates', 'postgresql')).toBe('internal');
+    });
   });
 
   describe('formatFriendlyName', () => {
@@ -25,8 +30,8 @@ describe('datasetExplorerUtils', () => {
       expect(formatFriendlyName('online_retail_uci')).toBe('Online Retail UCI');
       expect(formatFriendlyName('src_products')).toBe('Products');
       expect(formatFriendlyName('src_customers')).toBe('Customers');
-      expect(formatFriendlyName('gold_country_revenue')).toBe('Country Revenue — Gold');
-      expect(formatFriendlyName('bronze_orders')).toBe('Orders — Bronze');
+      expect(formatFriendlyName('gold_country_revenue')).toBe('Country Revenue');
+      expect(formatFriendlyName('bronze_orders')).toBe('Orders');
     });
 
     it('preserves acronyms', () => {

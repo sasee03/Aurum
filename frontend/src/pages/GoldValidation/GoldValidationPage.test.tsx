@@ -74,6 +74,16 @@ describe('GoldValidationPage interaction helpers', () => {
     expect(described.detail).toBe('GOLD_UNAVAILABLE');
   });
 
+  it('maps temporary Gold AI runtime failure to a focused product message', () => {
+    const described = goldWorkflowError(
+      new ApiError('GOLD_AI_UNAVAILABLE', 503),
+      'Failed to generate and review the controlled Gold proposal.',
+    );
+
+    expect(described.message).toBe('Gold interpretation is temporarily unavailable in the connected runtime.');
+    expect(described.detail).toBe('GOLD_AI_UNAVAILABLE');
+  });
+
   it('calls the final structured AI Gold generate route', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
@@ -166,7 +176,7 @@ describe('GoldValidationPage interaction helpers', () => {
 
     expect(source).toContain('disabled={!promotion || loadingLiveData}');
     expect(source).toContain('Publish the Gold result to view business-ready data.');
-    expect(source).toContain('await loadLiveGoldData(response);');
+    expect(source).toContain('await loadLiveGoldData(response, workflowRevision);');
   });
 
   it('accepts preview only when it matches the exact promoted relation', () => {
@@ -268,5 +278,22 @@ describe('GoldValidationPage interaction helpers', () => {
 
     expect(resetCall).toBeGreaterThan(generateStart);
     expect(resetCall).toBeLessThan(firstAwait);
+  });
+
+  it('invalidates an in-flight workflow when the source, requirement, or route context changes', () => {
+    const source = readFileSync(new URL('./GoldValidationPage.tsx', import.meta.url), 'utf8');
+
+    expect(source).toContain('workflowRevisionRef.current += 1;');
+    expect(source).toContain('if (workflowRevisionRef.current !== workflowRevision) return;');
+    expect(source).toContain('workflowContextKey');
+  });
+
+  it('keeps Gold provenance and revisions in secondary technical details', () => {
+    const source = readFileSync(new URL('./GoldValidationPage.tsx', import.meta.url), 'utf8');
+
+    expect(source).toContain('Review Revision');
+    expect(source).toContain('Approval Revision');
+    expect(source).toContain('Generator / Model');
+    expect(source).toContain('Provenance');
   });
 });

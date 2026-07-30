@@ -24,6 +24,10 @@ import {
   type PostgresTableEntry,
 } from '@/lib/aurumApi';
 import { classifyTable, formatFriendlyName } from './datasetExplorerUtils';
+import {
+  isCurrentDatasetDiscovery,
+  reconcileDatasetSelection,
+} from './datasetExplorerState';
 
 interface DbTable {
   id: string;
@@ -233,18 +237,31 @@ export function DatasetExplorerPage() {
   const [preview, setPreview] = useState<TablePreview | null>(null);
   const [previewingTableId, setPreviewingTableId] = useState<string | null>(null);
   const [showInternal, setShowInternal] = useState(false);
+  const discoveryContextKey = [connectionId ?? '', databaseName ?? ''].join('\u0000');
+  const discoveryRequestRef = useRef(0);
+  const discoveryContextRef = useRef(discoveryContextKey);
+  discoveryContextRef.current = discoveryContextKey;
 
   const loadData = useCallback(async () => {
+    const requestId = ++discoveryRequestRef.current;
+    const requestContext = discoveryContextKey;
     setLoading(true);
     setError(null);
     setAllSchemas([]);
     setAllTables([]);
+    setSelectedIds(new Set());
+    setPreview(null);
+    setPreviewingTableId(null);
     try {
       if (connectionId) {
         const schemaRes = await listPostgresSchemas(connectionId);
         const tableResponses = await Promise.all(
           schemaRes.schemas.map((schema) => listPostgresTables(connectionId, schema)),
         );
+        if (
+          !isCurrentDatasetDiscovery(requestId, discoveryRequestRef.current) ||
+          discoveryContextRef.current !== requestContext
+        ) return;
         const postgresTables = tableResponses.flatMap((response) => response.tables);
         const formattedTables = postgresTables.map((table: PostgresTableEntry): DbTable => ({
           id: relationSelectionKey(table.schema, table.table),
@@ -266,6 +283,10 @@ export function DatasetExplorerPage() {
       }
 
       const res = await getMetadataTables();
+      if (
+        !isCurrentDatasetDiscovery(requestId, discoveryRequestRef.current) ||
+        discoveryContextRef.current !== requestContext
+      ) return;
       const tables = res.tables || [];
       
       const schemaMap = new Map<string, DbTable[]>();
@@ -298,6 +319,10 @@ export function DatasetExplorerPage() {
       setAllSchemas(schemas);
       setAllTables(formattedTables);
     } catch (err) {
+      if (
+        !isCurrentDatasetDiscovery(requestId, discoveryRequestRef.current) ||
+        discoveryContextRef.current !== requestContext
+      ) return;
       setAllSchemas([]);
       setAllTables([]);
       setError(
@@ -309,9 +334,14 @@ export function DatasetExplorerPage() {
         ),
       );
     } finally {
-      setLoading(false);
+      if (
+        isCurrentDatasetDiscovery(requestId, discoveryRequestRef.current) &&
+        discoveryContextRef.current === requestContext
+      ) {
+        setLoading(false);
+      }
     }
-  }, [connectionId, connectionSession]);
+  }, [connectionId, discoveryContextKey]);
 
   useEffect(() => {
     void loadData();
@@ -321,8 +351,9 @@ export function DatasetExplorerPage() {
 
   useEffect(() => {
     setSelectedIds(new Set());
+    setPreview(null);
     hasAutoSelectedRef.current = false;
-  }, [connectionId, id]);
+  }, [connectionId, databaseName, id]);
 
   useEffect(() => {
     if (connectionSession && !hasAutoSelectedRef.current && allTables.length > 0) {
@@ -342,20 +373,21 @@ export function DatasetExplorerPage() {
   }, [connectionId, connectionSession, allTables]);
 
   useEffect(() => {
-    if (!allTables.length) return;
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      let changed = false;
-      for (const id of next) {
-        const table = allTables.find((t) => t.id === id);
-        if (!table || classifyTable(table.schema, table.name, table.owner) === 'internal') {
-          next.delete(id);
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [allTables]);
+    const reconciled = reconcileDatasetSelection(selectedIds, allTables);
+    if (reconciled.size === selectedIds.size) return;
+    setSelectedIds(reconciled);
+    setPreview(null);
+  }, [allTables, selectedIds]);
+
+  useEffect(() => {
+    if (!requestedSchema || !requestedTable) return;
+    const requestedId = relationSelectionKey(requestedSchema, requestedTable);
+    if (selectedIds.size === 1 && selectedIds.has(requestedId)) return;
+    if (selectedIds.size > 0) {
+      setSelectedIds(new Set());
+      setPreview(null);
+    }
+  }, [requestedSchema, requestedTable, selectedIds]);
 
   const filteredTables = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -404,31 +436,18 @@ export function DatasetExplorerPage() {
     if (!table) return;
     if (classifyTable(table.schema, table.name, table.owner) === 'internal') return;
     
+    setPreview(null);
     setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
+      const next = prev.has(id) ? new Set<string>() : new Set([id]);
       persistSingleSelection(next);
       return next;
     });
   }
 
-  function selectAll() {
-    const next = new Set(
-      filteredTables
-        .filter((t) => classifyTable(t.schema, t.name, t.owner) !== 'internal')
-        .map((t) => t.id)
-    );
-    setSelectedIds(next);
-    persistSingleSelection(next);
-  }
-
-  function deselectAll() {
+  function clearSelection() {
     const next = new Set<string>();
     setSelectedIds(next);
+    setPreview(null);
     persistSingleSelection(next);
   }
 
@@ -447,12 +466,14 @@ export function DatasetExplorerPage() {
   }
 
   async function handlePreview(table: DbTable) {
+    const discoveryRequest = discoveryRequestRef.current;
     try {
       setPreviewingTableId(table.id);
       toast.loading(`Fetching preview for ${table.name}...`, { id: 'preview' });
       let nextPreview: TablePreview | null = null;
       if (connectionId) {
         const tablePreview = await previewPostgresTable(connectionId, table.schema, table.name);
+        if (!isCurrentDatasetDiscovery(discoveryRequest, discoveryRequestRef.current)) return;
         nextPreview = {
           schema: tablePreview.schema,
           table: tablePreview.table,
@@ -474,6 +495,7 @@ export function DatasetExplorerPage() {
         );
       } else {
         const tablePreview = await getLiveTablePreview(table.name, table.schema);
+        if (!isCurrentDatasetDiscovery(discoveryRequest, discoveryRequestRef.current)) return;
         nextPreview = {
           schema: tablePreview.schema,
           table: tablePreview.table,
@@ -490,9 +512,12 @@ export function DatasetExplorerPage() {
         toast.error('No preview metadata returned', { id: 'preview' });
       }
     } catch {
+      if (!isCurrentDatasetDiscovery(discoveryRequest, discoveryRequestRef.current)) return;
       toast.error('Failed to load table preview', { id: 'preview' });
     } finally {
-      setPreviewingTableId(null);
+      if (isCurrentDatasetDiscovery(discoveryRequest, discoveryRequestRef.current)) {
+        setPreviewingTableId(null);
+      }
     }
   }
 
@@ -549,20 +574,6 @@ export function DatasetExplorerPage() {
               placeholder="Search tables by name or schema..."
               className="flex-1"
             />
-            <button
-              onClick={selectAll}
-              className="text-xs font-semibold text-[#3b82f6] hover:text-[#60a5fa] transition-colors whitespace-nowrap focus:outline-none cursor-pointer"
-              aria-label="Select all tables"
-            >
-              Select All
-            </button>
-            <button
-              onClick={deselectAll}
-              className="text-xs font-semibold text-[#64748b] hover:text-[#94a3b8] transition-colors whitespace-nowrap focus:outline-none cursor-pointer"
-              aria-label="Deselect all tables"
-            >
-              Deselect All
-            </button>
           </div>
 
           <div
@@ -698,27 +709,33 @@ export function DatasetExplorerPage() {
                 <div className="max-w-xl rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm">
                   <AlertTriangle size={28} className="mx-auto mb-4 text-[#f59e0b]" />
                   <h3 className="text-base font-semibold text-[#f8fafc]">
-                    {connectionId
-                      ? 'No tables found in this PostgreSQL connection'
-                      : 'No tables found in public schema'}
+                    No source datasets found
                   </h3>
                   <p className="mt-3 text-sm leading-relaxed text-[#94a3b8]">
-                    {connectionId
-                      ? 'This connection is live, but Aurum could not find visible tables in the schemas it can access.'
-                      : 'To explore a live table, connect to your database via Connectors or select a database with active tables.'}
+                    Aurum did not receive any eligible source relations for this connection.
                   </p>
+                  {databaseName && (
+                    <p className="mt-2 text-[11px] font-mono text-[#64748b]">
+                      Context: {databaseName}{requestedSchema ? ` / ${requestedSchema}` : ''}
+                    </p>
+                  )}
                   <div className="mt-5 flex flex-wrap justify-center gap-3">
                     <Button
-                      variant="primary"
+                      variant="secondary"
                       size="sm"
-                      onClick={() => navigate(`/projects/${id}/connect?source=postgresql`)}
+                      onClick={loadData}
                     >
-                      Open Connectors
+                      Refresh
                     </Button>
-                    <Button variant="secondary" size="sm" onClick={() => navigate('/history')}>
-                      Run History
-                    </Button>
+                    {connectionId && (
+                      <Button variant="secondary" size="sm" onClick={() => navigate(`/projects/${id}/connect?source=postgresql`)}>
+                        Back to Connect
+                      </Button>
+                    )}
                   </div>
+                  <p className="mt-5 text-[11px] text-[#64748b] italic">
+                    Generated and internal relations are available under Advanced.
+                  </p>
                 </div>
               </div>
             ) : (
@@ -734,37 +751,28 @@ export function DatasetExplorerPage() {
             )}
           </div>
 
-          {selectedIds.size > 0 && (
+          {selectedRelation && (
             <div className="border-t border-[#1e293b] bg-[#111827] px-6 py-3.5 flex items-center justify-between gap-4 shadow-lg animate-slide-up sticky bottom-0 z-20">
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-semibold text-[#94a3b8] uppercase tracking-wider mb-1">
-                  {selectedIds.size === 1 ? 'Selected dataset' : `${selectedIds.size} datasets selected`}
+                  Selected dataset
                 </p>
                 <div className="flex flex-col gap-1">
-                  {selectedTables.slice(0, 2).map((t) => (
-                    <div key={t.id} className="flex flex-col">
-                      <span className="text-sm font-semibold text-[#f8fafc] truncate">
-                        {formatFriendlyName(t.name)}
-                      </span>
-                      <span className="text-[11px] text-[#64748b] font-mono truncate" title={`${t.schema}.${t.name}`}>
-                        {t.schema}.{t.name}
-                      </span>
-                    </div>
-                  ))}
-                  {selectedTables.length > 2 && (
-                    <span className="text-xs text-[#64748b] mt-1">
-                      +{selectedTables.length - 2} more
-                    </span>
-                  )}
+                  <span className="text-sm font-semibold text-[#f8fafc] truncate">
+                    {formatFriendlyName(selectedRelation.name)}
+                  </span>
+                  <span className="text-[11px] text-[#64748b] font-mono truncate" title={`${selectedRelation.schema}.${selectedRelation.name}`}>
+                    {selectedRelation.schema}.{selectedRelation.name}
+                  </span>
                 </div>
               </div>
 
               <div className="flex items-center gap-3 flex-shrink-0">
                 <button
-                  onClick={() => setSelectedIds(new Set())}
+                  onClick={clearSelection}
                   className="text-xs text-[#94a3b8] hover:text-[#f8fafc] transition-colors font-medium cursor-pointer px-3 py-2"
                 >
-                  {selectedIds.size === 1 ? 'Clear' : 'Clear all'}
+                  Clear
                 </button>
                 <Button
                   variant="primary"
@@ -786,7 +794,7 @@ export function DatasetExplorerPage() {
                   }}
                   className="px-5 py-2 h-auto text-sm"
                 >
-                  {selectedIds.size === 1 ? 'Use this dataset' : 'Use selected datasets'}
+                  Use this dataset
                 </Button>
               </div>
             </div>

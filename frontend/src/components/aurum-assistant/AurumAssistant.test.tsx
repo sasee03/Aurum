@@ -264,12 +264,13 @@ describe('Aurum Assistant Integration & Component Tests', () => {
         page="bronze"
         layer="bronze"
         runId="run_abcd1234"
-        selectedTable="Online Retail UCI"
+        selectedTable="online_retail_uci"
       />,
     );
 
     expect(markup).toContain('Bronze run selected');
     expect(markup).toContain('Online Retail UCI');
+    expect(markup).not.toContain('online_retail_uci');
     expect(markup).toContain('run_abcd1234');
     expect(markup).not.toContain('Bronze / Bronze / No Run Context');
   });
@@ -301,6 +302,18 @@ describe('Aurum Assistant Integration & Component Tests', () => {
 
     expect(markup).toContain('Bronze run is selected.');
     expect(markup).not.toContain('Evidence');
+  });
+
+  it('renders the approved insufficient-information fallback for an exact run', () => {
+    const response: AssistantResponse = {
+      answer: '',
+      grounded: false,
+      status: 'insufficient_information',
+    };
+
+    const markup = renderToStaticMarkup(<AurumAssistantResponseRenderer response={response} />);
+
+    expect(markup).toContain('I do not have enough information in the selected Aurum run to answer that.');
   });
 
   it('16. Assistant 503 responses retain status for service-failure mapping', async () => {
@@ -336,10 +349,12 @@ describe('Aurum Assistant Integration & Component Tests', () => {
     expect(css).toContain('pointer-events: auto;');
   });
 
-  it('19. Silver and Gold workflow footers reserve Assistant safe space', () => {
+  it('19. Bronze, Silver, and Gold workflow footers reserve Assistant safe space', () => {
+    const bronze = readFileSync(new URL('../../pages/BronzeValidation/BronzeValidationPage.tsx', import.meta.url), 'utf8');
     const silver = readFileSync(new URL('../../pages/SilverValidation/SilverValidationPage.tsx', import.meta.url), 'utf8');
     const gold = readFileSync(new URL('../../pages/GoldValidation/GoldValidationPage.tsx', import.meta.url), 'utf8');
 
+    expect(bronze).toContain('data-assistant-safe-zone="bottom-action"');
     expect(silver).toContain('data-assistant-safe-zone="bottom-action"');
     expect(gold).toContain('data-assistant-safe-zone="bottom-action"');
   });

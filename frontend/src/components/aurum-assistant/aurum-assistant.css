@@ -481,7 +481,7 @@
 @media (max-width: 540px) {
   .aa-fab {
     right: 14px;
-    bottom: 24px;
+    bottom: calc(var(--aa-safe-bottom, 0px) + 14px);
   }
 
   .aa-message--user,
