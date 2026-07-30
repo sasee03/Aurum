@@ -11,7 +11,7 @@ import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { useAppMode } from '@/context/AppModeContext';
 import {
   CsvUploadError,
-  sourceConnect,
+  testPostgresConnection,
   uploadDatasetCsv,
   type CsvUploadMismatch,
 } from '@/lib/aurumApi';
@@ -276,6 +276,7 @@ function PostgresPanel({ projectId }: { projectId: string }) {
 
   const [status, setStatus] = useState<ConnectStatus>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [connectionId, setConnectionId] = useState<string | null>(null);
 
   async function handleTest() {
     if (!host.trim() || !port.trim() || !database.trim() || !username.trim()) {
@@ -292,25 +293,29 @@ function PostgresPanel({ projectId }: { projectId: string }) {
     setPassword('');
     setStatus('testing');
     setError(null);
+    setConnectionId(null);
 
     try {
-      const res = await sourceConnect({
+      const res = await testPostgresConnection({
         host: host.trim(),
         port: portNum,
         database: database.trim(),
-        user: username.trim(),
+        username: username.trim(),
         password: submittedPassword,
+        project_id: projectId,
       });
 
       if (!res.connected) {
         setStatus('failed');
-        setError(res.message || 'Connection failed.');
-        toast.error(res.message || 'Connection failed.');
+        const msg = 'error' in res ? res.error : 'Connection failed.';
+        setError(msg);
+        toast.error(msg);
         return;
       }
 
+      setConnectionId(res.connection_id);
       setStatus('connected');
-      toast.success('Connection verified.');
+      toast.success(`Connection verified (${res.database}).`);
     } catch (err: any) {
       setStatus('failed');
       let msg = 'Connection could not be verified due to an unexpected server error.';
@@ -405,20 +410,27 @@ function PostgresPanel({ projectId }: { projectId: string }) {
         re-test after an API restart.
       </p>
 
-      {status === 'connected' && (
+      {status === 'connected' && connectionId && (
         <div className="rounded-xl border border-[#22c55e]/30 bg-[#22c55e]/10 p-4 space-y-3 mt-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-[#4ade80]">
             <CheckCircle2 size={18} />
             Connection verified.
           </div>
           <p className="text-xs text-[#cbd5e1] leading-relaxed">
-            For this demo, Bronze uses Aurum&apos;s configured Source environment. External database handoff will be supported separately.
+            Connected to <span className="font-mono font-semibold text-[#f1f5f9]">{database}</span>.
+            Click below to discover available tables.
           </p>
           <div className="pt-2 flex justify-end">
             <Button
               variant="primary"
               rightIcon={<ArrowRight size={16} />}
-              onClick={() => navigate(`/projects/${projectId}/select`)}
+              onClick={() => {
+                const params = new URLSearchParams();
+                params.set('connectionId', connectionId);
+                params.set('database', database.trim());
+                params.set('session', Date.now().toString());
+                navigate(`/projects/${projectId}/select?${params.toString()}`);
+              }}
             >
               Discover Tables
             </Button>
