@@ -1,6 +1,6 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ChevronRight, ChevronDown, ArrowRight, CheckSquare, Square, Eye, AlertTriangle } from 'lucide-react';
+import { ChevronRight, ChevronDown, ArrowRight, CheckSquare, Square, Eye, AlertTriangle, Database } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
 import { Dialog } from '@/components/ui/Dialog';
@@ -133,12 +133,16 @@ function TableRowCard({
   previewing,
   onToggle,
   onPreview,
+  onUse,
+  isInternal,
 }: {
   table: DbTable;
   selected: boolean;
   previewing: boolean;
   onToggle: () => void;
   onPreview: () => void;
+  onUse?: () => void;
+  isInternal?: boolean;
 }) {
   return (
     <div
@@ -146,15 +150,17 @@ function TableRowCard({
         'flex items-center gap-4 border-b border-[#1e293b] px-5 py-3.5 transition-all duration-150 cursor-pointer group select-none',
         selected ? 'bg-[#2563eb]/10' : 'hover:bg-[#131a29]'
       )}
-      onClick={onToggle}
+      onClick={isInternal ? undefined : onToggle}
       role="row"
       aria-selected={selected}
     >
-      <div className="flex-shrink-0">
-        {selected ? (
-          <CheckSquare size={18} className="text-[#3b82f6]" />
-        ) : (
-          <Square size={18} className="text-[#64748b] group-hover:text-[#94a3b8]" />
+      <div className="flex-shrink-0 w-4 h-4 flex items-center justify-center">
+        {!isInternal && (
+          selected ? (
+            <CheckSquare size={18} className="text-[#3b82f6]" />
+          ) : (
+            <Square size={18} className="text-[#64748b] group-hover:text-[#94a3b8]" />
+          )
         )}
       </div>
 
@@ -166,14 +172,11 @@ function TableRowCard({
         </div>
         <p className="text-[11px] text-[#64748b] mt-0.5">
           <span className="font-mono text-[#06b6d4]">{table.schema}.{table.name}</span>
-          {' · '}
-          {table.owner !== 'postgresql' ? table.owner : ''}
-          {table.owner !== 'postgresql' ? ' · ' : ''}
-          {table.lastUpdated}
+          {table.owner !== 'postgresql' ? ` \u00B7 ${table.owner}` : ''}
         </p>
       </div>
 
-      <div className="hidden sm:flex items-center gap-6 text-right flex-shrink-0">
+      <div className="flex gap-6 text-center shrink-0">
         <div>
           <p className="text-xs font-semibold text-[#f8fafc]">{table.rows}</p>
           <p className="text-[10px] text-[#64748b]">rows</p>
@@ -182,13 +185,9 @@ function TableRowCard({
           <p className="text-xs font-semibold text-[#f8fafc]">{table.columns > 0 ? table.columns : '—'}</p>
           <p className="text-[10px] text-[#64748b]">cols</p>
         </div>
-        <div>
-          <p className="text-xs font-semibold text-[#f8fafc]">{table.size}</p>
-          <p className="text-[10px] text-[#64748b]">size</p>
-        </div>
       </div>
 
-      <div className="flex-shrink-0 ml-4">
+      <div className="flex-shrink-0 ml-4 flex items-center gap-2">
         <Button 
           variant="ghost" 
           size="sm" 
@@ -198,6 +197,16 @@ function TableRowCard({
         >
           {previewing ? 'Loading' : 'Preview'}
         </Button>
+        {!isInternal && onUse && (
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={(e) => { e.stopPropagation(); onUse(); }}
+            className="text-xs"
+          >
+            Use this dataset
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -308,21 +317,45 @@ export function DatasetExplorerPage() {
     void loadData();
   }, [loadData]);
 
+  const hasAutoSelectedRef = useRef(false);
+
   useEffect(() => {
-    if (!requestedSchema || !requestedTable || allTables.length === 0) return;
-    const requestedId = relationSelectionKey(
-      requestedSchema,
-      requestedTable,
-    );
-    if (!allTables.some((table) => table.id === requestedId)) return;
-    setSelectedIds((current) =>
-      current.size === 0 ? new Set([requestedId]) : current,
-    );
-  }, [
-    allTables,
-    requestedSchema,
-    requestedTable,
-  ]);
+    setSelectedIds(new Set());
+    hasAutoSelectedRef.current = false;
+  }, [connectionId, id]);
+
+  useEffect(() => {
+    if (connectionSession && !hasAutoSelectedRef.current && allTables.length > 0) {
+      const parts = connectionSession.split('.');
+      if (parts.length === 2) {
+        const [schema, name] = parts;
+        const target = allTables.find((t) => t.schema === schema && t.name === name);
+        if (target) {
+          const classification = classifyTable(target.schema, target.name, target.owner);
+          if (classification !== 'internal') {
+            setSelectedIds(new Set([target.id]));
+            hasAutoSelectedRef.current = true;
+          }
+        }
+      }
+    }
+  }, [connectionId, connectionSession, allTables]);
+
+  useEffect(() => {
+    if (!allTables.length) return;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const id of next) {
+        const table = allTables.find((t) => t.id === id);
+        if (!table || classifyTable(table.schema, table.name, table.owner) === 'internal') {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [allTables]);
 
   const filteredTables = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -340,6 +373,16 @@ export function DatasetExplorerPage() {
   const pipelineTables = useMemo(() => filteredTables.filter((t) => classifyTable(t.schema, t.name, t.owner) === 'pipeline'), [filteredTables]);
   const internalTables = useMemo(() => filteredTables.filter((t) => classifyTable(t.schema, t.name, t.owner) === 'internal'), [filteredTables]);
 
+  const visibleSchemas = useMemo(() => {
+    return allSchemas.map(s => {
+      const filteredTables = s.tables.filter(t => {
+        const isInternal = classifyTable(t.schema, t.name, t.owner) === 'internal';
+        return showInternal || !isInternal;
+      });
+      return { ...s, tables: filteredTables };
+    }).filter(s => s.tables.length > 0);
+  }, [allSchemas, showInternal]);
+
   function persistSingleSelection(nextSelection: Set<string>) {
     const nextParams = new URLSearchParams(searchParams);
     if (nextSelection.size === 1) {
@@ -356,16 +399,29 @@ export function DatasetExplorerPage() {
     setSearchParams(nextParams, { replace: true });
   }
 
-  function toggleTable(tableId: string) {
-    const next = new Set(selectedIds);
-    if (next.has(tableId)) next.delete(tableId);
-    else next.add(tableId);
-    setSelectedIds(next);
-    persistSingleSelection(next);
+  function toggleTable(id: string) {
+    const table = allTables.find((t) => t.id === id);
+    if (!table) return;
+    if (classifyTable(table.schema, table.name, table.owner) === 'internal') return;
+    
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      persistSingleSelection(next);
+      return next;
+    });
   }
 
   function selectAll() {
-    const next = new Set(filteredTables.map((t) => t.id));
+    const next = new Set(
+      filteredTables
+        .filter((t) => classifyTable(t.schema, t.name, t.owner) !== 'internal')
+        .map((t) => t.id)
+    );
     setSelectedIds(next);
     persistSingleSelection(next);
   }
@@ -374,6 +430,20 @@ export function DatasetExplorerPage() {
     const next = new Set<string>();
     setSelectedIds(next);
     persistSingleSelection(next);
+  }
+
+  function handleUseTable(table: DbTable) {
+    const metadataPath = withRunIdQuery(`/projects/${id}/metadata`, runId);
+    const connectorPath = withConnectorFlowQuery(metadataPath, searchParams);
+    navigate(
+      withRelationSelectionQuery(
+        connectorPath,
+        {
+          schema: table.schema,
+          table: table.name,
+        },
+      ),
+    );
   }
 
   async function handlePreview(table: DbTable) {
@@ -454,7 +524,7 @@ export function DatasetExplorerPage() {
               ? `${databaseName} / schemas`
               : 'LIVE SCHEMAS'}
           </p>
-          <SchemaTree schemas={allSchemas} selectedIds={selectedIds} onToggle={toggleTable} />
+          <SchemaTree schemas={visibleSchemas} selectedIds={selectedIds} onToggle={toggleTable} />
         </aside>
 
         <div className="flex flex-1 flex-col overflow-hidden bg-[#0b0f19]">
@@ -532,7 +602,7 @@ export function DatasetExplorerPage() {
               </div>
             ) : hasResults ? (
               <div className="pb-10">
-                {sourceTables.length > 0 && (
+                {sourceTables.length > 0 ? (
                   <div className="mb-6">
                     <div className="bg-[#111827] px-5 py-2 border-b border-t border-[#1e293b] sticky top-0 z-10 shadow-sm">
                       <h3 className="text-xs font-bold uppercase tracking-wider text-[#94a3b8]">Source Data</h3>
@@ -545,8 +615,37 @@ export function DatasetExplorerPage() {
                         previewing={previewingTableId === table.id}
                         onToggle={() => toggleTable(table.id)}
                         onPreview={() => handlePreview(table)}
+                        onUse={() => handleUseTable(table)}
                       />
                     ))}
+                  </div>
+                ) : (
+                  <div className="mb-6 flex flex-col items-center justify-center rounded-xl border border-[#1e293b] bg-[#111827] px-6 py-12 text-center">
+                    <Database size={24} className="mx-auto mb-3 text-[#64748b]" />
+                    <h3 className="text-sm font-semibold text-[#f8fafc]">No source datasets found</h3>
+                    <p className="mt-2 max-w-md text-xs leading-relaxed text-[#94a3b8]">
+                      Aurum did not receive any eligible source relations for this connection.
+                    </p>
+                    {connectionId && databaseName && (
+                      <p className="mt-1 max-w-md text-[11px] font-mono text-[#64748b]">
+                        Context: {databaseName}{requestedSchema ? ` / ${requestedSchema}` : ''}
+                      </p>
+                    )}
+                    <div className="mt-4 flex gap-3">
+                      <Button variant="secondary" size="sm" onClick={loadData}>
+                        Refresh
+                      </Button>
+                      {connectionId && (
+                        <Button variant="secondary" size="sm" onClick={() => navigate(`/projects/${id}/connect?source=postgresql`)}>
+                          Back to Connect
+                        </Button>
+                      )}
+                    </div>
+                    {pipelineTables.length > 0 || internalTables.length > 0 ? (
+                      <p className="mt-5 text-[11px] text-[#64748b] italic">
+                        Generated and internal relations are available under Advanced or Pipeline Outputs.
+                      </p>
+                    ) : null}
                   </div>
                 )}
                 
@@ -563,6 +662,7 @@ export function DatasetExplorerPage() {
                         previewing={previewingTableId === table.id}
                         onToggle={() => toggleTable(table.id)}
                         onPreview={() => handlePreview(table)}
+                        onUse={() => handleUseTable(table)}
                       />
                     ))}
                   </div>
@@ -587,6 +687,7 @@ export function DatasetExplorerPage() {
                         previewing={previewingTableId === table.id}
                         onToggle={() => toggleTable(table.id)}
                         onPreview={() => handlePreview(table)}
+                        isInternal={true}
                       />
                     ))}
                   </div>
@@ -634,50 +735,60 @@ export function DatasetExplorerPage() {
           </div>
 
           {selectedIds.size > 0 && (
-            <div className="border-t border-[#1e293b] bg-[#111827] px-6 py-3.5 flex items-center justify-between gap-4 animate-slide-up shadow-lg">
-              <div className="flex items-center gap-2.5 flex-wrap min-w-0">
-                <span className="text-sm font-semibold text-[#f8fafc] whitespace-nowrap">
-                  {selectedIds.size} table{selectedIds.size !== 1 ? 's' : ''} selected
-                </span>
-                <span className="text-[#64748b]">·</span>
-                <div className="flex flex-wrap gap-1.5">
-                  {selectedTables.slice(0, 4).map((t) => (
-                    <span
-                      key={t.id}
-                      className="text-xs text-[#3b82f6] font-mono font-medium bg-[#2563eb]/10 px-2 py-0.5 rounded border border-[#3b82f6]/20"
-                    >
-                      {t.schema}.{t.name}
-                    </span>
+            <div className="border-t border-[#1e293b] bg-[#111827] px-6 py-3.5 flex items-center justify-between gap-4 shadow-lg animate-slide-up sticky bottom-0 z-20">
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-[#94a3b8] uppercase tracking-wider mb-1">
+                  {selectedIds.size === 1 ? 'Selected dataset' : `${selectedIds.size} datasets selected`}
+                </p>
+                <div className="flex flex-col gap-1">
+                  {selectedTables.slice(0, 2).map((t) => (
+                    <div key={t.id} className="flex flex-col">
+                      <span className="text-sm font-semibold text-[#f8fafc] truncate">
+                        {formatFriendlyName(t.name)}
+                      </span>
+                      <span className="text-[11px] text-[#64748b] font-mono truncate" title={`${t.schema}.${t.name}`}>
+                        {t.schema}.{t.name}
+                      </span>
+                    </div>
                   ))}
-                  {selectedTables.length > 4 && (
-                    <span className="text-xs text-[#64748b]">
-                      +{selectedTables.length - 4} more
+                  {selectedTables.length > 2 && (
+                    <span className="text-xs text-[#64748b] mt-1">
+                      +{selectedTables.length - 2} more
                     </span>
                   )}
                 </div>
               </div>
-              <Button
-                variant="primary"
-                size="md"
-                rightIcon={<ArrowRight size={16} />}
-                onClick={() => {
-                  if (!selectedRelation) return;
-                  const metadataPath = withRunIdQuery(`/projects/${id}/metadata`, runId);
-                  const connectorPath = withConnectorFlowQuery(metadataPath, searchParams);
-                  navigate(
-                    withRelationSelectionQuery(
-                      connectorPath,
-                      {
-                        schema: selectedRelation.schema,
-                        table: selectedRelation.name,
-                      },
-                    ),
-                  );
-                }}
-                className="flex-shrink-0"
-              >
-                Use Dataset: {selectedRelation?.schema}.{selectedRelation?.name}
-              </Button>
+
+              <div className="flex items-center gap-3 flex-shrink-0">
+                <button
+                  onClick={() => setSelectedIds(new Set())}
+                  className="text-xs text-[#94a3b8] hover:text-[#f8fafc] transition-colors font-medium cursor-pointer px-3 py-2"
+                >
+                  {selectedIds.size === 1 ? 'Clear' : 'Clear all'}
+                </button>
+                <Button
+                  variant="primary"
+                  size="md"
+                  rightIcon={<ArrowRight size={16} />}
+                  onClick={() => {
+                    if (!selectedRelation) return;
+                    const metadataPath = withRunIdQuery(`/projects/${id}/metadata`, runId);
+                    const connectorPath = withConnectorFlowQuery(metadataPath, searchParams);
+                    navigate(
+                      withRelationSelectionQuery(
+                        connectorPath,
+                        {
+                          schema: selectedRelation.schema,
+                          table: selectedRelation.name,
+                        },
+                      ),
+                    );
+                  }}
+                  className="px-5 py-2 h-auto text-sm"
+                >
+                  {selectedIds.size === 1 ? 'Use this dataset' : 'Use selected datasets'}
+                </Button>
+              </div>
             </div>
           )}
         </div>
@@ -700,7 +811,7 @@ export function DatasetExplorerPage() {
               <div className="rounded-lg border border-[#1e293b] bg-[#0b0f19] px-3.5 py-2.5">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-[#64748b]">Total Rows</p>
                 <p className="mt-1 text-sm font-semibold text-[#f8fafc]">
-                  {preview.rowCount != null ? preview.rowCount.toLocaleString() : '—'}
+                  <span className="font-semibold text-[#f8fafc]">{preview.rowCount != null ? preview.rowCount.toLocaleString() : '—'}</span> rows returned
                 </p>
               </div>
               <div className="rounded-lg border border-[#1e293b] bg-[#0b0f19] px-3.5 py-2.5">
