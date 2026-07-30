@@ -337,7 +337,7 @@ def list_silver_tables():
             detail="Silver table discovery failed.",
         ) from None
 
-    return {"tables": [{"name": row[0]} for row in rows]}
+    return {"tables": [{"name": row[0], "schema": silver_schema} for row in rows]}
 
 
 @router.get("/gold-tables")

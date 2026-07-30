@@ -4,6 +4,7 @@ import {
   AlertCircle,
   ArrowRight,
   BrainCircuit,
+  BarChart3,
   CheckCircle2,
   Database,
   FileCheck2,
@@ -19,8 +20,14 @@ import { PageAssistant } from '@/components/common/PageAssistant';
 import { SQLViewer } from '@/components/common/SQLViewer';
 import {
   canSubmitGoldGenerate,
+  formattedGoldCell,
   goldGenerateButtonLabel,
+  goldChartRows,
+  goldExpressionLabel,
+  goldResultSummary,
   goldWorkflowError,
+  previewMatchesPromotedRelation,
+  promotedRelationFrom,
 } from './goldValidationUx';
 import {
   approveGoldSql,
@@ -36,6 +43,7 @@ import {
   type ApproveGoldResponse,
   type ExecuteGoldResponse,
   type GenerateGoldResponse,
+  type GoldTableItem,
   type LiveTablePreview,
   type MetadataTableDetailResponse,
   type PromoteGoldResponse,
@@ -80,15 +88,6 @@ function relationLabel(value: unknown, fallback?: string): string {
     if (table) return table;
   }
   return fallback || '—';
-}
-
-function expressionLabel(value: unknown): string {
-  if (!value || typeof value !== 'object') return displayValue(value);
-  const expression = value as Record<string, unknown>;
-  if (expression.type === 'column' && typeof expression.column === 'string') {
-    return expression.column;
-  }
-  return displayValue(value);
 }
 
 function generatedFamily(
@@ -145,7 +144,7 @@ export function GoldValidationPage() {
   const runIdParam = searchParams.get('runId') ?? undefined;
   const tableParam = searchParams.get('table') ?? '';
 
-  const [silverTables, setSilverTables] = useState<string[]>([]);
+  const [silverTables, setSilverTables] = useState<GoldTableItem[]>([]);
   const [selectedSilverTable, setSelectedSilverTable] = useState('');
   const [targetTableName, setTargetTableName] = useState(tableParam);
   const [businessRequirement, setBusinessRequirement] = useState(
@@ -186,7 +185,7 @@ export function GoldValidationPage() {
         const names = response.tables.map((table) => table.name);
         const selected =
           tableParam && names.includes(tableParam) ? tableParam : names[0] ?? '';
-        setSilverTables(names);
+        setSilverTables(response.tables);
         setSelectedSilverTable(selected);
         setTargetTableName((current) => current || selected);
       } catch (error: unknown) {
@@ -252,7 +251,10 @@ export function GoldValidationPage() {
       setGenerationPhase('Understanding requirement...');
       const generated = await generateGoldSql({
         target_table_name: target,
-        silver_table_names: [selectedSilverTable],
+        source: {
+          schema: selectedSilverSource?.schema ?? 'silver',
+          table: selectedSilverTable,
+        },
         business_requirement: purpose,
       });
       setGeneratedGold(generated);
@@ -322,17 +324,24 @@ export function GoldValidationPage() {
     setLoadingLiveData(true);
     setLiveDataError(null);
     try {
+      const promotedRelation = promotedRelationFrom(promoted);
+      if (!promotedRelation) {
+        throw new Error('Gold promotion response did not include an exact target relation.');
+      }
       const [discovery, metadata, preview] = await Promise.all([
         listGoldTables(),
-        getMetadataTable(promoted.target.table as string, promoted.target.schema as string),
+        getMetadataTable(promotedRelation.table, promotedRelation.schema),
         getLiveTablePreview(
-          promoted.target.table as string,
-          promoted.target.schema as string,
+          promotedRelation.table,
+          promotedRelation.schema,
         ),
       ]);
       const discoveredNames = discovery.tables.map((table) => table.name);
-      if (!discoveredNames.includes(promoted.target.table as string)) {
+      if (!discoveredNames.includes(promotedRelation.table)) {
         throw new Error('Promoted Gold relation was not present in live discovery.');
+      }
+      if (!previewMatchesPromotedRelation(preview, promotedRelation)) {
+        throw new Error('Gold preview did not match the promoted target relation.');
       }
       const metadataTable = metadata.tables?.[0];
       if (!metadataTable) {
@@ -372,6 +381,7 @@ export function GoldValidationPage() {
   }
 
   const sources = plannedSources(review);
+  const selectedSilverSource = silverTables.find((table) => table.name === selectedSilverTable);
   const actualTarget = promotion?.target;
   const workflowStatus = promotion
     ? 'Gold Table Live'
@@ -392,7 +402,9 @@ export function GoldValidationPage() {
       : null;
   const plannedSource = relationLabel(
     review?.planned_changes.source ?? sources[0],
-    selectedSilverTable,
+    selectedSilverSource?.schema
+      ? `${selectedSilverSource.schema}.${selectedSilverTable}`
+      : selectedSilverTable,
   );
   const plannedTarget = review
     ? relationLabel(
@@ -402,6 +414,8 @@ export function GoldValidationPage() {
     : targetTableName || '—';
   const _generatorFamily = generatedFamily(generatedGold, review);
   const generatorModel = generatedModel(generatedGold, review);
+  const resultSummary = goldResultSummary(review);
+  const chartRows = goldChartRows(goldPreview, resultSummary.metric);
 
   return (
     <div className="flex h-full flex-col overflow-hidden animate-fade-in relative">
@@ -469,8 +483,8 @@ export function GoldValidationPage() {
                       </option>
                     ) : (
                       silverTables.map((table) => (
-                        <option key={table} value={table}>
-                          {table}
+                        <option key={`${table.schema ?? 'silver'}.${table.name}`} value={table.name}>
+                          {table.schema ? `${table.schema}.` : ''}{table.name}
                         </option>
                       ))
                     )}
@@ -575,7 +589,7 @@ export function GoldValidationPage() {
                     <div>
                       <DetailRow label="Dimension" value={interpretation.dimension} mono />
                       <DetailRow label="Aggregation" value={interpretation.aggregation} mono />
-                      <DetailRow label="Expression" value={expressionLabel(interpretation.expression)} mono />
+                      <DetailRow label="Expression" value={goldExpressionLabel(interpretation.expression)} mono />
                       <DetailRow label="Alias" value={interpretation.alias} mono />
                       <DetailRow label="Verdict" value={generatedGold?.verdict} mono />
                     </div>
@@ -596,7 +610,7 @@ export function GoldValidationPage() {
                   <DetailRow label="Source" value={plannedSource} mono />
                   <DetailRow label="Dimension" value={review?.planned_changes.dimension} mono />
                   <DetailRow label="Aggregation" value={plannedMetric?.aggregation} mono />
-                  <DetailRow label="Expression" value={expressionLabel(plannedMetric?.expression)} mono />
+                  <DetailRow label="Expression" value={goldExpressionLabel(plannedMetric?.expression)} mono />
                   <DetailRow label="Alias" value={plannedMetric?.alias} mono />
                   <DetailRow label="Target" value={plannedTarget} mono />
                   <DetailRow label="Generator Model" value={generatorModel} mono />
@@ -725,11 +739,16 @@ export function GoldValidationPage() {
 
           </div>
 
-          {/* Right Column: Live Result Preview & Metadata */}
+          {/* Right Column: Business Result Preview & Metadata */}
           <aside className="space-y-5">
             <div className="rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm">
               <div className="mb-3 flex items-center justify-between gap-3">
-                <h3 className="text-base font-semibold text-[#f8fafc]">Live Gold Preview</h3>
+                <div>
+                  <h3 className="text-base font-semibold text-[#f8fafc]">{goldPreview ? resultSummary.title : 'Gold Business Result'}</h3>
+                  <p className="mt-1 text-xs text-[#94a3b8]">
+                    {promotion ? 'Published Gold result from the promoted relation.' : 'Publish the Gold result to view business-ready data.'}
+                  </p>
+                </div>
                 <button
                   type="button"
                   disabled={!promotion || loadingLiveData}
@@ -748,17 +767,64 @@ export function GoldValidationPage() {
               )}
 
               {goldPreview ? (
-                <div className="space-y-3">
-                  <div className="text-xs text-[#94a3b8] font-mono">
-                    {goldPreview.column_count} cols · {goldPreview.row_count.toLocaleString()} rows
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-lg border border-[#1e293b] bg-[#131a29] p-3">
+                      <div className="text-[10px] font-bold uppercase tracking-wide text-[#64748b]">Published Status</div>
+                      <div className="mt-1 font-semibold text-[#10b981]">Published</div>
+                    </div>
+                    <div className="rounded-lg border border-[#1e293b] bg-[#131a29] p-3">
+                      <div className="text-[10px] font-bold uppercase tracking-wide text-[#64748b]">Result Rows</div>
+                      <div className="mt-1 font-mono font-semibold text-[#f8fafc]">{goldPreview.row_count.toLocaleString()}</div>
+                    </div>
+                    <div className="rounded-lg border border-[#1e293b] bg-[#131a29] p-3">
+                      <div className="text-[10px] font-bold uppercase tracking-wide text-[#64748b]">Metric / KPI</div>
+                      <div className="mt-1 font-mono text-[#f8fafc]">{resultSummary.metric}</div>
+                    </div>
+                    <div className="rounded-lg border border-[#1e293b] bg-[#131a29] p-3">
+                      <div className="text-[10px] font-bold uppercase tracking-wide text-[#64748b]">Grouped By</div>
+                      <div className="mt-1 font-mono text-[#f8fafc]">{resultSummary.groupedBy}</div>
+                    </div>
+                    <div className="rounded-lg border border-[#1e293b] bg-[#131a29] p-3">
+                      <div className="text-[10px] font-bold uppercase tracking-wide text-[#64748b]">Calculation</div>
+                      <div className="mt-1 font-mono text-[#f8fafc]">{resultSummary.calculation}</div>
+                    </div>
+                    <div className="rounded-lg border border-[#1e293b] bg-[#131a29] p-3">
+                      <div className="text-[10px] font-bold uppercase tracking-wide text-[#64748b]">Aggregation</div>
+                      <div className="mt-1 font-mono text-[#f8fafc]">{resultSummary.aggregation}</div>
+                    </div>
+                  </div>
+
+                  {chartRows.length > 0 && (
+                    <div className="rounded-lg border border-[#1e293b] bg-[#0b0f19] p-3">
+                      <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-[#f8fafc]">
+                        <BarChart3 size={14} className="text-[#06b6d4]" />
+                        Result Chart
+                      </div>
+                      <div className="space-y-2">
+                        {chartRows.map((row) => (
+                          <div key={row.label} className="grid grid-cols-[88px_minmax(0,1fr)_76px] items-center gap-2 text-[11px]">
+                            <span className="truncate text-[#94a3b8]" title={row.label}>{row.label}</span>
+                            <div className="h-2 overflow-hidden rounded bg-[#1e293b]">
+                              <div className="h-full rounded bg-[#06b6d4]" style={{ width: `${row.widthPct}%` }} />
+                            </div>
+                            <span className="text-right font-mono text-[#f8fafc]">{formattedGoldCell(row.value)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="text-xs text-[#94a3b8]">
+                    Showing {goldPreview.rows.length.toLocaleString()} result rows from {goldPreview.row_count.toLocaleString()} total groups.
                   </div>
                   <div className="max-h-[320px] overflow-auto rounded-lg border border-[#1e293b] bg-[#0b0f19] scrollbar-thin">
                     <table className="w-full text-left text-xs whitespace-nowrap">
                       <thead className="sticky top-0 border-b border-[#1e293b] bg-[#131a29] text-[#94a3b8]">
                         <tr>
                           {goldPreview.columns.map((column) => (
-                            <th key={column.name} className="px-3 py-2 font-mono font-semibold border-r border-[#1e293b] last:border-r-0">
-                              {column.name}
+                            <th key={column.name} className="px-3 py-2 font-semibold border-r border-[#1e293b] last:border-r-0">
+                              {column.name.replace(/_/g, ' ')}
                             </th>
                           ))}
                         </tr>
@@ -767,10 +833,15 @@ export function GoldValidationPage() {
                         {goldPreview.rows.map((row, rowIndex) => (
                           <tr key={rowIndex} className="hover:bg-[#131a29] transition-colors">
                             {goldPreview.columns.map((column) => (
-                              <td key={column.name} className="px-3 py-2 font-mono text-[#f8fafc] text-[12px] border-r border-[#1e293b] last:border-r-0">
-                                {row[column.name] === null || row[column.name] === undefined
+                              <td
+                                key={column.name}
+                                className={`px-3 py-2 font-mono text-[#f8fafc] text-[12px] border-r border-[#1e293b] last:border-r-0 ${
+                                  typeof row[column.name] === 'number' ? 'text-right tabular-nums' : ''
+                                }`}
+                              >
+                                {row[column.name] === null || row[column.name] === undefined || row[column.name] === ''
                                   ? <span className="text-[#64748b] italic">NULL</span>
-                                  : String(row[column.name])}
+                                  : formattedGoldCell(row[column.name])}
                               </td>
                             ))}
                           </tr>
@@ -786,8 +857,21 @@ export function GoldValidationPage() {
                 <div className="rounded-xl border border-[#1e293b] bg-[#131a29] p-6 text-center text-xs text-[#94a3b8]">
                   {loadingLiveData
                     ? 'Loading live discovery, metadata, and rows...'
-                    : 'Promote candidate to view live Gold data.'}
+                    : 'Publish the Gold result to view business-ready data.'}
                 </div>
+              )}
+
+              {(review || promotion) && (
+                <details className="mt-4 rounded-lg border border-[#1e293b] bg-[#0b0f19] p-3 text-xs text-[#94a3b8]">
+                  <summary className="cursor-pointer font-semibold text-[#f8fafc]">Technical and Governance Details</summary>
+                  <div className="mt-3 space-y-1">
+                    <DetailRow label="Run ID" value={review?.run_id} mono />
+                    <DetailRow label="Candidate" value={execution?.candidate} mono />
+                    <DetailRow label="Final Relation" value={promotion?.target} mono />
+                    <DetailRow label="Preview Relation" value={goldPreview ? `${goldPreview.schema}.${goldPreview.table}` : undefined} mono />
+                    <DetailRow label="SQL" value={review?.sql_text} mono />
+                  </div>
+                </details>
               )}
             </div>
 

@@ -820,6 +820,7 @@ export async function transformExecute(runId: string): Promise<TransformExecuteR
 
 export interface GoldTableItem {
   name: string;
+  schema?: string;
 }
 
 export interface GoldTablesResponse {
@@ -839,8 +840,8 @@ export interface CheckGoldNameResponse {
 }
 
 export interface GenerateGoldPayload {
+  source: ConnectorRelationPayload;
   target_table_name: string;
-  silver_table_names: string[];
   business_requirement: string;
 }
 
@@ -934,9 +935,9 @@ export async function checkGoldName(name: string): Promise<CheckGoldNameResponse
   return request<CheckGoldNameResponse>(`/api/v1/gold/check-name?name=${encodeURIComponent(name)}`);
 }
 
-/** Generate controlled Gold SQL proposal */
+/** Generate structured Gold SQL proposal through the bounded AI interpretation route. */
 export async function generateGoldSql(payload: GenerateGoldPayload): Promise<GenerateGoldResponse> {
-  return request<GenerateGoldResponse>('/api/v1/gold/generate', {
+  return request<GenerateGoldResponse>('/api/v1/gold/ai/generate', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
