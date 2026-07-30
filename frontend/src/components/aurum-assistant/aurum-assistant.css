@@ -1,6 +1,6 @@
 .aa-fab {
   position: fixed;
-  bottom: 24px;
+  bottom: calc(var(--aa-safe-bottom, 0px) + 24px);
   right: 24px;
   z-index: 1000;
   display: inline-flex;
@@ -32,12 +32,15 @@
   backdrop-filter: blur(4px);
   z-index: 1001;
   display: flex;
+  align-items: flex-start;
   justify-content: flex-end;
+  pointer-events: none;
 }
 
 .aa-drawer {
   width: min(520px, 100vw);
-  height: 100%;
+  height: calc(100% - var(--aa-safe-bottom, 0px));
+  margin-bottom: var(--aa-safe-bottom, 0px);
   background: #0b0f19;
   color: #f8fafc;
   display: flex;
@@ -45,6 +48,7 @@
   box-shadow: -10px 0 36px rgba(0, 0, 0, 0.5);
   border-left: 1px solid #1e293b;
   overflow: hidden;
+  pointer-events: auto;
 }
 
 .aa-drawer-header {

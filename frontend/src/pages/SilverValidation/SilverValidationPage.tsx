@@ -956,7 +956,10 @@ export function SilverValidationPage() {
       </div>
 
       {/* Footer Navigation Bar */}
-      <div className="border-t border-[#1e293b] bg-[#0b0f19] px-6 py-4 flex items-center justify-end shadow-lg">
+      <div
+        data-assistant-safe-zone="bottom-action"
+        className="border-t border-[#1e293b] bg-[#0b0f19] px-6 py-4 flex items-center justify-end shadow-lg"
+      >
         <Button
           variant="primary"
           size="md"

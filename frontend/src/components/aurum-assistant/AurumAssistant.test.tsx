@@ -1,3 +1,5 @@
+/// <reference types="node" />
+import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AurumAssistantDrawer } from './AurumAssistantDrawer';
@@ -315,5 +317,30 @@ describe('Aurum Assistant Integration & Component Tests', () => {
       httpStatus: 503,
       userMessage: 'ASSISTANT_GEMINI_UNAVAILABLE',
     });
+  });
+
+  it('17. Assistant launcher uses a shared bottom safe-zone offset', () => {
+    const css = readFileSync(new URL('./aurum-assistant.css', import.meta.url), 'utf8');
+    const pageAssistant = readFileSync(new URL('../common/PageAssistant.tsx', import.meta.url), 'utf8');
+
+    expect(pageAssistant).toContain('[data-assistant-safe-zone="bottom-action"]');
+    expect(css).toContain('bottom: calc(var(--aa-safe-bottom, 0px) + 24px);');
+  });
+
+  it('18. Assistant drawer avoids covering workflow CTAs while open', () => {
+    const css = readFileSync(new URL('./aurum-assistant.css', import.meta.url), 'utf8');
+
+    expect(css).toContain('height: calc(100% - var(--aa-safe-bottom, 0px));');
+    expect(css).toContain('margin-bottom: var(--aa-safe-bottom, 0px);');
+    expect(css).toContain('pointer-events: none;');
+    expect(css).toContain('pointer-events: auto;');
+  });
+
+  it('19. Silver and Gold workflow footers reserve Assistant safe space', () => {
+    const silver = readFileSync(new URL('../../pages/SilverValidation/SilverValidationPage.tsx', import.meta.url), 'utf8');
+    const gold = readFileSync(new URL('../../pages/GoldValidation/GoldValidationPage.tsx', import.meta.url), 'utf8');
+
+    expect(silver).toContain('data-assistant-safe-zone="bottom-action"');
+    expect(gold).toContain('data-assistant-safe-zone="bottom-action"');
   });
 });

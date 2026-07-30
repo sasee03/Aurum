@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
@@ -17,6 +17,11 @@ import { ProjectSubNav } from '@/components/layout/ProjectSubNav';
 import { DataSourceBadge } from '@/components/common/DataSourceBadge';
 import { PageAssistant } from '@/components/common/PageAssistant';
 import { SQLViewer } from '@/components/common/SQLViewer';
+import {
+  canSubmitGoldGenerate,
+  goldGenerateButtonLabel,
+  goldWorkflowError,
+} from './goldValidationUx';
 import {
   approveGoldSql,
   checkGoldName,
@@ -150,6 +155,7 @@ export function GoldValidationPage() {
   const [sourceError, setSourceError] = useState<string | null>(null);
 
   const [generating, setGenerating] = useState(false);
+  const [generationPhase, setGenerationPhase] = useState<string | null>(null);
   const [generatedGold, setGeneratedGold] = useState<GenerateGoldResponse | null>(null);
   const [review, setReview] = useState<ReviewGoldResponse | null>(null);
   const [targetExists, setTargetExists] = useState(false);
@@ -160,6 +166,8 @@ export function GoldValidationPage() {
   const [promotion, setPromotion] = useState<PromoteGoldResponse | null>(null);
   const [promoting, setPromoting] = useState(false);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
+  const [workflowErrorDetail, setWorkflowErrorDetail] = useState<string | null>(null);
+  const reviewSectionRef = useRef<HTMLDivElement | null>(null);
 
   const [goldTables, setGoldTables] = useState<string[]>([]);
   const [goldMetadata, setGoldMetadata] = useState<TableMetadata | null>(null);
@@ -209,11 +217,19 @@ export function GoldValidationPage() {
     setPromotion(null);
     setTargetExists(false);
     setWorkflowError(null);
+    setWorkflowErrorDetail(null);
+    setGenerationPhase(null);
     setGoldTables([]);
     setGoldMetadata(null);
     setGoldPreview(null);
     setLiveDataError(null);
   }
+
+  useEffect(() => {
+    if (!review || !reviewSectionRef.current) return;
+    reviewSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    reviewSectionRef.current.focus({ preventScroll: true });
+  }, [review]);
 
   async function handleGenerate() {
     const target = targetTableName.trim();
@@ -222,21 +238,25 @@ export function GoldValidationPage() {
 
     resetGeneratedState();
     setGenerating(true);
+    setGenerationPhase('Checking Gold target name...');
     try {
       const nameCheck = await checkGoldName(target);
       if (!nameCheck.is_valid_identifier) {
         setWorkflowError(nameCheck.message);
+        setWorkflowErrorDetail(null);
         return;
       }
       const overwrite = !nameCheck.is_available;
       setTargetExists(overwrite);
 
+      setGenerationPhase('Understanding requirement...');
       const generated = await generateGoldSql({
         target_table_name: target,
         silver_table_names: [selectedSilverTable],
         business_requirement: purpose,
       });
       setGeneratedGold(generated);
+      setGenerationPhase('Preparing review...');
       const reviewed = await reviewGoldSql(generated.run_id);
       if (
         reviewed.run_id !== generated.run_id ||
@@ -247,14 +267,15 @@ export function GoldValidationPage() {
       }
       setReview(reviewed);
     } catch (error: unknown) {
-      setWorkflowError(
-        calmApiMessage(
-          error,
-          'Failed to generate and review the controlled Gold proposal.',
-        ),
+      const described = goldWorkflowError(
+        error,
+        'Failed to generate and review the controlled Gold proposal.',
       );
+      setWorkflowError(described.message);
+      setWorkflowErrorDetail(described.detail ?? null);
     } finally {
       setGenerating(false);
+      setGenerationPhase(null);
     }
   }
 
@@ -262,6 +283,7 @@ export function GoldValidationPage() {
     if (!review || approval || approving) return;
     setApproving(true);
     setWorkflowError(null);
+    setWorkflowErrorDetail(null);
     try {
       const response = await approveGoldSql(review.run_id, {
         review_revision: review.review_revision,
@@ -269,9 +291,9 @@ export function GoldValidationPage() {
       });
       setApproval(response);
     } catch (error: unknown) {
-      setWorkflowError(
-        calmApiMessage(error, 'Failed to approve the reviewed Gold proposal.'),
-      );
+      const described = goldWorkflowError(error, 'Failed to approve the reviewed Gold proposal.');
+      setWorkflowError(described.message);
+      setWorkflowErrorDetail(described.detail ?? null);
     } finally {
       setApproving(false);
     }
@@ -281,15 +303,16 @@ export function GoldValidationPage() {
     if (!review || !approval || execution || executing) return;
     setExecuting(true);
     setWorkflowError(null);
+    setWorkflowErrorDetail(null);
     try {
       const response = await executeGoldSql(review.run_id, {
         overwrite: approval.overwrite_authorized,
       });
       setExecution(response);
     } catch (error: unknown) {
-      setWorkflowError(
-        calmApiMessage(error, 'Failed to execute the approved Gold candidate.'),
-      );
+      const described = goldWorkflowError(error, 'Failed to execute the approved Gold candidate.');
+      setWorkflowError(described.message);
+      setWorkflowErrorDetail(described.detail ?? null);
     } finally {
       setExecuting(false);
     }
@@ -334,14 +357,15 @@ export function GoldValidationPage() {
     if (!review || !execution || promotion || promoting) return;
     setPromoting(true);
     setWorkflowError(null);
+    setWorkflowErrorDetail(null);
     try {
       const response = await promoteGoldSql(review.run_id);
       setPromotion(response);
       await loadLiveGoldData(response);
     } catch (error: unknown) {
-      setWorkflowError(
-        calmApiMessage(error, 'Failed to promote the executed Gold candidate.'),
-      );
+      const described = goldWorkflowError(error, 'Failed to promote the executed Gold candidate.');
+      setWorkflowError(described.message);
+      setWorkflowErrorDetail(described.detail ?? null);
     } finally {
       setPromoting(false);
     }
@@ -488,16 +512,38 @@ export function GoldValidationPage() {
                   isLoading={generating}
                   rightIcon={<ArrowRight size={15} />}
                   disabled={
-                    generating ||
-                    !selectedSilverTable ||
-                    !targetTableName.trim() ||
-                    !businessRequirement.trim()
+                    !canSubmitGoldGenerate({
+                      generating,
+                      selectedSilverTable,
+                      targetTableName,
+                      businessRequirement,
+                    })
                   }
                   onClick={() => void handleGenerate()}
                 >
-                  Generate and Review
+                  {goldGenerateButtonLabel(generating, generationPhase)}
                 </Button>
               </div>
+              {generating && (
+                <div className="mt-3 rounded-xl border border-[#3b82f6]/30 bg-[#2563eb]/10 p-3 text-xs font-medium text-[#93c5fd]">
+                  {generationPhase ?? 'Understanding requirement...'}
+                </div>
+              )}
+              {workflowError && (
+                <div className="mt-3 rounded-xl border border-[#ef4444]/30 bg-[#ef4444]/10 p-4 text-xs text-[#ef4444] space-y-2">
+                  <div className="flex items-center gap-2 font-semibold">
+                    <AlertCircle size={16} />
+                    Gold action failed
+                  </div>
+                  <p>{workflowError}</p>
+                  {workflowErrorDetail && (
+                    <details className="text-[#fca5a5]">
+                      <summary className="cursor-pointer font-semibold">Technical details</summary>
+                      <p className="mt-2 font-mono text-[11px] break-words">{workflowErrorDetail}</p>
+                    </details>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* 2. What Aurum Understood */}
@@ -560,7 +606,11 @@ export function GoldValidationPage() {
 
             {/* 3. Review and Approval */}
             {review && (
-              <div className="rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm space-y-4">
+              <div
+                ref={reviewSectionRef}
+                tabIndex={-1}
+                className="rounded-xl border border-[#1e293b] bg-[#111827] p-6 shadow-sm space-y-4 focus:outline-none focus:ring-2 focus:ring-[#3b82f6]/60"
+              >
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h3 className="flex items-center gap-2.5 text-base font-semibold text-[#f8fafc]">
@@ -673,12 +723,6 @@ export function GoldValidationPage() {
               </div>
             )}
 
-            {workflowError && (
-              <div className="flex items-start gap-2.5 rounded-xl border border-[#ef4444]/30 bg-[#ef4444]/10 p-4 text-xs text-[#ef4444]">
-                <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
-                <span>{workflowError}</span>
-              </div>
-            )}
           </div>
 
           {/* Right Column: Live Result Preview & Metadata */}
@@ -790,7 +834,10 @@ export function GoldValidationPage() {
       </div>
 
       {/* Footer Navigation Bar */}
-      <div className="border-t border-[#1e293b] bg-[#0b0f19] px-6 py-4 flex items-center justify-end shadow-lg">
+      <div
+        data-assistant-safe-zone="bottom-action"
+        className="border-t border-[#1e293b] bg-[#0b0f19] px-6 py-4 flex items-center justify-end shadow-lg"
+      >
         {liveVerified && promotion ? (
           <span className="text-xs text-[#10b981] font-semibold flex items-center gap-1.5">
             <CheckCircle2 size={16} />
