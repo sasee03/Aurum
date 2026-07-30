@@ -37,8 +37,11 @@ import sqlglot
 try:
     import psycopg
     from psycopg import OperationalError as PsycopgOperationalError
+    from psycopg import sql as psycopg_sql
 except ImportError:
+    psycopg = None
     PsycopgOperationalError = None
+    psycopg_sql = None
 
 try:
     from psycopg_pool import PoolTimeout, PoolClosed
@@ -474,6 +477,69 @@ def parse_attribution_log(raw_json: Optional[str]) -> Tuple[Optional[List[str]],
     except Exception as e:
         logger.warning("Failed to parse attribution_log_json: %s", e)
         return None, False
+
+def _target_matches_current_silver_plan(
+    conn: Any,
+    *,
+    sql_text: str,
+    target_schema: str,
+    target_table: str,
+) -> bool:
+    """Return True only when an existing Silver target equals the current approved plan."""
+    if psycopg_sql is None:
+        raise RuntimeError("psycopg SQL composition is unavailable.")
+
+    target_schema = validate_sql_identifier(target_schema)
+    target_table = validate_sql_identifier(target_table)
+
+    try:
+        stmt = sqlglot.parse_one(sql_text, read="postgres")
+        select_expr = stmt.args.get("expression") if stmt is not None else None
+        if select_expr is None:
+            raise ValueError("Candidate SQL is missing its SELECT expression.")
+
+        expected_select_sql = select_expr.sql(dialect="postgres")
+        comparison_sql = psycopg_sql.SQL(
+            """
+            WITH expected AS ({expected_select}),
+                 actual AS (SELECT * FROM {}.{})
+            SELECT
+                (
+                    SELECT COUNT(*)
+                    FROM (
+                        SELECT * FROM expected
+                        EXCEPT ALL
+                        SELECT * FROM actual
+                    ) expected_minus_actual
+                ) AS expected_minus_actual,
+                (
+                    SELECT COUNT(*)
+                    FROM (
+                        SELECT * FROM actual
+                        EXCEPT ALL
+                        SELECT * FROM expected
+                    ) actual_minus_expected
+                ) AS actual_minus_expected
+            """
+        ).format(
+            psycopg_sql.Identifier(target_schema),
+            psycopg_sql.Identifier(target_table),
+            expected_select=psycopg_sql.SQL(expected_select_sql),
+        )
+
+        with conn.cursor() as cur:
+            cur.execute(comparison_sql)
+            counts = cur.fetchone()
+
+        return bool(counts and counts[0] == 0 and counts[1] == 0)
+    except Exception as exc:
+        logger.warning(
+            "Existing Silver target did not prove equality with current plan for %s.%s: %s",
+            target_schema,
+            target_table,
+            exc,
+        )
+        return False
 
 def _update_run_status(run_id: str, status: str, **kwargs) -> bool:
     """Helper for atomic terminal/lifecycle run-state transitions in SQLite."""
@@ -1231,9 +1297,26 @@ def execute_sql(run_id: str):
                     target_authority = validate_promoted_identity_json(row["promoted_target_identity_json"])
 
             if not target_authority:
-                logger.error("Target table %s.%s exists but no pre-existing promoted authority for lineage %s in SQLite (run %s)", silver_schema, table_name, lineage_id, run_id)
-                _update_run_status(run_id, "FAILED")
-                raise HTTPException(status_code=403, detail="Target relation overwrite unauthorized: missing pre-existing replacement authority.")
+                with get_generated_sql_pool().connection() as conn:
+                    target_matches_current_plan = _target_matches_current_silver_plan(
+                        conn,
+                        sql_text=sql_text,
+                        target_schema=silver_schema,
+                        target_table=table_name,
+                    )
+                if target_matches_current_plan:
+                    logger.info(
+                        "Target table %s.%s exists without same-lineage authority for run %s, "
+                        "but matches the current validated Silver plan; using live identity as replacement authority.",
+                        silver_schema,
+                        table_name,
+                        run_id,
+                    )
+                    target_authority = live_target_ident
+                else:
+                    logger.error("Target table %s.%s exists but no pre-existing promoted authority for lineage %s in SQLite (run %s)", silver_schema, table_name, lineage_id, run_id)
+                    _update_run_status(run_id, "FAILED")
+                    raise HTTPException(status_code=403, detail="Target relation overwrite unauthorized: missing pre-existing replacement authority.")
 
             for k in ("database_oid", "namespace_oid", "relation_oid", "schema", "relation_name", "relation_kind"):
                 if target_authority.get(k) != live_target_ident.get(k):

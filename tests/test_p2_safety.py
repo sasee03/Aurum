@@ -999,6 +999,219 @@ def test_acknowledged_silver_commit_result_persists_promoted_state(
     assert json.loads(row["promoted_target_identity_json"]) == final_identity
 
 
+def test_existing_silver_target_matching_current_plan_reconciles_authority(
+    temp_sqlite_db,
+    monkeypatch,
+):
+    client = TestClient(app)
+    run_id = "run_reconcile_matching_target"
+    live_target_identity = {
+        "database_oid": 12345,
+        "namespace_oid": 11,
+        "relation_oid": 200,
+        "schema": "silver",
+        "relation_name": "tbl_reconcile",
+        "relation_kind": "r",
+    }
+    source_identity = {
+        "database_oid": 12345,
+        "namespace_oid": 9,
+        "relation_oid": 99,
+        "schema": "bronze",
+        "relation_name": "tbl_reconcile",
+        "relation_kind": "r",
+    }
+    candidate_identity = {
+        "database_oid": 12345,
+        "namespace_oid": 10,
+        "relation_oid": 201,
+        "schema": "silver_candidates",
+        "relation_name": f"tbl_reconcile_candidate_{run_id}",
+        "relation_kind": "r",
+    }
+    final_identity = {
+        **live_target_identity,
+        "relation_oid": 202,
+    }
+    captured_promotion = {}
+
+    class MockCursor:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def execute(self, *args): pass
+        def fetchone(self): return (100, 90)
+
+    class MockConnection:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def cursor(self): return MockCursor()
+        def commit(self): pass
+
+    class MockPool:
+        def connection(self): return MockConnection()
+
+    def fake_resolve(conn, schema, table):
+        if schema == "silver":
+            return live_target_identity
+        return source_identity
+
+    def fake_promote_candidate_table(*args, **kwargs):
+        captured_promotion.update(kwargs)
+        return final_identity, None
+
+    monkeypatch.setattr(bronze_silver_router, "get_generated_sql_pool", lambda: MockPool())
+    monkeypatch.setattr(bronze_silver_router, "resolve_relation_identity", fake_resolve)
+    monkeypatch.setattr(bronze_silver_router, "_target_matches_current_silver_plan", lambda *args, **kwargs: True)
+    monkeypatch.setattr(bronze_silver_router, "execute_candidate_sql", lambda *args, **kwargs: candidate_identity)
+    monkeypatch.setattr(bronze_silver_router, "promote_candidate_table", fake_promote_candidate_table)
+    monkeypatch.setattr(bronze_silver_router, "load_layer_schemas", lambda: type("Schemas", (), {"bronze": "bronze", "silver_candidates": "silver_candidates", "silver": "silver"})())
+
+    rules = ["Step A"]
+    revision = bronze_silver_router.compute_rule_revision(rules)
+    sql_text = (
+        f"CREATE TABLE silver_candidates.tbl_reconcile_candidate_{run_id} AS "
+        "WITH step_1 AS (SELECT * FROM bronze.tbl_reconcile) "
+        "SELECT * FROM step_1;"
+    )
+    client.post("/api/v1/transform/rules", json={"table_name": "tbl_reconcile", "rules": rules})
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review (
+                run_id, table_name, sql_text, planned_changes_json,
+                created_at, status, generator_provenance, rule_revision,
+                project_id, connection_id, silver_lineage_id,
+                source_identity_json
+            )
+            VALUES (
+                ?, 'tbl_reconcile', ?, ?,
+                '2026-07-23T00:00:00Z', 'PENDING',
+                'ollama_v1_generic', ?, 'proj_1', 'conn_new',
+                'lineage_new', ?
+            )
+            """,
+            (
+                run_id,
+                sql_text,
+                json.dumps({"summary": "1 step", "rules": rules}),
+                revision,
+                json.dumps(source_identity),
+            ),
+        )
+        conn.commit()
+
+    response = client.post(f"/api/v1/transform/execute/{run_id}")
+
+    assert response.status_code == 200
+    assert captured_promotion["expected_target_identity"] == live_target_identity
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status, target_identity_json FROM generated_sql_review WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    assert row["status"] == "PROMOTED"
+    assert json.loads(row["target_identity_json"]) == live_target_identity
+
+
+def test_existing_silver_target_non_matching_current_plan_still_fails_closed(
+    temp_sqlite_db,
+    monkeypatch,
+):
+    client = TestClient(app)
+    run_id = "run_reconcile_nonmatching_target"
+    calls = {"execute_candidate": 0, "promote": 0}
+    live_target_identity = {
+        "database_oid": 12345,
+        "namespace_oid": 11,
+        "relation_oid": 200,
+        "schema": "silver",
+        "relation_name": "tbl_reconcile_fail",
+        "relation_kind": "r",
+    }
+    source_identity = {
+        "database_oid": 12345,
+        "namespace_oid": 9,
+        "relation_oid": 99,
+        "schema": "bronze",
+        "relation_name": "tbl_reconcile_fail",
+        "relation_kind": "r",
+    }
+
+    class MockCursor:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def execute(self, *args): pass
+        def fetchone(self): return (100, 90)
+
+    class MockConnection:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def cursor(self): return MockCursor()
+        def commit(self): pass
+
+    class MockPool:
+        def connection(self): return MockConnection()
+
+    def fake_execute_candidate_sql(*args, **kwargs):
+        calls["execute_candidate"] += 1
+
+    def fake_promote_candidate_table(*args, **kwargs):
+        calls["promote"] += 1
+
+    monkeypatch.setattr(bronze_silver_router, "get_generated_sql_pool", lambda: MockPool())
+    monkeypatch.setattr(bronze_silver_router, "resolve_relation_identity", lambda conn, schema, table: live_target_identity if schema == "silver" else source_identity)
+    monkeypatch.setattr(bronze_silver_router, "_target_matches_current_silver_plan", lambda *args, **kwargs: False)
+    monkeypatch.setattr(bronze_silver_router, "execute_candidate_sql", fake_execute_candidate_sql)
+    monkeypatch.setattr(bronze_silver_router, "promote_candidate_table", fake_promote_candidate_table)
+    monkeypatch.setattr(bronze_silver_router, "load_layer_schemas", lambda: type("Schemas", (), {"bronze": "bronze", "silver_candidates": "silver_candidates", "silver": "silver"})())
+
+    rules = ["Step A"]
+    revision = bronze_silver_router.compute_rule_revision(rules)
+    sql_text = (
+        f"CREATE TABLE silver_candidates.tbl_reconcile_fail_candidate_{run_id} AS "
+        "WITH step_1 AS (SELECT * FROM bronze.tbl_reconcile_fail) "
+        "SELECT * FROM step_1;"
+    )
+    client.post("/api/v1/transform/rules", json={"table_name": "tbl_reconcile_fail", "rules": rules})
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO generated_sql_review (
+                run_id, table_name, sql_text, planned_changes_json,
+                created_at, status, generator_provenance, rule_revision,
+                project_id, connection_id, silver_lineage_id,
+                source_identity_json
+            )
+            VALUES (
+                ?, 'tbl_reconcile_fail', ?, ?,
+                '2026-07-23T00:00:00Z', 'PENDING',
+                'ollama_v1_generic', ?, 'proj_1', 'conn_new',
+                'lineage_new', ?
+            )
+            """,
+            (
+                run_id,
+                sql_text,
+                json.dumps({"summary": "1 step", "rules": rules}),
+                revision,
+                json.dumps(source_identity),
+            ),
+        )
+        conn.commit()
+
+    response = client.post(f"/api/v1/transform/execute/{run_id}")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Target relation overwrite unauthorized: missing pre-existing replacement authority."
+    assert calls == {"execute_candidate": 0, "promote": 0}
+    with get_connection() as conn:
+        status = conn.execute(
+            "SELECT status FROM generated_sql_review WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()["status"]
+    assert status == "FAILED"
+
+
 def test_acknowledged_silver_commit_then_sqlite_failure_is_ambiguous(
     temp_sqlite_db,
     monkeypatch,
